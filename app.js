@@ -253,7 +253,7 @@ schemas.forEach((s) => {
         },
         count: (done) => {
           try {
-            model[path].find(query).count((err, count) => {
+            model[path].find(query).countDocuments((err, count) => {
               done(null, count);
             });
           } catch (err) {
@@ -294,7 +294,7 @@ schemas.forEach((s) => {
       console.log(query);
       console.log(req.body);
       const record = await model[path].updateMany(query,  { $set: req.body }, { upsert: true });
-      res.status(201).send(record);
+      res.status(200).send(record);
     } catch (err) {
       console.log('err', err);
       res.status(404).send({error: 'not found'});
@@ -387,7 +387,7 @@ schemas.forEach((s) => {
         done(null)
       }, (err) => {
       console.log(copy);
-        res.status(201).send(copy);
+        res.status(200).send(copy);
       })
     } catch (err) {
       console.log('err', err);
@@ -402,7 +402,7 @@ schemas.forEach((s) => {
         _id: req.params.id
       }
       const record = await model[path].deleteOne(query);
-      res.status(201).send(record);
+      res.status(200).send(record);
     } catch (err) {
       console.log('err', err);
       res.status(404).send({error: 'not found'});
@@ -416,7 +416,7 @@ schemas.forEach((s) => {
         _id: req.params.id
       }
       const record = await model[path].updateOne(query, { $set: req.body });
-      res.status(201).send(record);
+      res.status(200).send(record);
     } catch (err) {
       console.log('err', err);
       res.status(404).send({error: 'not found'});
@@ -457,7 +457,7 @@ app.post("/register", async (req, res) => {
     }
 
     //Encrypt user password
-    encryptedPassword = await bcrypt.hash(password, 10);
+    const encryptedPassword = await bcrypt.hash(password, 10);
 
     // Create user in our database
     const user = await User.create({
