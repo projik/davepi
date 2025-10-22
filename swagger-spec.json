@@ -1,0 +1,796 @@
+{
+    "info": {
+        "title": "DAVEPI",
+        "version": "1.0.0",
+        "description": "DAVEPI REST API documentation."
+    },
+    "host": "localhost:4001",
+    "basePath": "/",
+    "openapi": "3.0.0",
+    "paths": {
+        "/api/v1/category": {
+            "post": {
+                "name": "Add category",
+                "tags": [
+                    "category"
+                ],
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "parameters": [
+                    {
+                        "in": "body",
+                        "schema": {
+                            "title": "category",
+                            "properties": {
+                                "name": {
+                                    "type": "string",
+                                    "required": false
+                                }
+                            }
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "success",
+                        "schema": {
+                            "title": "category",
+                            "properties": {
+                                "name": {
+                                    "type": "string",
+                                    "required": false
+                                },
+                                "_id": {
+                                    "type": "string"
+                                },
+                                "updatedAt": {
+                                    "type": "string",
+                                    "format": "date-time"
+                                },
+                                "createdAt": {
+                                    "type": "string",
+                                    "format": "date-time"
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            "get": {
+                "name": "List category",
+                "tags": [
+                    "category"
+                ],
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "parameters": [
+                    {
+                        "in": "query",
+                        "name": "query",
+                        "schema": {
+                            "type": "string"
+                        },
+                        "description": "mongo-querystring formatted query parameters"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "success",
+                        "schema": {
+                            "title": "category",
+                            "properties": {
+                                "name": {
+                                    "type": "string",
+                                    "required": false
+                                },
+                                "_id": {
+                                    "type": "string"
+                                },
+                                "updatedAt": {
+                                    "type": "string",
+                                    "format": "date-time"
+                                },
+                                "createdAt": {
+                                    "type": "string",
+                                    "format": "date-time"
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            "put": {
+                "name": "Edit multiple category",
+                "tags": [
+                    "category"
+                ],
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "parameters": [
+                    {
+                        "in": "query",
+                        "name": "query",
+                        "schema": {
+                            "type": "string"
+                        },
+                        "description": "mongo-querystring formatted query parameters"
+                    },
+                    {
+                        "in": "body",
+                        "schema": {
+                            "title": "category",
+                            "properties": {
+                                "name": {
+                                    "type": "string",
+                                    "required": false
+                                }
+                            }
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "success",
+                        "schema": {
+                            "title": "category",
+                            "properties": {
+                                "name": {
+                                    "type": "string",
+                                    "required": false
+                                },
+                                "_id": {
+                                    "type": "string"
+                                },
+                                "updatedAt": {
+                                    "type": "string",
+                                    "format": "date-time"
+                                },
+                                "createdAt": {
+                                    "type": "string",
+                                    "format": "date-time"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/v1/category/{id}": {
+            "get": {
+                "name": "View category",
+                "tags": [
+                    "category"
+                ],
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "parameters": [
+                    {
+                        "in": "path",
+                        "name": "id",
+                        "schema": {
+                            "type": "string"
+                        },
+                        "description": "Id of category"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "success",
+                        "schema": {
+                            "title": "category",
+                            "properties": {
+                                "name": {
+                                    "type": "string",
+                                    "required": false
+                                },
+                                "_id": {
+                                    "type": "string"
+                                },
+                                "updatedAt": {
+                                    "type": "string",
+                                    "format": "date-time"
+                                },
+                                "createdAt": {
+                                    "type": "string",
+                                    "format": "date-time"
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            "delete": {
+                "name": "Delete category",
+                "tags": [
+                    "category"
+                ],
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "parameters": [
+                    {
+                        "in": "path",
+                        "name": "id",
+                        "schema": {
+                            "type": "string"
+                        },
+                        "description": "Id of category"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "success",
+                        "schema": {
+                            "title": "category",
+                            "properties": {
+                                "name": {
+                                    "type": "string",
+                                    "required": false
+                                },
+                                "_id": {
+                                    "type": "string"
+                                },
+                                "updatedAt": {
+                                    "type": "string",
+                                    "format": "date-time"
+                                },
+                                "createdAt": {
+                                    "type": "string",
+                                    "format": "date-time"
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            "put": {
+                "name": "Edit category",
+                "tags": [
+                    "category"
+                ],
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "parameters": [
+                    {
+                        "in": "path",
+                        "name": "id",
+                        "schema": {
+                            "type": "string"
+                        },
+                        "description": "Id of category"
+                    },
+                    {
+                        "in": "body",
+                        "schema": {
+                            "title": "category",
+                            "properties": {
+                                "name": {
+                                    "type": "string",
+                                    "required": false
+                                }
+                            }
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "success",
+                        "schema": {
+                            "title": "category",
+                            "properties": {
+                                "name": {
+                                    "type": "string",
+                                    "required": false
+                                },
+                                "_id": {
+                                    "type": "string"
+                                },
+                                "updatedAt": {
+                                    "type": "string",
+                                    "format": "date-time"
+                                },
+                                "createdAt": {
+                                    "type": "string",
+                                    "format": "date-time"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/v1/product": {
+            "post": {
+                "name": "Add product",
+                "tags": [
+                    "product"
+                ],
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "parameters": [
+                    {
+                        "in": "body",
+                        "schema": {
+                            "title": "product",
+                            "required": [
+                                "barcode"
+                            ],
+                            "properties": {
+                                "name": {
+                                    "type": "string",
+                                    "required": false
+                                },
+                                "price": {
+                                    "type": "number",
+                                    "required": false
+                                },
+                                "description": {
+                                    "type": "string",
+                                    "required": false
+                                },
+                                "sku": {
+                                    "type": "string",
+                                    "required": false
+                                },
+                                "barcode": {
+                                    "type": "string"
+                                }
+                            }
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "success",
+                        "schema": {
+                            "title": "product",
+                            "required": [
+                                "barcode"
+                            ],
+                            "properties": {
+                                "name": {
+                                    "type": "string",
+                                    "required": false
+                                },
+                                "price": {
+                                    "type": "number",
+                                    "required": false
+                                },
+                                "description": {
+                                    "type": "string",
+                                    "required": false
+                                },
+                                "sku": {
+                                    "type": "string",
+                                    "required": false
+                                },
+                                "barcode": {
+                                    "type": "string"
+                                },
+                                "_id": {
+                                    "type": "string"
+                                },
+                                "updatedAt": {
+                                    "type": "string",
+                                    "format": "date-time"
+                                },
+                                "createdAt": {
+                                    "type": "string",
+                                    "format": "date-time"
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            "get": {
+                "name": "List product",
+                "tags": [
+                    "product"
+                ],
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "parameters": [
+                    {
+                        "in": "query",
+                        "name": "query",
+                        "schema": {
+                            "type": "string"
+                        },
+                        "description": "mongo-querystring formatted query parameters"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "success",
+                        "schema": {
+                            "title": "product",
+                            "required": [
+                                "barcode"
+                            ],
+                            "properties": {
+                                "name": {
+                                    "type": "string",
+                                    "required": false
+                                },
+                                "price": {
+                                    "type": "number",
+                                    "required": false
+                                },
+                                "description": {
+                                    "type": "string",
+                                    "required": false
+                                },
+                                "sku": {
+                                    "type": "string",
+                                    "required": false
+                                },
+                                "barcode": {
+                                    "type": "string"
+                                },
+                                "_id": {
+                                    "type": "string"
+                                },
+                                "updatedAt": {
+                                    "type": "string",
+                                    "format": "date-time"
+                                },
+                                "createdAt": {
+                                    "type": "string",
+                                    "format": "date-time"
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            "put": {
+                "name": "Edit multiple product",
+                "tags": [
+                    "product"
+                ],
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "parameters": [
+                    {
+                        "in": "query",
+                        "name": "query",
+                        "schema": {
+                            "type": "string"
+                        },
+                        "description": "mongo-querystring formatted query parameters"
+                    },
+                    {
+                        "in": "body",
+                        "schema": {
+                            "title": "product",
+                            "properties": {
+                                "name": {
+                                    "type": "string",
+                                    "required": false
+                                },
+                                "price": {
+                                    "type": "number",
+                                    "required": false
+                                },
+                                "description": {
+                                    "type": "string",
+                                    "required": false
+                                },
+                                "sku": {
+                                    "type": "string",
+                                    "required": false
+                                },
+                                "barcode": {
+                                    "type": "string"
+                                }
+                            }
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "success",
+                        "schema": {
+                            "title": "product",
+                            "required": [
+                                "barcode"
+                            ],
+                            "properties": {
+                                "name": {
+                                    "type": "string",
+                                    "required": false
+                                },
+                                "price": {
+                                    "type": "number",
+                                    "required": false
+                                },
+                                "description": {
+                                    "type": "string",
+                                    "required": false
+                                },
+                                "sku": {
+                                    "type": "string",
+                                    "required": false
+                                },
+                                "barcode": {
+                                    "type": "string"
+                                },
+                                "_id": {
+                                    "type": "string"
+                                },
+                                "updatedAt": {
+                                    "type": "string",
+                                    "format": "date-time"
+                                },
+                                "createdAt": {
+                                    "type": "string",
+                                    "format": "date-time"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/v1/product/{id}": {
+            "get": {
+                "name": "View product",
+                "tags": [
+                    "product"
+                ],
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "parameters": [
+                    {
+                        "in": "path",
+                        "name": "id",
+                        "schema": {
+                            "type": "string"
+                        },
+                        "description": "Id of product"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "success",
+                        "schema": {
+                            "title": "product",
+                            "required": [
+                                "barcode"
+                            ],
+                            "properties": {
+                                "name": {
+                                    "type": "string",
+                                    "required": false
+                                },
+                                "price": {
+                                    "type": "number",
+                                    "required": false
+                                },
+                                "description": {
+                                    "type": "string",
+                                    "required": false
+                                },
+                                "sku": {
+                                    "type": "string",
+                                    "required": false
+                                },
+                                "barcode": {
+                                    "type": "string"
+                                },
+                                "_id": {
+                                    "type": "string"
+                                },
+                                "updatedAt": {
+                                    "type": "string",
+                                    "format": "date-time"
+                                },
+                                "createdAt": {
+                                    "type": "string",
+                                    "format": "date-time"
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            "delete": {
+                "name": "Delete product",
+                "tags": [
+                    "product"
+                ],
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "parameters": [
+                    {
+                        "in": "path",
+                        "name": "id",
+                        "schema": {
+                            "type": "string"
+                        },
+                        "description": "Id of product"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "success",
+                        "schema": {
+                            "title": "product",
+                            "required": [
+                                "barcode"
+                            ],
+                            "properties": {
+                                "name": {
+                                    "type": "string",
+                                    "required": false
+                                },
+                                "price": {
+                                    "type": "number",
+                                    "required": false
+                                },
+                                "description": {
+                                    "type": "string",
+                                    "required": false
+                                },
+                                "sku": {
+                                    "type": "string",
+                                    "required": false
+                                },
+                                "barcode": {
+                                    "type": "string"
+                                },
+                                "_id": {
+                                    "type": "string"
+                                },
+                                "updatedAt": {
+                                    "type": "string",
+                                    "format": "date-time"
+                                },
+                                "createdAt": {
+                                    "type": "string",
+                                    "format": "date-time"
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            "put": {
+                "name": "Edit product",
+                "tags": [
+                    "product"
+                ],
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "parameters": [
+                    {
+                        "in": "path",
+                        "name": "id",
+                        "schema": {
+                            "type": "string"
+                        },
+                        "description": "Id of product"
+                    },
+                    {
+                        "in": "body",
+                        "schema": {
+                            "title": "product",
+                            "properties": {
+                                "name": {
+                                    "type": "string",
+                                    "required": false
+                                },
+                                "price": {
+                                    "type": "number",
+                                    "required": false
+                                },
+                                "description": {
+                                    "type": "string",
+                                    "required": false
+                                },
+                                "sku": {
+                                    "type": "string",
+                                    "required": false
+                                },
+                                "barcode": {
+                                    "type": "string"
+                                }
+                            }
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "success",
+                        "schema": {
+                            "title": "product",
+                            "required": [
+                                "barcode"
+                            ],
+                            "properties": {
+                                "name": {
+                                    "type": "string",
+                                    "required": false
+                                },
+                                "price": {
+                                    "type": "number",
+                                    "required": false
+                                },
+                                "description": {
+                                    "type": "string",
+                                    "required": false
+                                },
+                                "sku": {
+                                    "type": "string",
+                                    "required": false
+                                },
+                                "barcode": {
+                                    "type": "string"
+                                },
+                                "_id": {
+                                    "type": "string"
+                                },
+                                "updatedAt": {
+                                    "type": "string",
+                                    "format": "date-time"
+                                },
+                                "createdAt": {
+                                    "type": "string",
+                                    "format": "date-time"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

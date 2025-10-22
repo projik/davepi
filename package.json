@@ -1,0 +1,49 @@
+{
+  "name": "tintedge-api",
+  "version": "1.0.0",
+  "main": "index.js",
+  "scripts": {
+    "start": "nodemon index.js",
+    "dev": "nodemon --ignore 'swagger/*.json' index.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "David Baxter",
+  "license": "ISC",
+  "dependencies": {
+    "apollo-server-express": "^3.6.3",
+    "async": "^3.2.3",
+    "bcryptjs": "^2.4.3",
+    "cors": "^2.8.5",
+    "directory-tree": "^3.0.0",
+    "dotenv": "^10.0.0",
+    "express": "^4.17.1",
+    "graphql-compose": "^9.0.7",
+    "graphql-compose-mongoose": "^9.7.1",
+    "jsonwebtoken": "^8.5.1",
+    "lodash": "^4.17.21",
+    "mongo-querystring": "^4.1.1",
+    "mongoose": "^6.0.8",
+    "mongoose-schema-jsonschema": "^2.0.2",
+    "mongoose-timestamp": "^0.6.0",
+    "mongoose-to-swagger": "^1.4.0",
+    "swagger-ui-express": "^4.3.0"
+  },
+  "devDependencies": {
+    "nodemon": "^2.0.13"
+  },
+  "nodemonConfig": {
+    "ignore": [
+      "swagger/*"
+    ]
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://bitbucket.org/projik/tintedge-api.git"
+  },
+  "bugs": {
+    "url": "https://bitbucket.org/projik/tintedge-api/issues"
+  },
+  "homepage": "https://bitbucket.org/projik/tintedge-api#readme",
+  "description": ""
+}

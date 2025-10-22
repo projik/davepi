@@ -1,0 +1,41 @@
+const http = require("http");
+const davepi = require("./app");
+// const server = http.createServer(app);
+const apollo = require('apollo-server-express');
+
+const { API_PORT } = process.env;
+const port = process.env.PORT || API_PORT;
+
+// server listening 
+const server = new apollo.ApolloServer({
+    schema: davepi.schemaBuild,
+    cors: true,
+    playground: process.env.NODE_ENV === 'development' ? true : false,
+    introspection: true,
+    tracing: true,
+    path: '/',
+});
+
+server.start().then(res => {
+  server.applyMiddleware({
+      app: davepi.app,
+      path: '/graphql/',
+      cors: true,
+      onHealthCheck: () =>
+          // eslint-disable-next-line no-undef
+          new Promise((resolve, reject) => {
+              if (mongoose.connection.readyState > 0) {
+                  resolve();
+              } else {
+                  reject();
+              }
+          }),
+  });
+  davepi.app.listen(port, () => {
+    console.log(`Server running on port ${port}`);
+  });
+
+});
+
+
+
