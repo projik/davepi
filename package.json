@@ -1,5 +1,5 @@
 {
-  "name": "tintedge-api",
+  "name": "davepi",
   "version": "1.0.0",
   "main": "index.js",
   "scripts": {
@@ -39,11 +39,11 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://bitbucket.org/projik/tintedge-api.git"
+    "url": "git+https://bitbucket.org/projik/davepi.git"
   },
   "bugs": {
-    "url": "https://bitbucket.org/projik/tintedge-api/issues"
+    "url": "https://bitbucket.org/projik/davepi/issues"
   },
-  "homepage": "https://bitbucket.org/projik/tintedge-api#readme",
+  "homepage": "https://bitbucket.org/projik/davepi#readme",
   "description": ""
 }

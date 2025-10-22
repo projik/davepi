@@ -5,7 +5,7 @@ const { MONGO_USER, MONGO_PASSWORD, MONGO_URI } = process.env;
 exports.connect = () => {
   // Connecting to the database
   mongoose
-    .connect(`mongodb+srv://${MONGO_USER}:${MONGO_PASSWORD}@${MONGO_URI}`, {})
+    .connect(MONGO_URI, {})
     .then(() => {
       console.log("Successfully connected to database");
     })
