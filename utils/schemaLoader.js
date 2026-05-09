@@ -13,6 +13,8 @@ const asyncHandler = require('./asyncHandler');
 const logger = require('./logger');
 const { NotFoundError, ValidationError } = require('./errors');
 const { emitRecordEvent } = require('./events');
+const { recordAudit } = require('./audit');
+const AuditLog = require('../model/auditLog');
 const {
   projectByAcl,
   projectListByAcl,
@@ -116,6 +118,15 @@ function createSchemaLoader({ app, apiSpec, setApolloRouter, buildGraphqlContext
       if (f.reference) references.push(f.reference);
     });
 
+    // Soft-delete support: every record carries a deletedAt tombstone
+    // unless the schema explicitly opts out via `softDelete: false`.
+    // Reads filter `deletedAt: null` by default; DELETE flips this
+    // field instead of removing the document.
+    const softDeleteEnabled = s.softDelete !== false;
+    if (softDeleteEnabled) {
+      fields.deletedAt = { type: Date, default: null, index: true };
+    }
+
     const mongooseSchema = new mongoose.Schema(fields);
     mongooseSchema.plugin(timestamps);
     mongooseSchema.index({ createdAt: 1 });
@@ -143,7 +154,15 @@ function createSchemaLoader({ app, apiSpec, setApolloRouter, buildGraphqlContext
       });
     }
 
-    return { mongooseSchema, unique, references, fileFields, searchableFields };
+    return {
+      mongooseSchema,
+      unique,
+      references,
+      fileFields,
+      searchableFields,
+      softDeleteEnabled,
+      auditEnabled: s.audit !== false,
+    };
   }
 
   function buildSwagger(s, model) {
@@ -313,7 +332,24 @@ function createSchemaLoader({ app, apiSpec, setApolloRouter, buildGraphqlContext
     };
   }
 
-  function buildRestRouter(s, model, references, mongooseSchema, fileFields, searchableFields) {
+  function buildRestRouter(s, model, references, mongooseSchema, fileFields, searchableFields, opts = {}) {
+    const softDeleteEnabled = opts.softDeleteEnabled !== false;
+    const auditEnabled = opts.auditEnabled !== false;
+    /**
+     * Given the standard ownership query, layer in deletedAt
+     * filtering. By default reads exclude tombstoned docs; the
+     * caller can pass __includeDeleted=true to see them.
+     */
+    const applySoftDeleteFilter = (q, req) => {
+      if (!softDeleteEnabled) return q;
+      const includeDeleted = req && req.query && req.query.__includeDeleted === 'true';
+      if (includeDeleted) return q;
+      return { ...q, deletedAt: null };
+    };
+    const audit = (entry) => {
+      if (!auditEnabled) return;
+      return recordAudit({ ...entry, resource: s.path });
+    };
     const router = express.Router();
     const path = s.path;
     const PAGE_SIZE = process.env.PAGE_SIZE;
@@ -355,9 +391,12 @@ function createSchemaLoader({ app, apiSpec, setApolloRouter, buildGraphqlContext
         }),
         asyncHandler(async (req, res) => {
           if (!req.file) throw new ValidationError('multipart field "file" required');
-          const ownerQuery = bypassUserScopeForList(s, req.user)
+          // File-field mutations always exclude tombstones — soft-
+          // deleted records aren't writable through any HTTP path.
+          const baseOwner = bypassUserScopeForList(s, req.user)
             ? { _id: req.params.id }
             : { _id: req.params.id, userId: req.user.user_id };
+          const ownerQuery = softDeleteEnabled ? { ...baseOwner, deletedAt: null } : baseOwner;
           const record = await model.findOne(ownerQuery);
           if (!record) throw new NotFoundError(path);
 
@@ -432,9 +471,10 @@ function createSchemaLoader({ app, apiSpec, setApolloRouter, buildGraphqlContext
         `/api/${s.version}/${path}/:id/${fieldName}`,
         auth(true),
         asyncHandler(async (req, res) => {
-          const ownerQuery = bypassUserScopeForList(s, req.user)
+          const baseOwner = bypassUserScopeForList(s, req.user)
             ? { _id: req.params.id }
             : { _id: req.params.id, userId: req.user.user_id };
+          const ownerQuery = softDeleteEnabled ? { ...baseOwner, deletedAt: null } : baseOwner;
           const record = await model.findOne(ownerQuery).lean();
           if (!record) throw new NotFoundError(path);
           const meta = record[fieldName];
@@ -452,9 +492,10 @@ function createSchemaLoader({ app, apiSpec, setApolloRouter, buildGraphqlContext
         `/api/${s.version}/${path}/:id/${fieldName}`,
         auth(true),
         asyncHandler(async (req, res) => {
-          const ownerQuery = bypassUserScopeForDelete(s, req.user)
+          const baseOwner = bypassUserScopeForDelete(s, req.user)
             ? { _id: req.params.id }
             : { _id: req.params.id, userId: req.user.user_id };
+          const ownerQuery = softDeleteEnabled ? { ...baseOwner, deletedAt: null } : baseOwner;
           const record = await model.findOne(ownerQuery);
           if (!record) throw new NotFoundError(path);
           const meta = record.get(fieldName);
@@ -494,6 +535,13 @@ function createSchemaLoader({ app, apiSpec, setApolloRouter, buildGraphqlContext
         const record = await model.create(data);
         const plain = JSON.parse(JSON.stringify(record));
         await decorateFileUrls(plain, s, storage);
+        await audit({
+          req,
+          recordId: record._id,
+          action: 'create',
+          before: null,
+          after: plain,
+        });
         // Webhook payloads must NOT carry ACL-restricted fields: a
         // subscriber whose roles can't read `salary` shouldn't see it
         // delivered through this side channel either.
@@ -541,7 +589,7 @@ function createSchemaLoader({ app, apiSpec, setApolloRouter, buildGraphqlContext
         Object.keys(req.query).forEach((qq) => {
           if (qq.startsWith('__')) delete querystring[qq];
         });
-        const query = qs.parse(querystring);
+        let query = qs.parse(querystring);
         // Bypass the userId scope for callers whose roles match
         // schema.acl.list. Otherwise default ownership applies.
         if (!bypassUserScopeForList(s, req.user)) {
@@ -554,6 +602,8 @@ function createSchemaLoader({ app, apiSpec, setApolloRouter, buildGraphqlContext
         if (q && hasSearchable) {
           query.$text = { $search: String(q) };
         }
+        // Soft-delete: exclude tombstones unless __includeDeleted=true.
+        query = applySoftDeleteFilter(query, req);
 
         const findQuery = model.find(query, projection);
         const [list, count] = await Promise.all([
@@ -592,7 +642,15 @@ function createSchemaLoader({ app, apiSpec, setApolloRouter, buildGraphqlContext
         // userId so tenant isolation is non-bypassable.
         const rawQuery = qs.parse(req.query);
         const filteredQuery = filterWritable(rawQuery, s, req.user, 'create');
-        const safeQuery = { ...filteredQuery, userId: req.user.user_id };
+        const safeQuery = {
+          ...filteredQuery,
+          userId: req.user.user_id,
+          // Bulk PUT must NOT touch tombstones — soft-deleted records
+          // are read-only at the API layer until restored. Without
+          // this constraint, an unsuspecting `?accountName=X` could
+          // resurrect (or upsert via) a tombstoned doc.
+          ...(softDeleteEnabled ? { deletedAt: null } : {}),
+        };
         const writable = filterWritable(req.body, s, req.user, 'update');
         const record = await model.updateMany(
           safeQuery,
@@ -614,9 +672,10 @@ function createSchemaLoader({ app, apiSpec, setApolloRouter, buildGraphqlContext
       `/api/${s.version}/${path}/:id`,
       auth(true),
       asyncHandler(async (req, res) => {
-        const query = bypassUserScopeForList(s, req.user)
+        const baseQuery = bypassUserScopeForList(s, req.user)
           ? { _id: req.params.id }
           : { userId: req.user.user_id, _id: req.params.id };
+        const query = applySoftDeleteFilter(baseQuery, req);
         const record = await model.findOne(query);
         if (!record) throw new NotFoundError(path);
 
@@ -637,18 +696,46 @@ function createSchemaLoader({ app, apiSpec, setApolloRouter, buildGraphqlContext
       `/api/${s.version}/${path}/:id`,
       auth(true),
       asyncHandler(async (req, res) => {
-        const query = bypassUserScopeForDelete(s, req.user)
+        const baseQuery = bypassUserScopeForDelete(s, req.user)
           ? { _id: req.params.id }
           : { userId: req.user.user_id, _id: req.params.id };
-        // Cascade-delete blobs in storage. Fetch the record first so
-        // we have the file keys; if the deleteOne fails to match, the
-        // pre-fetch returns null and nothing in storage is touched.
+
+        if (softDeleteEnabled) {
+          // Soft delete: pre-fetch the record (only those NOT already
+          // tombstoned), set deletedAt, leave file blobs in place so
+          // restore is reversible. Audit captures before/after.
+          const existing = await model
+            .findOne({ ...baseQuery, deletedAt: null })
+            .lean();
+          if (!existing) throw new NotFoundError(path);
+          const now = new Date();
+          await model.updateOne(
+            { _id: existing._id },
+            { $set: { deletedAt: now } }
+          );
+          await audit({
+            req,
+            recordId: existing._id,
+            action: 'delete',
+            before: existing,
+            after: { ...existing, deletedAt: now },
+          });
+          emitRecordEvent({
+            type: `${path}.deleted`,
+            version: s.version,
+            userId: req.user.user_id,
+            recordId: String(req.params.id),
+          });
+          return res.status(200).json({ acknowledged: true, deletedCount: 1, softDeleted: true });
+        }
+
+        // Hard-delete path (schemas with softDelete: false).
         const existing = (fileFields && fileFields.length)
-          ? await model.findOne(query).lean()
-          : null;
-        const result = await model.deleteOne(query);
+          ? await model.findOne(baseQuery).lean()
+          : await model.findOne(baseQuery).lean();
+        const result = await model.deleteOne(baseQuery);
         if (!result.deletedCount) throw new NotFoundError(path);
-        if (existing) {
+        if (existing && fileFields && fileFields.length) {
           for (const ff of fileFields) {
             const meta = existing[ff.name];
             if (meta && meta.key) {
@@ -656,12 +743,112 @@ function createSchemaLoader({ app, apiSpec, setApolloRouter, buildGraphqlContext
             }
           }
         }
+        await audit({
+          req,
+          recordId: existing && existing._id,
+          action: 'delete',
+          before: existing,
+          after: null,
+        });
         emitRecordEvent({
           type: `${path}.deleted`,
           version: s.version,
           userId: req.user.user_id,
           recordId: String(req.params.id),
         });
+        res.status(200).json(result);
+      })
+    );
+
+    if (softDeleteEnabled) {
+      router.post(
+        `/api/${s.version}/${path}/:id/restore`,
+        auth(true),
+        asyncHandler(async (req, res) => {
+          const baseQuery = bypassUserScopeForDelete(s, req.user)
+            ? { _id: req.params.id }
+            : { userId: req.user.user_id, _id: req.params.id };
+          const existing = await model
+            .findOne({ ...baseQuery, deletedAt: { $ne: null } })
+            .lean();
+          if (!existing) throw new NotFoundError(path);
+          await model.updateOne(
+            { _id: existing._id },
+            { $set: { deletedAt: null } }
+          );
+          await audit({
+            req,
+            recordId: existing._id,
+            action: 'restore',
+            before: existing,
+            after: { ...existing, deletedAt: null },
+          });
+          res.status(204).end();
+        })
+      );
+    }
+
+    router.get(
+      `/api/${s.version}/${path}/:id/history`,
+      auth(true),
+      asyncHandler(async (req, res) => {
+        const pageSize = parseInt(PAGE_SIZE);
+        const page = parseInt(req.query.__page) || 1;
+        // Authorization: must be able to read the record (deleted or
+        // not). Bypass for acl.list roles, otherwise the caller must
+        // own the record.
+        const ownerQuery = bypassUserScopeForList(s, req.user)
+          ? { _id: req.params.id }
+          : { _id: req.params.id, userId: req.user.user_id };
+        const exists = await model.findOne(ownerQuery).select('_id').lean();
+        if (!exists) throw new NotFoundError(path);
+
+        const auditQuery = { resource: s.path, recordId: req.params.id };
+        const [list, count] = await Promise.all([
+          AuditLog.find(auditQuery)
+            .sort({ createdAt: -1 })
+            .skip((page - 1) * pageSize)
+            .limit(pageSize)
+            .lean(),
+          AuditLog.countDocuments(auditQuery),
+        ]);
+        // Apply field-level read ACL to every audit entry. Without
+        // this the history endpoint would expose ACL-restricted
+        // fields (e.g. salary) via before/after/diff that
+        // projectByAcl would otherwise hide on the regular GET path.
+        const fieldByName = new Map(
+          (s.fields || []).map((f) => [f.name, f])
+        );
+        const allowedDiffKey = (k) => {
+          const f = fieldByName.get(k);
+          if (!f || !f.acl || !f.acl.read) return true;
+          // hasOverlap-style check inlined: keep the diff key if the
+          // caller has at least one of the field's `read` roles.
+          const userRolesArr = Array.isArray(req.user.roles) && req.user.roles.length
+            ? req.user.roles
+            : ['user'];
+          return f.acl.read.some((r) => userRolesArr.includes(r));
+        };
+        const projected = list.map((entry) => ({
+          ...entry,
+          before: entry.before ? projectByAcl(entry.before, s, req.user) : entry.before,
+          after: entry.after ? projectByAcl(entry.after, s, req.user) : entry.after,
+          diff: entry.diff
+            ? Object.fromEntries(
+                Object.entries(entry.diff).filter(([k]) => allowedDiffKey(k))
+              )
+            : entry.diff,
+        }));
+        const totalPages = Math.ceil(count / pageSize);
+        const result = {
+          results: projected,
+          totalResults: count,
+          page,
+          perPage: pageSize,
+          totalPages,
+        };
+        if (totalPages > page) result.nextPage = page + 1;
+        if (page > 1) result.prevPage = page - 1;
         res.status(200).json(result);
       })
     );
@@ -673,8 +860,14 @@ function createSchemaLoader({ app, apiSpec, setApolloRouter, buildGraphqlContext
         // Updates stay strictly owner-bound. acl.list grants read
         // visibility; the spec doesn't define a write-bypass slot, so
         // only the record's owner may PUT regardless of role.
-        const query = { userId: req.user.user_id, _id: req.params.id };
+        const query = applySoftDeleteFilter(
+          { userId: req.user.user_id, _id: req.params.id },
+          req
+        );
         const writable = filterWritable(req.body, s, req.user, 'update');
+        const before = auditEnabled
+          ? await model.findOne(query).lean()
+          : null;
         let result;
         if (Object.keys(writable).length === 0) {
           // Empty $set is a no-op in Mongoose (matchedCount=0 even
@@ -688,6 +881,16 @@ function createSchemaLoader({ app, apiSpec, setApolloRouter, buildGraphqlContext
         } else {
           result = await model.updateOne(query, { $set: writable });
           if (!result.matchedCount) throw new NotFoundError(path);
+        }
+        if (auditEnabled && before) {
+          const after = await model.findById(req.params.id).lean();
+          await audit({
+            req,
+            recordId: req.params.id,
+            action: 'update',
+            before,
+            after,
+          });
         }
         emitRecordEvent({
           type: `${path}.updated`,
@@ -826,7 +1029,14 @@ function createSchemaLoader({ app, apiSpec, setApolloRouter, buildGraphqlContext
       await unloadSchemaImpl(key, { skipGraphqlRebuild: true });
     }
 
-    const { mongooseSchema, references, fileFields, searchableFields } = buildSchemaArtifacts(s);
+    const {
+      mongooseSchema,
+      references,
+      fileFields,
+      searchableFields,
+      softDeleteEnabled,
+      auditEnabled,
+    } = buildSchemaArtifacts(s);
 
     // mongoose throws if a model with the same name is already registered;
     // belt-and-suspenders cleanup in case unload missed it.
@@ -850,7 +1060,15 @@ function createSchemaLoader({ app, apiSpec, setApolloRouter, buildGraphqlContext
     }
 
     const swaggerKeys = buildSwagger(s, model);
-    const router = buildRestRouter(s, model, references, mongooseSchema, fileFields, searchableFields);
+    const router = buildRestRouter(
+      s,
+      model,
+      references,
+      mongooseSchema,
+      fileFields,
+      searchableFields,
+      { softDeleteEnabled, auditEnabled }
+    );
     app.use(router);
     moveErrorHandlerToEnd();
 
@@ -901,10 +1119,15 @@ function createSchemaLoader({ app, apiSpec, setApolloRouter, buildGraphqlContext
     return Array.from(registry.keys());
   }
 
+  function getEntry(key) {
+    return registry.get(key) || null;
+  }
+
   return {
     loadSchema,
     unloadSchema,
     listSchemas,
+    getEntry,
     rebuildGraphQL: rebuildGraphQLQueued,
   };
 }

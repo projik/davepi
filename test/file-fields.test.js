@@ -18,6 +18,11 @@ const documentSchema = {
   path: 'document',
   collection: 'documents',
   version: 'v1',
+  // Hard-delete in this suite so cascade tests still assert blobs go
+  // away on DELETE. The soft-delete-preserves-files behavior is
+  // covered separately in test/soft-delete-audit.test.js.
+  softDelete: false,
+  audit: false,
   fields: [
     { name: 'userId', type: String, required: true },
     { name: 'title', type: String, required: true },
