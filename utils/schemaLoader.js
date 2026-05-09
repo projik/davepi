@@ -25,6 +25,11 @@ const {
 const { createAggregationCache } = require('./aggregationCache');
 const aggregationCache = createAggregationCache();
 const {
+  normalizeRelations,
+  parseIncludes,
+  applyIncludes,
+} = require('./relations');
+const {
   projectByAcl,
   projectListByAcl,
   filterWritable,
@@ -72,6 +77,27 @@ const qs = new MongoQS();
 function createSchemaLoader({ app, apiSpec, setApolloRouter, buildGraphqlContext, isProduction, errorHandler }) {
   // key = `${version}/${path}`
   const registry = new Map();
+
+  /**
+   * Resolve a relation target's path back to its `{ schema, model }`
+   * pair. Used by the `__include` path in REST handlers and the
+   * `addRelation` wiring in the GraphQL layer.
+   *
+   * Lookup order: same-version exact match, then any-version match.
+   * Schemas live under one version in practice; the second pass is a
+   * defensive escape hatch for cross-version relations a future
+   * caller might declare.
+   */
+  function getResource(targetPath, sourceVersion) {
+    if (sourceVersion) {
+      const exact = registry.get(`${sourceVersion}/${targetPath}`);
+      if (exact) return exact;
+    }
+    for (const entry of registry.values()) {
+      if (entry.schema && entry.schema.path === targetPath) return entry;
+    }
+    return null;
+  }
 
   // Tracks the live ApolloServer so each rebuildGraphQL can shut down
   // its predecessor — without this, every reload would leak server
@@ -218,6 +244,18 @@ function createSchemaLoader({ app, apiSpec, setApolloRouter, buildGraphqlContext
                 },
               ]
             : []),
+          ...(Object.keys(normalizeRelations(s)).length
+            ? [
+                {
+                  name: '__include',
+                  in: 'query',
+                  type: 'string',
+                  description:
+                    'CSV of relation names to populate in a single round-trip per relation. ' +
+                    `Allowed: ${Object.keys(normalizeRelations(s)).join(', ')}.`,
+                },
+              ]
+            : []),
         ],
         responses: {
           200: {
@@ -242,10 +280,25 @@ function createSchemaLoader({ app, apiSpec, setApolloRouter, buildGraphqlContext
         responses: { 200: { description: 'success', schema: { $ref: `#/definitions/${path}` } } },
       },
     };
+    const itemIncludeParams = Object.keys(normalizeRelations(s)).length
+      ? [
+          {
+            name: '__include',
+            in: 'query',
+            type: 'string',
+            description:
+              'CSV of relation names to populate in a single round-trip per relation. ' +
+              `Allowed: ${Object.keys(normalizeRelations(s)).join(', ')}.`,
+          },
+        ]
+      : [];
     apiSpec.paths[itemPath] = {
       get: {
         tags: [tag],
-        parameters: [{ in: 'path', name: 'id', type: 'string', required: true }],
+        parameters: [
+          { in: 'path', name: 'id', type: 'string', required: true },
+          ...itemIncludeParams,
+        ],
         responses: { 200: { description: 'success', schema: { $ref: `#/definitions/${path}` } } },
       },
       delete: {
@@ -389,6 +442,12 @@ function createSchemaLoader({ app, apiSpec, setApolloRouter, buildGraphqlContext
   function buildRestRouter(s, model, references, mongooseSchema, fileFields, searchableFields, opts = {}) {
     const softDeleteEnabled = opts.softDeleteEnabled !== false;
     const auditEnabled = opts.auditEnabled !== false;
+    // Compile the schema's `relations` map (and any legacy
+    // `field.reference` shorthand) once per load. The handler-side
+    // `__include` parsing reuses this normalized form on every
+    // request — handlers don't re-walk the schema each time.
+    const normalizedRelations = normalizeRelations(s);
+    const relationNames = Object.keys(normalizedRelations);
     /**
      * Given the standard ownership query, layer in deletedAt
      * filtering. By default reads exclude tombstoned docs; the
@@ -670,6 +729,19 @@ function createSchemaLoader({ app, apiSpec, setApolloRouter, buildGraphqlContext
         ]);
 
         await decorateListFileUrls(list, s, storage);
+
+        // __include population: parse + validate, then batch-load each
+        // relation in a single round-trip. Validation runs even if no
+        // includes are requested so a typo on an unknown relation
+        // never silently no-ops.
+        const includes = parseIncludes(req.query.__include, normalizedRelations);
+        if (includes.length) {
+          await applyIncludes(list, normalizedRelations, includes, {
+            user: req.user,
+            getResource: (p) => getResource(p, s.version),
+          });
+        }
+
         const totalPages = Math.ceil(count / pageSize);
         const result = {
           results: projectListByAcl(list, s, req.user),
@@ -734,14 +806,21 @@ function createSchemaLoader({ app, apiSpec, setApolloRouter, buildGraphqlContext
         if (!record) throw new NotFoundError(path);
 
         const copy = JSON.parse(JSON.stringify(record));
-        for (const r of references) {
-          if (!copy[r]) continue;
-          const refModel = mongoose.models[r];
-          if (!refModel) continue;
-          const ref = await refModel.findById(copy[r]).lean().exec();
-          if (ref) copy[r] = ref;
-        }
         await decorateFileUrls(copy, s, storage);
+
+        // __include drives relation population for both single and
+        // list reads, replacing the legacy `references` populate
+        // loop. Tenant isolation is re-applied per relation inside
+        // applyIncludes, never trusting the parent record's tenancy
+        // alone.
+        const includes = parseIncludes(req.query.__include, normalizedRelations);
+        if (includes.length) {
+          await applyIncludes([copy], normalizedRelations, includes, {
+            user: req.user,
+            getResource: (p) => getResource(p, s.version),
+          });
+        }
+
         res.status(200).json(projectByAcl(copy, s, req.user));
       })
     );
@@ -1078,9 +1157,21 @@ function createSchemaLoader({ app, apiSpec, setApolloRouter, buildGraphqlContext
       parseLiteral: () => null,
     });
 
+    // Two-pass build: compose every schema's TC FIRST, so the
+    // relation pass below can resolve cross-schema references. A
+    // single-pass loop would force relation thunks to look up TCs that
+    // graphql-compose hasn't created yet, and `addRelation` reads the
+    // target's output type at schema-build time — not lazily.
+    const tcByPath = new Map();
     for (const entry of registry.values()) {
       const { schema: s, model } = entry;
       const tc = mongoGql.composeWithMongoose(model, { schemaComposer: composer });
+      tcByPath.set(s.path, { tc, schema: s, model });
+    }
+
+    for (const entry of registry.values()) {
+      const { schema: s, model } = entry;
+      const { tc } = tcByPath.get(s.path);
       const wrapById = wrapByIdMutation(model);
       const hasSearchable = (s.fields || []).some((f) => f && f.searchable);
       const r = (name) => {
@@ -1118,6 +1209,64 @@ function createSchemaLoader({ app, apiSpec, setApolloRouter, buildGraphqlContext
       // Deletes honor schema.acl.delete.
       mutationFields[p + 'RemoveById'] = wrapById(r('removeById'), { schema: s, kind: 'delete' });
       mutationFields[p + 'RemoveMany'] = wrapFilter(r('removeMany'), { schema: s, kind: 'delete' });
+
+      // Per-relation graph edges. We skip `field.reference` shorthand
+      // here because the relation name collides with the existing
+      // scalar field on the type (REST tolerates the collision; the
+      // GraphQL type system doesn't). Tenant isolation rides on the
+      // same wrapped resolvers used at the top level — wrapFilter /
+      // wrapFindById both inject `userId` into the related query
+      // before it hits Mongo.
+      const normalized = normalizeRelations(s);
+      for (const [relName, def] of Object.entries(normalized)) {
+        if (def.fromShorthand) continue;
+        const target = tcByPath.get(def.target);
+        if (!target) continue;
+        const targetTc = target.tc;
+        const targetSchema = target.schema;
+
+        if (def.kind === 'belongsTo') {
+          const targetResolver = wrapFindById(
+            targetTc.getResolver('findById'),
+            { schema: targetSchema }
+          );
+          tc.addRelation(relName, {
+            resolver: () => targetResolver,
+            prepareArgs: { _id: (source) => source[def.localKey] },
+            projection: { [def.localKey]: true },
+          });
+        } else if (def.kind === 'hasMany' && def.foreignKey) {
+          const targetResolver = wrapFilter(
+            targetTc.getResolver('findMany'),
+            { schema: targetSchema, kind: 'read' }
+          );
+          tc.addRelation(relName, {
+            resolver: () => targetResolver,
+            prepareArgs: {
+              filter: (source) => ({
+                [def.foreignKey]: String(source._id),
+                ...(def.where || {}),
+              }),
+            },
+            projection: { _id: true },
+          });
+        } else if (def.kind === 'hasOne' && def.foreignKey) {
+          const targetResolver = wrapFilter(
+            targetTc.getResolver('findOne'),
+            { schema: targetSchema, kind: 'read' }
+          );
+          tc.addRelation(relName, {
+            resolver: () => targetResolver,
+            prepareArgs: {
+              filter: (source) => ({
+                [def.foreignKey]: String(source._id),
+                ...(def.where || {}),
+              }),
+            },
+            projection: { _id: true },
+          });
+        }
+      }
 
       // Per-aggregation top-level GraphQL queries. Query name is
       // `${path}${PascalCase(name)}`, return type is `[AggregationJSON]`.
