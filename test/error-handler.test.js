@@ -260,11 +260,7 @@ describe('Centralized error handler', () => {
       };
 
       const rawErr = new Error('actual debug info');
-      // suppress the console.error noise from the 5xx path
-      const origConsole = console.error;
-      console.error = () => {};
       errorHandler(rawErr, {}, res, () => {});
-      console.error = origConsole;
 
       process.env.NODE_ENV = original;
 
