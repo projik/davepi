@@ -18,6 +18,14 @@ const app = express();
 const dirTree = require("directory-tree");
 
 const auth = require("./middleware/auth");
+const {
+  wrapFilter,
+  wrapCreateOne,
+  wrapCreateMany,
+  wrapFindById,
+  wrapFindByIds,
+  wrapByIdMutation,
+} = require("./utils/scopeResolver");
 
 const { PAGE_SIZE, API_PORT } = process.env;
 const port = process.env.PORT || API_PORT;
@@ -94,20 +102,26 @@ schemas.forEach((s) => {
   graph[path] = mongoGql.composeWithMongoose(model[path]);
 
   
-  gQuery[path] = {}
-  gQuery[path][path + 'ById'] = graph[path].getResolver('findById');
-  gQuery[path][path + 'ByIds'] = graph[path].getResolver('findByIds');
-  gQuery[path][path + 'One'] = graph[path].getResolver('findOne');
-  gQuery[path][path + 'Many'] = graph[path].getResolver('findMany');
-  gQuery[path][path + 'Count'] = graph[path].getResolver('count');
-  gQuery[path][path + 'Connection'] = graph[path].getResolver('connection');
-  gQuery[path][path + 'Pagination'] = graph[path].getResolver('pagination');
+  const wrapById = wrapByIdMutation(model[path]);
+  const r = (name) => graph[path].getResolver(name);
 
-  gMutation[path] = {}
-  const gmutations = ['CreateOne', 'CreateMany', 'UpdateById', 'UpdateOne', 'UpdateMany', 'RemoveById', 'RemoveMany']
-  gmutations.forEach((q) => {
-    gMutation[path][path + q] = graph[path].getResolver(_.camelCase(q));
-  });
+  gQuery[path] = {};
+  gQuery[path][path + 'ById'] = wrapFindById(r('findById'));
+  gQuery[path][path + 'ByIds'] = wrapFindByIds(r('findByIds'));
+  gQuery[path][path + 'One'] = wrapFilter(r('findOne'));
+  gQuery[path][path + 'Many'] = wrapFilter(r('findMany'));
+  gQuery[path][path + 'Count'] = wrapFilter(r('count'));
+  gQuery[path][path + 'Connection'] = wrapFilter(r('connection'));
+  gQuery[path][path + 'Pagination'] = wrapFilter(r('pagination'));
+
+  gMutation[path] = {};
+  gMutation[path][path + 'CreateOne'] = wrapCreateOne(r('createOne'));
+  gMutation[path][path + 'CreateMany'] = wrapCreateMany(r('createMany'));
+  gMutation[path][path + 'UpdateById'] = wrapById(r('updateById'));
+  gMutation[path][path + 'UpdateOne'] = wrapFilter(r('updateOne'));
+  gMutation[path][path + 'UpdateMany'] = wrapFilter(r('updateMany'));
+  gMutation[path][path + 'RemoveById'] = wrapById(r('removeById'));
+  gMutation[path][path + 'RemoveMany'] = wrapFilter(r('removeMany'));
 
   schemaComposer.Query.addFields({
     ...gQuery[path]
@@ -531,6 +545,18 @@ app.post("/login", async (req, res) => {
 
 // const schemaBuild = schemaComposer.buildSchema();
 
+const buildGraphqlContext = ({ req }) => {
+  const header = req.headers.authorization || '';
+  const token = header.replace(/^bearer\s+/i, '').trim();
+  if (!token) return { user: null };
+  try {
+    const decoded = jwt.verify(token, process.env.TOKEN_KEY);
+    return { user: decoded };
+  } catch (err) {
+    return { user: null };
+  }
+};
+
 const server = new apollo.ApolloServer({
     schema: schemaComposer.buildSchema(),
     cors: true,
@@ -538,6 +564,7 @@ const server = new apollo.ApolloServer({
     introspection: true,
     tracing: true,
     path: '/',
+    context: buildGraphqlContext,
 });
 
 server.start().then(res => {
