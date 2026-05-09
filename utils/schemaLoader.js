@@ -38,6 +38,7 @@ const {
   wrapFindById,
   wrapFindByIds,
   wrapByIdMutation,
+  wrapAggregation,
 } = require('./scopeResolver');
 const {
   FileMetaSchema,
@@ -1120,8 +1121,10 @@ function createSchemaLoader({ app, apiSpec, setApolloRouter, buildGraphqlContext
 
       // Per-aggregation top-level GraphQL queries. Query name is
       // `${path}${PascalCase(name)}`, return type is `[AggregationJSON]`.
-      // Auth and tenant isolation flow through the same runAggregation
-      // helper as the REST path so behaviour is identical.
+      // Auth + tenant isolation are enforced through wrapAggregation
+      // (defined in utils/scopeResolver.js) so this resolver follows
+      // the same wrapping convention every other tenant-scoped GraphQL
+      // resolver does.
       for (const agg of (s.aggregations || [])) {
         if (!agg || typeof agg.name !== 'string' || !Array.isArray(agg.pipeline)) {
           continue;
@@ -1145,24 +1148,21 @@ function createSchemaLoader({ app, apiSpec, setApolloRouter, buildGraphqlContext
         const aggSchema = s;
         const aggModel = model;
         const aggDef = agg;
-        queryFields[queryName] = {
+        queryFields[queryName] = wrapAggregation({
           type: '[AggregationJSON]',
           args,
           description: agg.description || `Aggregation ${agg.name} on ${s.path}`,
-          resolve: async (_root, params, ctx) => {
-            if (!ctx || !ctx.user || !ctx.user.user_id) {
-              throw new apollo.AuthenticationError('Authentication required');
-            }
+          runner: async ({ user, params }) => {
             const result = await runAggregation({
               agg: aggDef,
               schema: aggSchema,
               model: aggModel,
-              user: ctx.user,
+              user,
               rawParams: params,
             });
             return result.data;
           },
-        };
+        });
       }
     }
     // Suppress unused-variable warning on jsonScalar — it's referenced

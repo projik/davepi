@@ -78,6 +78,35 @@ describe('aggregations: pure helpers', () => {
         assertSafePipeline([{ $lookup: {} }], { unsafe: true })
       ).not.toThrow();
     });
+
+    test('rejects forbidden ops nested inside other stages', () => {
+      // A top-level-only check would let `$function` slip through
+      // because the top-level key is `$project`, not `$function`.
+      // The recursive walk catches it.
+      expect(() =>
+        assertSafePipeline(
+          [{ $project: { x: { $function: { body: 'x', args: [], lang: 'js' } } } }],
+          {}
+        )
+      ).toThrow(AggregationSafetyError);
+    });
+
+    test('rejects $lookup nested inside a $facet sub-pipeline', () => {
+      expect(() =>
+        assertSafePipeline(
+          [
+            {
+              $facet: {
+                joined: [
+                  { $lookup: { from: 'user', localField: 'userId', foreignField: '_id', as: 'u' } },
+                ],
+              },
+            },
+          ],
+          {}
+        )
+      ).toThrow(AggregationSafetyError);
+    });
   });
 
   describe('buildPipeline', () => {

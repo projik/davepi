@@ -122,23 +122,36 @@ function walk(value, params) {
 const clone = (v) => JSON.parse(JSON.stringify(v));
 
 /**
- * Inspect a pipeline for forbidden stages (cross-collection joins,
- * data-write operators, and arbitrary-code stages). Used as a
- * defense-in-depth check on every request and a sanity check at
- * boot.
+ * Inspect a pipeline for forbidden operators (cross-collection joins,
+ * data-write stages, and arbitrary-code constructs). Used as a
+ * defense-in-depth check on every request.
+ *
+ * The walk is recursive — a top-level-only scan would silently allow
+ * forbidden operators that appear nested inside another stage's
+ * body, e.g. `$lookup` inside a `$facet` sub-pipeline, or `$function`
+ * inside a `$project` expression. Any key in the pipeline tree that
+ * matches `FORBIDDEN_STAGES` triggers rejection unless the
+ * declaration opted in with `unsafe: true`.
  */
 function assertSafePipeline(pipeline, { unsafe } = {}) {
   if (unsafe) return;
-  for (const stage of pipeline) {
-    if (!stage || typeof stage !== 'object') continue;
-    for (const op of Object.keys(stage)) {
-      if (FORBIDDEN_STAGES.has(op)) {
+  const visit = (node) => {
+    if (node == null) return;
+    if (Array.isArray(node)) {
+      for (const item of node) visit(item);
+      return;
+    }
+    if (typeof node !== 'object') return;
+    for (const [k, v] of Object.entries(node)) {
+      if (FORBIDDEN_STAGES.has(k)) {
         throw new AggregationSafetyError(
-          `Aggregation stage ${op} is forbidden. Pass unsafe: true on the aggregation declaration to opt in.`
+          `Aggregation operator ${k} is forbidden. Pass unsafe: true on the aggregation declaration to opt in.`
         );
       }
+      visit(v);
     }
-  }
+  };
+  visit(pipeline);
 }
 
 /**
