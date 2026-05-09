@@ -318,13 +318,20 @@ module.exports = {
 };
 ```
 
-### 2. Restart the Server
+### 2. That's It!
+
+If you started the server with `HOT_RELOAD_SCHEMAS=true npm start` (dev
+only), the new file is picked up automatically — REST routes,
+GraphQL resolvers, and Swagger documentation update without a restart.
+Editing or deleting the file is reflected the same way.
+
+Without the flag, restart the server to pick up the new schema:
 
 ```bash
 npm start
 ```
 
-### 3. That's It!
+### 3. Your new resource is live
 
 Your new resource now has:
 - ✅ REST endpoints at `/api/v1/task`
@@ -494,7 +501,7 @@ The application includes extensive console logging. Check the terminal output fo
 
 - ✅ Verify schema file is in correct directory
 - ✅ Check schema file syntax
-- ✅ Restart the server
+- ✅ Restart the server, or run with `HOT_RELOAD_SCHEMAS=true` for live reload
 
 ## Contributing
 

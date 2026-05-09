@@ -21,7 +21,7 @@ beforeAll(async () => {
   request = require('supertest');
 
   // Apollo applyMiddleware mounts /graphql asynchronously
-  await new Promise((r) => setTimeout(r, 500));
+  if (app.locals && app.locals.ready) await app.locals.ready;
 }, 60000);
 
 afterAll(async () => {
