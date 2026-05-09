@@ -78,6 +78,12 @@ const PROTECTED_WRITE_FIELDS = ['userId', 'accountId'];
  * regardless of any acl declared on them — those values come from
  * the JWT, not the client, and stripping them would either fail
  * insertion (required-field violation) or orphan the document.
+ *
+ * `type: 'File'` fields are framework-owned: clients write to them
+ * via the dedicated multipart route, never via JSON CRUD. We drop
+ * any client-supplied value here so a request body like
+ * `{ attachment: { key: 'private/foo' } }` can't sneak in a
+ * server-controlled key.
  */
 function filterWritable(body, schema, user, action) {
   if (!body || !schema || !Array.isArray(schema.fields)) return body;
@@ -90,6 +96,7 @@ function filterWritable(body, schema, user, action) {
       continue;
     }
     const f = fieldByName.get(k);
+    if (f && f.type === 'File') continue; // framework-owned
     const allowed = f && f.acl && f.acl[action];
     if (!allowed || !allowed.length || hasOverlap(allowed, roles)) {
       out[k] = v;

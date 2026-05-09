@@ -317,6 +317,10 @@ app.use(webhookRouter);
 const { startWebhookDispatcher } = require('./utils/webhookDispatcher');
 app.locals.webhookDispatcher = startWebhookDispatcher();
 
+// Local file-storage serve route (HMAC-validated for private files).
+// The s3 driver bypasses this; its presigned URLs point at S3 directly.
+app.use(require('./routes/files'));
+
 app.get('/api-docs/swagger.json', (req, res) => {
   res.status(200).json(apiSpec);
 });
