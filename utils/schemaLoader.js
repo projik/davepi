@@ -267,13 +267,15 @@ function createSchemaLoader({ app, apiSpec, setApolloRouter, buildGraphqlContext
       `/api/${s.version}/${path}`,
       auth(true),
       asyncHandler(async (req, res) => {
-        const rawQuery = qs.parse(req.query);
-        rawQuery['userId'] = req.user.user_id;
         // The query predicate doubles as the create-time payload on
         // upsert (Mongo seeds new docs with the predicate's equality
-        // keys). Run it through filterWritable('create') so ACL-create-
-        // restricted fields can't be smuggled in via the query string.
-        const safeQuery = filterWritable(rawQuery, s, req.user, 'create');
+        // keys). Filter the client-provided keys through
+        // filterWritable('create') first so ACL-create-restricted
+        // fields can't be smuggled in via the query string, THEN stamp
+        // userId so tenant isolation is non-bypassable.
+        const rawQuery = qs.parse(req.query);
+        const filteredQuery = filterWritable(rawQuery, s, req.user, 'create');
+        const safeQuery = { ...filteredQuery, userId: req.user.user_id };
         const writable = filterWritable(req.body, s, req.user, 'update');
         const record = await model.updateMany(
           safeQuery,

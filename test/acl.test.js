@@ -277,6 +277,39 @@ describe('Roles & field-level ACLs', () => {
     });
   });
 
+  describe('REST: stamped fields survive ACL even when schema declares acl on userId', () => {
+    test('userId stamping is preserved even if a schema mistakenly declares acl on it', async () => {
+      // A defensive schema with an admin-only acl on userId. The
+      // server still has to stamp userId for tenant isolation; the
+      // ACL filter must NOT strip it on a plain user's create.
+      const stamped = {
+        path: 'stamped',
+        collection: 'stamped',
+        version: 'v1',
+        fields: [
+          { name: 'userId', type: String, required: true, acl: { create: ['admin'], update: ['admin'] } },
+          { name: 'name', type: String, required: true },
+        ],
+      };
+      await ctx.app.locals.schemaLoader.loadSchema(stamped);
+
+      const user = await registerWithRoles('stamped@x.com');
+      const created = await post(
+        '/api/v1/stamped',
+        { name: 'still-stamped' },
+        user.token
+      );
+      // Without the protected-fields defense or the filter-first/
+      // stamp-last reordering, this would fail with a Mongoose
+      // ValidationError because userId would have been stripped.
+      expect(created.status).toBe(201);
+      expect(created.body.userId).toBe(user._id);
+
+      // Cleanup so we don't pollute other tests.
+      await ctx.app.locals.schemaLoader.unloadSchema('v1/stamped');
+    });
+  });
+
   describe('REST: backwards compatibility for schemas without acl', () => {
     test('the seed account schema (no acl) still works exactly as before', async () => {
       const a = await registerWithRoles('bc-a@x.com');

@@ -98,10 +98,17 @@ const wrapFilter = (resolver, { schema, action, kind = 'write' } = {}) => {
     };
 
     if (rp.args.record) {
-      rp.args.record = { ...rp.args.record, ...stampedValues(userId) };
+      // Order matters: ACL-filter the client-provided payload first,
+      // THEN overlay the server-stamped fields. Stamping first would
+      // expose userId/accountId to filterWritable's strip pass — fine
+      // today but a footgun if a schema ever declares acl on those
+      // fields. filterWritable protects them by name as well; this is
+      // belt-and-suspenders.
+      let record = rp.args.record;
       if (action) {
-        rp.args.record = filterWritable(rp.args.record, schema, user, action);
+        record = filterWritable(record, schema, user, action);
       }
+      rp.args.record = { ...record, ...stampedValues(userId) };
     }
 
     const result = await next(rp);
@@ -114,9 +121,8 @@ const wrapCreateOne = (resolver, { schema } = {}) => {
   return resolver.wrapResolve((next) => async (rp) => {
     const userId = requireUser(rp);
     const user = userFromContext(rp);
-    let record = { ...(rp.args.record || {}), ...stampedValues(userId) };
-    record = filterWritable(record, schema, user, 'create');
-    rp.args.record = record;
+    const filtered = filterWritable(rp.args.record || {}, schema, user, 'create');
+    rp.args.record = { ...filtered, ...stampedValues(userId) };
     const result = await next(rp);
     return projectResult(result, schema, user);
   });
@@ -128,8 +134,8 @@ const wrapCreateMany = (resolver, { schema } = {}) => {
     const userId = requireUser(rp);
     const user = userFromContext(rp);
     rp.args.records = (rp.args.records || []).map((r) => {
-      const stamped = { ...r, ...stampedValues(userId) };
-      return filterWritable(stamped, schema, user, 'create');
+      const filtered = filterWritable(r, schema, user, 'create');
+      return { ...filtered, ...stampedValues(userId) };
     });
     const result = await next(rp);
     return projectResult(result, schema, user);
@@ -195,9 +201,10 @@ const wrapByIdMutation = (Model) => (resolver, { schema, action, kind = 'write' 
     if (!exists) throw new ForbiddenError('Record not found');
 
     if (rp.args.record) {
-      let record = { ...rp.args.record, ...stampedValues(userId) };
+      // Filter first, stamp last — see comment in wrapFilter.
+      let record = rp.args.record;
       if (action) record = filterWritable(record, schema, user, action);
-      rp.args.record = record;
+      rp.args.record = { ...record, ...stampedValues(userId) };
     }
 
     const result = await next(rp);

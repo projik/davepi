@@ -62,9 +62,22 @@ function projectListByAcl(records, schema, user) {
 }
 
 /**
+ * Fields the server controls itself (stamped from the JWT) and that
+ * ACL must never strip — even if a schema mistakenly declares an
+ * `acl` block on them. Tenant isolation depends on these being
+ * present in every write payload.
+ */
+const PROTECTED_WRITE_FIELDS = ['userId', 'accountId'];
+
+/**
  * Drop fields from an inbound write payload that the caller's roles
  * cannot set for the given action ('create' | 'update'). Returns a
  * new shallow-copied object.
+ *
+ * Server-stamped fields (`userId`, `accountId`) are always kept,
+ * regardless of any acl declared on them — those values come from
+ * the JWT, not the client, and stripping them would either fail
+ * insertion (required-field violation) or orphan the document.
  */
 function filterWritable(body, schema, user, action) {
   if (!body || !schema || !Array.isArray(schema.fields)) return body;
@@ -72,6 +85,10 @@ function filterWritable(body, schema, user, action) {
   const out = {};
   const fieldByName = new Map(schema.fields.map((f) => [f.name, f]));
   for (const [k, v] of Object.entries(body)) {
+    if (PROTECTED_WRITE_FIELDS.includes(k)) {
+      out[k] = v;
+      continue;
+    }
     const f = fieldByName.get(k);
     const allowed = f && f.acl && f.acl[action];
     if (!allowed || !allowed.length || hasOverlap(allowed, roles)) {
