@@ -43,16 +43,23 @@ require('mongoose-schema-jsonschema')(mongoose);
 
 const isProduction = () => process.env.NODE_ENV === 'production';
 
-// Default helmet (CSP enabled) for all routes. Swagger UI and Apollo's
-// GraphQL Playground need inline scripts / remote bundles, so CSP and
+// Default helmet (CSP enabled) for all routes. Swagger UI, Apollo's
+// GraphQL Playground, and the admin SPA need inline scripts / styles
+// that the default CSP would block, so CSP and
 // crossOriginEmbedderPolicy are dropped only for those paths.
+// (ant-design in particular renders inline styles for every dynamic
+// component — the admin UI is unusable behind the default style-src.)
 const helmetDefault = helmet();
 const helmetForBrowserTooling = helmet({
   contentSecurityPolicy: false,
   crossOriginEmbedderPolicy: false,
 });
 app.use((req, res, next) => {
-  if (req.path.startsWith('/api-docs') || req.path.startsWith('/graphql')) {
+  if (
+    req.path.startsWith('/api-docs') ||
+    req.path.startsWith('/graphql') ||
+    req.path.startsWith('/admin')
+  ) {
     return helmetForBrowserTooling(req, res, next);
   }
   return helmetDefault(req, res, next);
