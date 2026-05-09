@@ -41,6 +41,11 @@ function createSchemaLoader({ app, apiSpec, setApolloRouter, buildGraphqlContext
   // key = `${version}/${path}`
   const registry = new Map();
 
+  // Tracks the live ApolloServer so each rebuildGraphQL can shut down
+  // its predecessor — without this, every reload would leak server
+  // resources (plugins, timers, internal state).
+  let currentApolloServer = null;
+
   // Serialize loadSchema / unloadSchema / rebuildGraphQL through a
   // single-flight queue so concurrent filesystem events from the watcher
   // can't interleave registry mutations with rebuildGraphQL. Without
@@ -311,6 +316,10 @@ function createSchemaLoader({ app, apiSpec, setApolloRouter, buildGraphqlContext
    * keeping the registry consistent on partial unload would require
    * tracking every type composeWithMongoose creates per schema and
    * deleting them individually.
+   *
+   * Order: build the new server, swap the indirection reference, then
+   * stop the old server. Stopping first would leave the indirection
+   * pointing at a dead router during the rebuild window.
    */
   async function rebuildGraphQL() {
     const composer = new mongoSc.SchemaComposer();
@@ -344,7 +353,7 @@ function createSchemaLoader({ app, apiSpec, setApolloRouter, buildGraphqlContext
     composer.Query.addFields(queryFields);
     composer.Mutation.addFields(mutationFields);
 
-    const server = new apollo.ApolloServer({
+    const newServer = new apollo.ApolloServer({
       schema: composer.buildSchema(),
       cors: true,
       playground: !isProduction(),
@@ -353,11 +362,11 @@ function createSchemaLoader({ app, apiSpec, setApolloRouter, buildGraphqlContext
       path: '/',
       context: buildGraphqlContext,
     });
-    await server.start();
+    await newServer.start();
 
-    const router = express.Router();
-    server.applyMiddleware({
-      app: router,
+    const newRouter = express.Router();
+    newServer.applyMiddleware({
+      app: newRouter,
       path: '/graphql/',
       cors: true,
       onHealthCheck: () =>
@@ -367,7 +376,22 @@ function createSchemaLoader({ app, apiSpec, setApolloRouter, buildGraphqlContext
         }),
     });
 
-    setApolloRouter(router);
+    // Swap the indirection BEFORE stopping the old server. If we stopped
+    // first, in-flight or new requests during the rebuild window would
+    // hit a dead router. Now the parent app routes new requests to the
+    // fresh server immediately, and we shut the old one down to release
+    // its plugins / sockets / timers.
+    const oldServer = currentApolloServer;
+    currentApolloServer = newServer;
+    setApolloRouter(newRouter);
+
+    if (oldServer) {
+      try {
+        await oldServer.stop();
+      } catch (err) {
+        logger.warn({ err }, 'failed to stop previous ApolloServer; continuing');
+      }
+    }
   }
 
   /**

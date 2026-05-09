@@ -44,6 +44,24 @@ function startSchemaWatcher({
     try {
       const schema = requireFresh(filePath);
       schema.version = versionFromFile(filePath);
+      const newKey = `${schema.version}/${schema.path}`;
+      const previousKey = fileToKey.get(filePath);
+
+      // If the file used to register under a different key (developer
+      // renamed `schema.path` or moved the file between version dirs),
+      // tear down the stale registration first. Without this, the old
+      // routes / Mongoose model / GraphQL fields would linger forever.
+      if (previousKey && previousKey !== newKey) {
+        try {
+          await loader.unloadSchema(previousKey);
+        } catch (err) {
+          logger.error(
+            { err, filePath, previousKey },
+            'schema unload of previous identity failed; reloading anyway'
+          );
+        }
+      }
+
       const key = await loader.loadSchema(schema);
       fileToKey.set(filePath, key);
     } catch (err) {
