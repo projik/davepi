@@ -2,12 +2,24 @@ const crypto = require('crypto');
 const pinoHttp = require('pino-http');
 const logger = require('../utils/logger');
 
+const VALID_REQUEST_ID = /^[A-Za-z0-9._-]{1,128}$/;
+
+const sanitizeRequestId = (raw) => {
+  const value = Array.isArray(raw) ? raw[0] : raw;
+  if (typeof value !== 'string') return null;
+  return VALID_REQUEST_ID.test(value) ? value : null;
+};
+
 module.exports = pinoHttp({
   logger,
   genReqId: (req, res) => {
-    const incoming = req.headers['x-request-id'];
-    const id = incoming || crypto.randomUUID();
-    res.setHeader('x-request-id', id);
+    const id = sanitizeRequestId(req.headers['x-request-id']) || crypto.randomUUID();
+    try {
+      res.setHeader('x-request-id', id);
+    } catch (_e) {
+      // setHeader can throw on header-name/value validation failures in
+      // edge cases; fall through with the id we have for log correlation.
+    }
     return id;
   },
   customLogLevel: (req, res, err) => {
