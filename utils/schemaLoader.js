@@ -11,7 +11,7 @@ const MongoQS = require('mongo-querystring');
 const auth = require('../middleware/auth');
 const asyncHandler = require('./asyncHandler');
 const logger = require('./logger');
-const { NotFoundError } = require('./errors');
+const { NotFoundError, ValidationError } = require('./errors');
 const { emitRecordEvent } = require('./events');
 const {
   projectByAcl,
@@ -28,6 +28,18 @@ const {
   wrapFindByIds,
   wrapByIdMutation,
 } = require('./scopeResolver');
+const {
+  FileMetaSchema,
+  isFileField,
+  fileFieldsOf,
+  mongooseTypeFor,
+  matchAccept,
+  decorateFileUrls,
+  decorateListFileUrls,
+} = require('./fileFields');
+const { getStorageDriver } = require('./storage');
+const multer = require('multer');
+const crypto = require('crypto');
 
 const qs = new MongoQS();
 
@@ -89,7 +101,16 @@ function createSchemaLoader({ app, apiSpec, setApolloRouter, buildGraphqlContext
     const fields = {};
     const unique = [];
     const references = [];
+    const fileFields = [];
     s.fields.forEach((f) => {
+      // type: 'File' fields become embedded sub-docs at the Mongoose
+      // layer. Clients never POST these directly — uploads go through
+      // the dedicated multipart route per file field.
+      if (isFileField(f)) {
+        fields[f.name] = mongooseTypeFor(f);
+        fileFields.push(f);
+        return;
+      }
       fields[f.name] = f;
       if (f.unique) unique.push(f.name);
       if (f.reference) references.push(f.reference);
@@ -103,7 +124,7 @@ function createSchemaLoader({ app, apiSpec, setApolloRouter, buildGraphqlContext
       s.compositeIndex.forEach((i) => mongooseSchema.index(i, { unique: true }));
     }
 
-    return { mongooseSchema, unique, references };
+    return { mongooseSchema, unique, references, fileFields };
   }
 
   function buildSwagger(s, model) {
@@ -184,10 +205,139 @@ function createSchemaLoader({ app, apiSpec, setApolloRouter, buildGraphqlContext
     return { collectionPath, itemPath, schemaPath: `${collectionPath}-schema` };
   }
 
-  function buildRestRouter(s, model, references, mongooseSchema) {
+  function buildRestRouter(s, model, references, mongooseSchema, fileFields) {
     const router = express.Router();
     const path = s.path;
     const PAGE_SIZE = process.env.PAGE_SIZE;
+    const storage = getStorageDriver();
+
+    // Per-File-field upload / download / delete routes. Multer is
+    // configured per-field so maxBytes and accept apply at parse time.
+    for (const ff of fileFields || []) {
+      const fieldName = ff.name;
+      const cfg = ff.file || {};
+      const maxBytes = cfg.maxBytes || 10 * 1024 * 1024; // 10MB default
+      const accept = Array.isArray(cfg.accept) ? cfg.accept : null;
+      const access = cfg.access || 'public';
+
+      const upload = multer({
+        storage: multer.memoryStorage(),
+        limits: { fileSize: maxBytes },
+        fileFilter: (req, file, cb) => {
+          if (accept && !matchAccept(file.mimetype, accept)) {
+            return cb(new ValidationError(`File type ${file.mimetype} not allowed for ${fieldName}`));
+          }
+          cb(null, true);
+        },
+      });
+
+      // POST upload → stores blob, sets the File metadata sub-doc on
+      // the record. Owner-only.
+      router.post(
+        `/api/${s.version}/${path}/:id/${fieldName}`,
+        auth(true),
+        (req, res, next) => upload.single('file')(req, res, (err) => {
+          // multer's MulterError wraps size limit etc.; surface as
+          // ValidationError so errorHandler returns 400.
+          if (err && err.code === 'LIMIT_FILE_SIZE') {
+            return next(new ValidationError(`File exceeds ${maxBytes} bytes`));
+          }
+          if (err) return next(err);
+          next();
+        }),
+        asyncHandler(async (req, res) => {
+          if (!req.file) throw new ValidationError('multipart field "file" required');
+          const ownerQuery = bypassUserScopeForList(s, req.user)
+            ? { _id: req.params.id }
+            : { _id: req.params.id, userId: req.user.user_id };
+          const record = await model.findOne(ownerQuery);
+          if (!record) throw new NotFoundError(path);
+
+          // Generate a key under <path>/<recordId>/<field>/<uuid>-name
+          // so multiple uploads to the same field don't collide.
+          const safeName = req.file.originalname.replace(/[^A-Za-z0-9._-]+/g, '_');
+          const key = `${path}/${record._id}/${fieldName}/${crypto.randomUUID()}-${safeName}`;
+
+          // If the record already has a file in this slot, drop the
+          // old blob so storage doesn't grow unbounded across replaces.
+          const previous = record.get(fieldName);
+          if (previous && previous.key) {
+            try { await storage.remove(previous.key); } catch (_) {}
+          }
+
+          await storage.put(key, req.file.buffer, { contentType: req.file.mimetype });
+
+          const meta = {
+            key,
+            bucket: storage.bucket || null,
+            size: req.file.size,
+            contentType: req.file.mimetype,
+            originalName: req.file.originalname,
+            uploadedAt: new Date(),
+          };
+          record.set(fieldName, meta);
+          await record.save();
+
+          const decorated = await decorateFileUrls(
+            JSON.parse(JSON.stringify(record)),
+            s,
+            storage
+          );
+          emitRecordEvent({
+            type: `${path}.updated`,
+            version: s.version,
+            userId: String(req.user.user_id),
+            recordId: String(record._id),
+            record: projectByAcl(decorated, s, req.user),
+          });
+          res.status(201).json(decorated[fieldName]);
+        })
+      );
+
+      // GET download → for public access, redirect to publicUrl. For
+      // private, redirect to a short-lived signed URL. The local
+      // driver's signed URL points at /_files/...; the s3 driver's at
+      // S3 directly.
+      router.get(
+        `/api/${s.version}/${path}/:id/${fieldName}`,
+        auth(true),
+        asyncHandler(async (req, res) => {
+          const ownerQuery = bypassUserScopeForList(s, req.user)
+            ? { _id: req.params.id }
+            : { _id: req.params.id, userId: req.user.user_id };
+          const record = await model.findOne(ownerQuery).lean();
+          if (!record) throw new NotFoundError(path);
+          const meta = record[fieldName];
+          if (!meta || !meta.key) throw new NotFoundError(`${path}.${fieldName}`);
+          const url =
+            access === 'private'
+              ? await storage.signedUrl(meta.key)
+              : storage.publicUrl(meta.key);
+          res.redirect(302, url);
+        })
+      );
+
+      // DELETE the blob and clear the metadata sub-doc on the record.
+      router.delete(
+        `/api/${s.version}/${path}/:id/${fieldName}`,
+        auth(true),
+        asyncHandler(async (req, res) => {
+          const ownerQuery = bypassUserScopeForDelete(s, req.user)
+            ? { _id: req.params.id }
+            : { _id: req.params.id, userId: req.user.user_id };
+          const record = await model.findOne(ownerQuery);
+          if (!record) throw new NotFoundError(path);
+          const meta = record.get(fieldName);
+          if (!meta || !meta.key) {
+            return res.status(204).end();
+          }
+          try { await storage.remove(meta.key); } catch (_) {}
+          record.set(fieldName, null);
+          await record.save();
+          res.status(204).end();
+        })
+      );
+    }
 
     router.get(
       `/api/${s.version}/${path}-schema`,
@@ -213,6 +363,7 @@ function createSchemaLoader({ app, apiSpec, setApolloRouter, buildGraphqlContext
         };
         const record = await model.create(data);
         const plain = JSON.parse(JSON.stringify(record));
+        await decorateFileUrls(plain, s, storage);
         // Webhook payloads must NOT carry ACL-restricted fields: a
         // subscriber whose roles can't read `salary` shouldn't see it
         // delivered through this side channel either.
@@ -261,6 +412,7 @@ function createSchemaLoader({ app, apiSpec, setApolloRouter, buildGraphqlContext
           model.find(query).countDocuments(),
         ]);
 
+        await decorateListFileUrls(list, s, storage);
         const totalPages = Math.ceil(count / pageSize);
         const result = {
           results: projectListByAcl(list, s, req.user),
@@ -323,6 +475,7 @@ function createSchemaLoader({ app, apiSpec, setApolloRouter, buildGraphqlContext
           const ref = await refModel.findById(copy[r]).lean().exec();
           if (ref) copy[r] = ref;
         }
+        await decorateFileUrls(copy, s, storage);
         res.status(200).json(projectByAcl(copy, s, req.user));
       })
     );
@@ -334,8 +487,22 @@ function createSchemaLoader({ app, apiSpec, setApolloRouter, buildGraphqlContext
         const query = bypassUserScopeForDelete(s, req.user)
           ? { _id: req.params.id }
           : { userId: req.user.user_id, _id: req.params.id };
+        // Cascade-delete blobs in storage. Fetch the record first so
+        // we have the file keys; if the deleteOne fails to match, the
+        // pre-fetch returns null and nothing in storage is touched.
+        const existing = (fileFields && fileFields.length)
+          ? await model.findOne(query).lean()
+          : null;
         const result = await model.deleteOne(query);
         if (!result.deletedCount) throw new NotFoundError(path);
+        if (existing) {
+          for (const ff of fileFields) {
+            const meta = existing[ff.name];
+            if (meta && meta.key) {
+              try { await storage.remove(meta.key); } catch (_) {}
+            }
+          }
+        }
         emitRecordEvent({
           type: `${path}.deleted`,
           version: s.version,
@@ -481,7 +648,7 @@ function createSchemaLoader({ app, apiSpec, setApolloRouter, buildGraphqlContext
       await unloadSchemaImpl(key, { skipGraphqlRebuild: true });
     }
 
-    const { mongooseSchema, references } = buildSchemaArtifacts(s);
+    const { mongooseSchema, references, fileFields } = buildSchemaArtifacts(s);
 
     // mongoose throws if a model with the same name is already registered;
     // belt-and-suspenders cleanup in case unload missed it.
@@ -491,7 +658,7 @@ function createSchemaLoader({ app, apiSpec, setApolloRouter, buildGraphqlContext
     const model = mongoose.model(s.collection, mongooseSchema);
 
     const swaggerKeys = buildSwagger(s, model);
-    const router = buildRestRouter(s, model, references, mongooseSchema);
+    const router = buildRestRouter(s, model, references, mongooseSchema, fileFields);
     app.use(router);
     moveErrorHandlerToEnd();
 

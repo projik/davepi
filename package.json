@@ -12,6 +12,8 @@
   "author": "David Baxter",
   "license": "ISC",
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.1045.0",
+    "@aws-sdk/s3-request-presigner": "^3.1045.0",
     "apollo-server-express": "^3.6.3",
     "async": "^3.2.3",
     "bcryptjs": "^2.4.3",
@@ -31,6 +33,7 @@
     "mongoose-schema-jsonschema": "^2.0.2",
     "mongoose-timestamp": "^0.6.0",
     "mongoose-to-swagger": "^1.4.0",
+    "multer": "^2.1.1",
     "nodemailer": "^8.0.7",
     "pino": "^10.3.1",
     "pino-http": "^11.0.0",
