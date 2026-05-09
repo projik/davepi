@@ -21,7 +21,51 @@ A dynamic REST and GraphQL API server that automatically generates endpoints, do
 - MongoDB Atlas account or local MongoDB instance
 - npm or yarn
 
-### Installation
+### Run with Docker (one command)
+
+If you have Docker installed, this is the fastest path:
+
+```bash
+docker compose up
+```
+
+That brings up MongoDB and the API together. The API waits for Mongo to
+report healthy, then nodemon watches the bind-mounted source so edits to
+`schema/`, `app.js`, etc. hot-reload inside the container.
+
+Once the stack is running:
+
+- API: <http://localhost:4001>
+- Swagger UI: <http://localhost:4001/api-docs>
+- GraphQL Playground: <http://localhost:4001/graphql>
+- MongoDB: `mongodb://localhost:27017/davepi`
+
+To rebuild the image after a `package.json` change:
+
+```bash
+docker compose build api
+```
+
+To stop and clean up:
+
+```bash
+docker compose down       # keep the mongo data volume
+docker compose down -v    # also drop the data volume
+```
+
+The development image targets `dev` in the multi-stage `Dockerfile`. For
+a production-shaped image (slim, non-root, no devDeps, no nodemon), build
+the default target directly:
+
+```bash
+docker build -t davepi:latest .
+docker run --rm -p 4001:4001 \
+  -e MONGO_URI=mongodb://host.docker.internal:27017/davepi \
+  -e TOKEN_KEY=... \
+  davepi:latest
+```
+
+### Local installation (without Docker)
 
 ```bash
 # Clone the repository

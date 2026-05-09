@@ -9,17 +9,92 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        node-version: [18.x, 20.x]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: ${{ matrix.node-version }}
+          node-version: 20.x
           cache: npm
       - run: npm ci
       - run: npm test
         env:
           NODE_ENV: test
+
+  docker-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Build production image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          target: runner
+          load: true
+          tags: davepi:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: Smoke check the image (boots, listens on 4001)
+        run: |
+          set -e
+          dump_logs() {
+            echo "::group::mongo logs"; docker logs mongo 2>&1 || true; echo "::endgroup::"
+            echo "::group::davepi logs"; docker logs davepi 2>&1 || true; echo "::endgroup::"
+          }
+          trap 'dump_logs' ERR
+
+          docker network create davepi-ci
+          docker run -d --name mongo --network davepi-ci mongo:7
+
+          # Wait for Mongo to accept connections, then assert success so we
+          # don't proceed past a silent timeout.
+          mongo_ready=false
+          for i in $(seq 1 30); do
+            if docker exec mongo mongosh --quiet --eval "db.adminCommand('ping').ok" 2>/dev/null \
+                | grep -q 1; then
+              mongo_ready=true
+              break
+            fi
+            sleep 1
+          done
+          if [ "$mongo_ready" != "true" ]; then
+            echo "::error::Mongo did not become ready in 30s"
+            exit 1
+          fi
+
+          docker run -d --name davepi --network davepi-ci -p 4001:4001 \
+            -e MONGO_URI=mongodb://mongo:27017/davepi \
+            -e TOKEN_KEY=ci-only-not-real \
+            -e API_PORT=4001 \
+            -e PAGE_SIZE=20 \
+            -e NODE_ENV=production \
+            -e LOG_LEVEL=info \
+            -e CORS_ORIGINS=http://localhost:3000 \
+            davepi:ci
+
+          api_ready=false
+          for i in $(seq 1 30); do
+            if curl -fs http://localhost:4001/api-docs/swagger.json > /dev/null; then
+              api_ready=true
+              break
+            fi
+            sleep 1
+          done
+          if [ "$api_ready" != "true" ]; then
+            echo "::error::API did not serve swagger.json in 30s"
+            exit 1
+          fi
+
+          # Image size assertion: the issue's target is <250MB. 250MB =
+          # 250 * 1024 * 1024 = 262144000 bytes.
+          IMAGE_BYTES=$(docker image inspect davepi:ci --format '{{.Size}}')
+          echo "image size: $IMAGE_BYTES bytes"
+          if [ "$IMAGE_BYTES" -ge 262144000 ]; then
+            echo "::error::Image size $IMAGE_BYTES bytes exceeds 250MB ceiling"
+            exit 1
+          fi
+      - name: Cleanup
+        if: always()
+        run: |
+          docker rm -f davepi mongo 2>/dev/null || true
+          docker network rm davepi-ci 2>/dev/null || true

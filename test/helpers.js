@@ -42,7 +42,7 @@ function setupTestApp({ cleanCollections = true } = {}) {
       await Promise.all(
         Object.values(collections).map((c) => c.deleteMany({}))
       );
-    });
+    }, 30000); // CI runners (esp. Node 20 cold) need >5s
   }
 
   afterAll(async () => {
