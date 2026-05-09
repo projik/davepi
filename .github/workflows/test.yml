@@ -18,9 +18,8 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: ${{ matrix.node-version }}
-      # The repo doesn't commit package-lock.json (see .gitignore), so we
-      # use `npm install` rather than `npm ci`.
-      - run: npm install --no-audit --no-fund
+          cache: npm
+      - run: npm ci
       - run: npm test
         env:
           NODE_ENV: test
