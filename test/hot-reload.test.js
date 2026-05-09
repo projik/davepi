@@ -1,0 +1,240 @@
+const fs = require('fs');
+const path = require('path');
+const { setupTestApp, registerUser } = require('./helpers');
+
+const ctx = setupTestApp();
+
+const TEST_SCHEMA_PATH = path.resolve(
+  __dirname,
+  '..',
+  'schema',
+  'versions',
+  'v1',
+  '__hotreload.js'
+);
+
+const writeSchema = (fields) => {
+  const src = `module.exports = ${JSON.stringify(
+    {
+      path: 'hotreload',
+      collection: 'hotreload',
+      fields: fields.map((f) => ({ ...f, type: '__TYPE__' })),
+    },
+    null,
+    2
+  )};`
+    // JSON.stringify can't handle native types — splice them in.
+    .replace(/"__TYPE__"/g, 'String');
+  fs.writeFileSync(TEST_SCHEMA_PATH, src);
+};
+
+afterAll(() => {
+  if (fs.existsSync(TEST_SCHEMA_PATH)) fs.unlinkSync(TEST_SCHEMA_PATH);
+});
+
+describe('Schema hot reload (programmatic)', () => {
+  test('loadSchema mounts REST routes immediately, no restart', async () => {
+    const user = await registerUser(ctx.request, ctx.app);
+    const token = user.token;
+
+    // Pre-load: route does not exist.
+    const before = await ctx
+      .request(ctx.app)
+      .get('/api/v1/hotreload')
+      .set('Authorization', `Bearer ${token}`);
+    expect(before.status).toBe(404);
+
+    const schema = {
+      path: 'hotreload',
+      collection: 'hotreload',
+      version: 'v1',
+      fields: [
+        { name: 'userId', type: String, required: true },
+        { name: 'title', type: String, required: true },
+      ],
+    };
+    await ctx.app.locals.schemaLoader.loadSchema(schema);
+
+    // POST works against the freshly-mounted route.
+    const created = await ctx
+      .request(ctx.app)
+      .post('/api/v1/hotreload')
+      .set('Authorization', `Bearer ${token}`)
+      .send({ title: 'first' });
+    expect(created.status).toBe(201);
+    expect(created.body.title).toBe('first');
+
+    // GET list works too.
+    const listed = await ctx
+      .request(ctx.app)
+      .get('/api/v1/hotreload')
+      .set('Authorization', `Bearer ${token}`);
+    expect(listed.status).toBe(200);
+    expect(listed.body.totalResults).toBe(1);
+    expect(listed.body.results[0].title).toBe('first');
+
+    // Swagger spec now lists the new resource.
+    const swagger = await ctx.request(ctx.app).get('/api-docs/swagger.json');
+    expect(swagger.status).toBe(200);
+    expect(swagger.body.paths['/api/v1/hotreload']).toBeDefined();
+    expect(swagger.body.definitions['hotreload']).toBeDefined();
+
+    // GraphQL has the new type/resolvers.
+    const gql = await ctx
+      .request(ctx.app)
+      .post('/graphql/')
+      .set('Authorization', `Bearer ${token}`)
+      .send({ query: 'query { hotreloadMany { _id title } }' });
+    expect(gql.status).toBe(200);
+    expect(gql.body.data.hotreloadMany).toBeDefined();
+    expect(gql.body.data.hotreloadMany[0].title).toBe('first');
+  });
+
+  test('reloading the same schema is idempotent (no duplicate routes)', async () => {
+    const schema = {
+      path: 'hotreload',
+      collection: 'hotreload',
+      version: 'v1',
+      fields: [
+        { name: 'userId', type: String, required: true },
+        { name: 'title', type: String, required: true },
+      ],
+    };
+    await ctx.app.locals.schemaLoader.loadSchema(schema);
+    await ctx.app.locals.schemaLoader.loadSchema(schema);
+    await ctx.app.locals.schemaLoader.loadSchema(schema);
+
+    // Inspect the underlying Express stack: there must be exactly one
+    // mounted Router that handles /api/v1/hotreload.
+    const stack = ctx.app._router.stack;
+    const routerLayers = stack.filter(
+      (l) => l.handle && l.handle.stack && l.handle.stack.some((s) =>
+        s.route && /\/api\/v1\/hotreload/.test(s.route.path)
+      )
+    );
+    expect(routerLayers).toHaveLength(1);
+  });
+
+  test('unloadSchema removes REST routes, Swagger, and GraphQL fields', async () => {
+    const schema = {
+      path: 'hotreload',
+      collection: 'hotreload',
+      version: 'v1',
+      fields: [
+        { name: 'userId', type: String, required: true },
+        { name: 'title', type: String, required: true },
+      ],
+    };
+    await ctx.app.locals.schemaLoader.loadSchema(schema);
+
+    const user = await registerUser(ctx.request, ctx.app);
+    const token = user.token;
+
+    // Route is reachable.
+    const before = await ctx
+      .request(ctx.app)
+      .get('/api/v1/hotreload')
+      .set('Authorization', `Bearer ${token}`);
+    expect(before.status).toBe(200);
+
+    await ctx.app.locals.schemaLoader.unloadSchema('v1/hotreload');
+
+    // Route is gone.
+    const after = await ctx
+      .request(ctx.app)
+      .get('/api/v1/hotreload')
+      .set('Authorization', `Bearer ${token}`);
+    expect(after.status).toBe(404);
+
+    // Swagger spec dropped it.
+    const swagger = await ctx.request(ctx.app).get('/api-docs/swagger.json');
+    expect(swagger.body.paths['/api/v1/hotreload']).toBeUndefined();
+    expect(swagger.body.definitions['hotreload']).toBeUndefined();
+
+    // GraphQL no longer knows about hotreloadMany.
+    const gql = await ctx
+      .request(ctx.app)
+      .post('/graphql/')
+      .set('Authorization', `Bearer ${token}`)
+      .send({ query: 'query { hotreloadMany { _id } }' });
+    // Either the field is missing (validation error) or the parse fails.
+    expect(gql.body.errors).toBeDefined();
+  });
+
+  test('schema edits are picked up: rebuilding with new fields exposes them', async () => {
+    const v1 = {
+      path: 'hotreload',
+      collection: 'hotreload',
+      version: 'v1',
+      fields: [
+        { name: 'userId', type: String, required: true },
+        { name: 'title', type: String, required: true },
+      ],
+    };
+    await ctx.app.locals.schemaLoader.loadSchema(v1);
+
+    const user = await registerUser(ctx.request, ctx.app);
+    const token = user.token;
+
+    const beforeCreate = await ctx
+      .request(ctx.app)
+      .post('/api/v1/hotreload')
+      .set('Authorization', `Bearer ${token}`)
+      .send({ title: 'has no body field', body: 'should be ignored' });
+    expect(beforeCreate.status).toBe(201);
+    expect(beforeCreate.body.body).toBeUndefined();
+
+    // Reload with a new field.
+    const v2 = {
+      ...v1,
+      fields: [
+        { name: 'userId', type: String, required: true },
+        { name: 'title', type: String, required: true },
+        { name: 'body', type: String },
+      ],
+    };
+    await ctx.app.locals.schemaLoader.loadSchema(v2);
+
+    // Now `body` round-trips on POST/GET.
+    const afterCreate = await ctx
+      .request(ctx.app)
+      .post('/api/v1/hotreload')
+      .set('Authorization', `Bearer ${token}`)
+      .send({ title: 'after edit', body: 'now persisted' });
+    expect(afterCreate.status).toBe(201);
+    expect(afterCreate.body.body).toBe('now persisted');
+  });
+});
+
+describe('Schema watcher (gated by HOT_RELOAD_SCHEMAS)', () => {
+  const { startSchemaWatcher } = require('../utils/schemaWatcher');
+
+  test('returns a no-op watcher when not enabled', async () => {
+    const original = process.env.HOT_RELOAD_SCHEMAS;
+    delete process.env.HOT_RELOAD_SCHEMAS;
+    try {
+      const w = startSchemaWatcher({ loader: ctx.app.locals.schemaLoader });
+      // No methods to assert on directly; success is "doesn't throw, no
+      // chokidar instance was constructed". stop() should be a noop.
+      await w.stop();
+      expect(typeof w.stop).toBe('function');
+    } finally {
+      if (original !== undefined) process.env.HOT_RELOAD_SCHEMAS = original;
+    }
+  });
+
+  test('returns a no-op watcher in production even when flag is true', async () => {
+    const originalNodeEnv = process.env.NODE_ENV;
+    const originalFlag = process.env.HOT_RELOAD_SCHEMAS;
+    process.env.NODE_ENV = 'production';
+    process.env.HOT_RELOAD_SCHEMAS = 'true';
+    try {
+      const w = startSchemaWatcher({ loader: ctx.app.locals.schemaLoader });
+      await w.stop();
+      expect(typeof w.stop).toBe('function');
+    } finally {
+      process.env.NODE_ENV = originalNodeEnv;
+      process.env.HOT_RELOAD_SCHEMAS = originalFlag;
+    }
+  });
+});

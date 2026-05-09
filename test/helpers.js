@@ -31,9 +31,11 @@ function setupTestApp({ cleanCollections = true } = {}) {
     ctx.app = require('../app');
     ctx.request = require('supertest');
 
-    // Apollo Server applyMiddleware is called inside server.start().then(...)
-    // — give it a tick so /graphql/ is mounted before tests fire requests.
-    await new Promise((r) => setTimeout(r, 500));
+    // Wait for the schema loader to finish loading every initial schema
+    // and to mount the Apollo router via the indirection middleware.
+    if (ctx.app.locals && ctx.app.locals.ready) {
+      await ctx.app.locals.ready;
+    }
   }, 60000);
 
   if (cleanCollections) {
