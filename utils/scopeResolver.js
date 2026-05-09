@@ -5,6 +5,7 @@ const {
   bypassUserScopeForList,
   bypassUserScopeForDelete,
 } = require('./acl');
+const { emitRecordEvent } = require('./events');
 
 const STAMPED_FIELDS = ['userId', 'accountId'];
 
@@ -31,6 +32,51 @@ const stripFromInput = (resolver, argName) => {
 
 const userFromContext = (rp) =>
   (rp.context && rp.context.user) || null;
+
+/**
+ * Map the resolver's return value onto one or more `record` events.
+ * graphql-compose-mongoose returns:
+ *   - createOne / updateById / removeById → `{ record }`
+ *     (`recordId` is a child resolver computed from `record._id`)
+ *   - createMany → `{ records }`
+ *   - updateMany / removeMany → `{ numAffected }`
+ */
+const emitForMutation = (schema, action, userId, result) => {
+  if (!schema || !result) return;
+  const eventType = `${schema.path}.${action}`;
+  if (result.record) {
+    const plain = toPlain(result.record);
+    emitRecordEvent({
+      type: eventType,
+      version: schema.version,
+      userId,
+      recordId: plain && plain._id ? String(plain._id) : undefined,
+      record: plain,
+    });
+    return;
+  }
+  if (Array.isArray(result.records)) {
+    result.records.forEach((rec) => {
+      const plain = rec ? toPlain(rec) : null;
+      emitRecordEvent({
+        type: eventType,
+        version: schema.version,
+        userId,
+        recordId: plain && plain._id ? String(plain._id) : undefined,
+        record: plain,
+      });
+    });
+    return;
+  }
+  if (typeof result.numAffected === 'number') {
+    emitRecordEvent({
+      type: eventType,
+      version: schema.version,
+      userId,
+      numAffected: result.numAffected,
+    });
+  }
+};
 
 const toPlain = (doc) => {
   if (!doc) return doc;
@@ -112,6 +158,8 @@ const wrapFilter = (resolver, { schema, action, kind = 'write' } = {}) => {
     }
 
     const result = await next(rp);
+    if (action === 'update') emitForMutation(schema, 'updated', userId, result);
+    else if (kind === 'delete') emitForMutation(schema, 'deleted', userId, result);
     return projectResult(result, schema, user);
   });
 };
@@ -124,6 +172,7 @@ const wrapCreateOne = (resolver, { schema } = {}) => {
     const filtered = filterWritable(rp.args.record || {}, schema, user, 'create');
     rp.args.record = { ...filtered, ...stampedValues(userId) };
     const result = await next(rp);
+    emitForMutation(schema, 'created', userId, result);
     return projectResult(result, schema, user);
   });
 };
@@ -138,6 +187,7 @@ const wrapCreateMany = (resolver, { schema } = {}) => {
       return { ...filtered, ...stampedValues(userId) };
     });
     const result = await next(rp);
+    emitForMutation(schema, 'created', userId, result);
     return projectResult(result, schema, user);
   });
 };
@@ -208,6 +258,8 @@ const wrapByIdMutation = (Model) => (resolver, { schema, action, kind = 'write' 
     }
 
     const result = await next(rp);
+    if (action === 'update') emitForMutation(schema, 'updated', userId, result);
+    else if (kind === 'delete') emitForMutation(schema, 'deleted', userId, result);
     return projectResult(result, schema, user);
   });
 };
