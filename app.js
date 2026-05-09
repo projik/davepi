@@ -46,15 +46,20 @@ require('mongoose-schema-jsonschema')(mongoose);
 
 const schemaComposer = new mongoSc.SchemaComposer();
 
-// CSP and crossOriginEmbedderPolicy are disabled because Swagger UI uses
-// inline scripts and Apollo's GraphQL Playground loads remote bundles.
-// All other helmet defaults (HSTS, frameguard, no-sniff, etc.) stay on.
-app.use(
-  helmet({
-    contentSecurityPolicy: false,
-    crossOriginEmbedderPolicy: false,
-  })
-);
+// Default helmet (CSP enabled) for all routes. Swagger UI and Apollo's
+// GraphQL Playground need inline scripts / remote bundles, so CSP and
+// crossOriginEmbedderPolicy are dropped only for those paths.
+const helmetDefault = helmet();
+const helmetForBrowserTooling = helmet({
+  contentSecurityPolicy: false,
+  crossOriginEmbedderPolicy: false,
+});
+app.use((req, res, next) => {
+  if (req.path.startsWith('/api-docs') || req.path.startsWith('/graphql')) {
+    return helmetForBrowserTooling(req, res, next);
+  }
+  return helmetDefault(req, res, next);
+});
 app.use(buildCorsMiddleware());
 app.use(express.json());
 app.use(httpLogger);

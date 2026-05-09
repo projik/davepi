@@ -47,6 +47,10 @@ API_PORT=4001
 PAGE_SIZE=20
 APP_NAME=dAvePi
 NODE_ENV=development
+LOG_LEVEL=info
+# Comma-separated origin allowlist for CORS. Use "*" to allow any origin
+# (not recommended for production). Defaults to http://localhost:3000.
+CORS_ORIGINS=http://localhost:3000
 ```
 
 ### Running the Server

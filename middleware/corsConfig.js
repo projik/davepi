@@ -1,5 +1,12 @@
 const cors = require('cors');
 const logger = require('../utils/logger');
+const { AppError } = require('../utils/errors');
+
+class CorsNotAllowedError extends AppError {
+  constructor(origin) {
+    super(`Origin ${origin} not allowed by CORS`, 403, 'CORS_NOT_ALLOWED');
+  }
+}
 
 const parseOrigins = (raw) => {
   if (!raw) return [];
@@ -26,10 +33,10 @@ const buildCorsMiddleware = (raw = process.env.CORS_ORIGINS) => {
       // no Origin header — let those through unconditionally.
       if (!origin) return cb(null, true);
       if (allowAll || allowedOrigins.includes(origin)) return cb(null, true);
-      return cb(new Error(`CORS: origin ${origin} not allowed`));
+      return cb(new CorsNotAllowedError(origin));
     },
     credentials: true,
   });
 };
 
-module.exports = { buildCorsMiddleware, parseOrigins };
+module.exports = { buildCorsMiddleware, parseOrigins, CorsNotAllowedError };
