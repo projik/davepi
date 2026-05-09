@@ -190,7 +190,11 @@ function describeAcl(schema) {
 
 function describeEndpoints(schema) {
   const base = `/api/${schema.version}/${schema.path}`;
-  const item = `${base}/{id}`;
+  // Express-style `:id` to match the actual mounted routes — the
+  // manifest is call-oriented, not OpenAPI-templated. Agents copying
+  // a path literally can substitute the ID without translating from
+  // Swagger's `{id}` form.
+  const item = `${base}/:id`;
   const out = {
     list: `GET    ${base}`,
     create: `POST   ${base}`,
