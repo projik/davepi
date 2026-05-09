@@ -118,6 +118,17 @@ describe('Full-text search', () => {
       // is still listed.
       expect(r.body.totalResults).toBe(1);
     });
+
+    test('non-searchable schema + __q + __sort=score does NOT 500 from mismatched textScore', async () => {
+      // Without the score-sort gate, the handler would project
+      // { $meta: 'textScore' } without $text in the query and Mongo
+      // rejects the find. Should fall through to no sort at all.
+      const u = await registerUser(ctx.request, ctx.app);
+      await post('/api/v1/account', { accountName: 'A' }, u.token);
+      const r = await get('/api/v1/account?__q=foo&__sort=score', u.token);
+      expect(r.status).toBe(200);
+      expect(r.body.totalResults).toBe(1);
+    });
   });
 
   describe('GraphQL search', () => {

@@ -519,17 +519,23 @@ function createSchemaLoader({ app, apiSpec, setApolloRouter, buildGraphqlContext
         const q = req.query.__q;
         const sortObject = {};
         let projection = null;
+        const hasSearchable = Array.isArray(searchableFields) && searchableFields.length > 0;
         if (sort) {
           const [k, dir] = sort.split(':');
-          if (k === 'score' && q) {
+          if (k === 'score' && q && hasSearchable) {
             // Special case: order by full-text relevance. Mongo
             // requires the score to be projected before it can be
-            // used in $sort.
+            // used in $sort, AND requires $text in the query — both
+            // conditions are tied to the schema actually having
+            // searchable fields. Non-searchable schemas silently
+            // drop the score sort along with __q.
             sortObject.score = { $meta: 'textScore' };
             projection = { score: { $meta: 'textScore' } };
-          } else {
+          } else if (k !== 'score') {
             sortObject[k] = dir;
           }
+          // (k === 'score' with no searchable / no __q falls through
+          // to no sort; that matches the permissive __q semantics.)
         }
         const querystring = { ...req.query };
         Object.keys(req.query).forEach((qq) => {
@@ -545,7 +551,7 @@ function createSchemaLoader({ app, apiSpec, setApolloRouter, buildGraphqlContext
         // one searchable field. The framework owns the text index;
         // schemas without one quietly ignore __q to keep the surface
         // permissive.
-        if (q && Array.isArray(searchableFields) && searchableFields.length) {
+        if (q && hasSearchable) {
           query.$text = { $search: String(q) };
         }
 
