@@ -203,12 +203,116 @@ describe('/auth/reset-password', () => {
   });
 });
 
-describe('Rate limiting (factory test)', () => {
-  test('the same authLimiter applied to /login and /register also gates the reset endpoints', () => {
-    // Confirms the routing is wired through authLimiter; the limiter's
-    // own behavior is exercised in test/security.test.js with a custom
-    // factory instance (it skips during NODE_ENV=test by design).
-    const app = ctx.app;
-    expect(app).toBeDefined();
+describe('Rate limiting on reset endpoints', () => {
+  // The app's real authLimiter skips during NODE_ENV=test by design (see
+  // middleware/rateLimit.js). To verify the reset endpoints are
+  // actually gated, we mount a tiny app with the same factory + a
+  // forced-on skip, which is exactly the pattern used in
+  // test/security.test.js for /login.
+
+  test('11th /auth/forgot-password attempt within 15 min returns 429', async () => {
+    const express = require('express');
+    const supertest = require('supertest');
+    const { buildAuthLimiter } = require('../middleware/rateLimit');
+
+    const tinyApp = express();
+    tinyApp.use(express.json());
+    tinyApp.post(
+      '/auth/forgot-password',
+      buildAuthLimiter({
+        windowMs: 15 * 60 * 1000,
+        max: 10,
+        skip: () => false,
+      }),
+      (req, res) => res.status(204).end()
+    );
+
+    const r = supertest(tinyApp);
+    for (let i = 1; i <= 10; i++) {
+      const res = await r.post('/auth/forgot-password').send({});
+      expect(res.status).toBe(204);
+    }
+    const eleventh = await r.post('/auth/forgot-password').send({});
+    expect(eleventh.status).toBe(429);
+    expect(eleventh.body.error.code).toBe('RATE_LIMITED');
+  });
+
+  test('11th /auth/reset-password attempt within 15 min returns 429', async () => {
+    const express = require('express');
+    const supertest = require('supertest');
+    const { buildAuthLimiter } = require('../middleware/rateLimit');
+
+    const tinyApp = express();
+    tinyApp.use(express.json());
+    tinyApp.post(
+      '/auth/reset-password',
+      buildAuthLimiter({
+        windowMs: 15 * 60 * 1000,
+        max: 10,
+        skip: () => false,
+      }),
+      (req, res) => res.status(400).end() // any 4xx is fine; we only care about the limiter status
+    );
+
+    const r = supertest(tinyApp);
+    for (let i = 1; i <= 10; i++) {
+      const res = await r.post('/auth/reset-password').send({});
+      expect(res.status).toBe(400);
+    }
+    const eleventh = await r.post('/auth/reset-password').send({});
+    expect(eleventh.status).toBe(429);
+    expect(eleventh.body.error.code).toBe('RATE_LIMITED');
+  });
+});
+
+describe('mailer behavior', () => {
+  const { sendMail, __resetTransporter } = require('../utils/mailer');
+
+  beforeEach(() => {
+    __resetTransporter();
+    delete process.env.SMTP_HOST;
+  });
+
+  afterAll(() => {
+    process.env.NODE_ENV = 'test';
+    __resetTransporter();
+    delete process.env.SMTP_HOST;
+  });
+
+  test('non-production never sends — even if SMTP_HOST is set', async () => {
+    process.env.NODE_ENV = 'test';
+    process.env.SMTP_HOST = 'smtp.example.com'; // would-be real
+    // No throw, no SMTP connection attempt — just a log.
+    await expect(
+      sendMail({ to: 'x@x.com', subject: 's', text: 't' })
+    ).resolves.toBeUndefined();
+  });
+
+  test('production with no SMTP_HOST: does not throw and does not log the body', async () => {
+    const logger = require('../utils/logger');
+    const errors = [];
+    const original = logger.error.bind(logger);
+    logger.error = (obj, msg) => errors.push({ obj, msg });
+
+    process.env.NODE_ENV = 'production';
+    delete process.env.SMTP_HOST;
+
+    try {
+      await sendMail({
+        to: 'reset@x.com',
+        subject: 'Reset your password',
+        text: 'http://app/reset?token=SECRET-TOKEN-THAT-MUST-NOT-LEAK',
+      });
+      expect(errors.length).toBeGreaterThan(0);
+      const last = errors[errors.length - 1];
+      // Header logged but the body / token must NOT be.
+      expect(last.obj).toMatchObject({ to: 'reset@x.com', subject: 'Reset your password' });
+      expect(last.obj.text).toBeUndefined();
+      expect(last.obj.html).toBeUndefined();
+      expect(JSON.stringify(last)).not.toContain('SECRET-TOKEN');
+    } finally {
+      logger.error = original;
+      process.env.NODE_ENV = 'test';
+    }
   });
 });

@@ -1,5 +1,7 @@
 const logger = require('./logger');
 
+const isProduction = () => process.env.NODE_ENV === 'production';
+
 let cachedTransporter = null;
 let transporterAttempted = false;
 
@@ -25,25 +27,38 @@ const getTransporter = () => {
 };
 
 /**
- * Send mail via SMTP if configured; otherwise log the would-be email.
+ * Send mail.
  *
- * The dev fallback is deliberate: local + CI environments shouldn't need
- * an SMTP server, but the developer still wants to see the reset URL. In
- * production with no SMTP_HOST, this falls back silently — callers should
- * monitor for the "no SMTP configured" warning at boot.
+ * Routing matrix:
+ * - NODE_ENV !== 'production': always log the full email payload to the
+ *   structured logger and never send. This keeps the dev URL visible
+ *   even if a developer points SMTP_HOST at a local relay by accident.
+ * - NODE_ENV === 'production' + SMTP_HOST set: send via nodemailer.
+ * - NODE_ENV === 'production' + SMTP_HOST unset: log only the headers
+ *   ({to, subject}). The body is *not* logged because it can contain
+ *   secrets — e.g., a password-reset URL embeds a live, single-use
+ *   token, and dropping that into prod logs is a credential leak.
  */
 async function sendMail({ to, subject, text, html }) {
-  const transporter = getTransporter();
-  const from = process.env.SMTP_FROM || 'no-reply@example.com';
-
-  if (!transporter) {
+  if (!isProduction()) {
     logger.info(
       { to, subject, text, html },
-      'mailer: SMTP_HOST not set — logging email instead of sending'
+      'mailer: non-production — logging instead of sending'
     );
     return;
   }
 
+  const transporter = getTransporter();
+  if (!transporter) {
+    // Body deliberately omitted — see comment above.
+    logger.error(
+      { to, subject },
+      'mailer: SMTP not configured in production; email NOT sent'
+    );
+    return;
+  }
+
+  const from = process.env.SMTP_FROM || 'no-reply@example.com';
   await transporter.sendMail({ from, to, subject, text, html });
 }
 

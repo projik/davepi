@@ -503,33 +503,44 @@ const PASSWORD_RESET_TTL_MS = 60 * 60 * 1000; // 1 hour
 
 // Public on purpose: this endpoint is the entry point to the recovery
 // flow before the user has any credentials. Crucially it ALWAYS returns
-// 204 — including when the email is unknown — so it can't be used as a
-// user-enumeration oracle.
+// 204 — including when the email is unknown OR when token creation /
+// email delivery fails internally — so it can't be used as a
+// user-enumeration oracle. Internal errors are logged for operators.
 app.post(
   "/auth/forgot-password",
   authLimiter,
   asyncHandler(async (req, res) => {
     const { email } = req.body || {};
     if (typeof email === "string" && email.length) {
-      const user = await User.findOne({ email: email.toLowerCase() });
-      if (user) {
-        const rawToken = crypto.randomBytes(32).toString("hex");
-        await PasswordResetToken.create({
-          userId: user._id,
-          tokenHash: sha256(rawToken),
-          expiresAt: new Date(Date.now() + PASSWORD_RESET_TTL_MS),
-        });
-        const appUrl = process.env.APP_URL || "http://localhost:3000";
-        const resetUrl = `${appUrl}/reset?token=${rawToken}`;
-        await sendMail({
-          to: user.email,
-          subject: "Reset your password",
-          text:
-            `Someone requested a password reset for your account.\n\n` +
-            `If this was you, follow this link within the next hour:\n\n` +
-            `${resetUrl}\n\n` +
-            `If not, ignore this email — your password is unchanged.`,
-        });
+      try {
+        const user = await User.findOne({ email: email.toLowerCase() });
+        if (user) {
+          const rawToken = crypto.randomBytes(32).toString("hex");
+          await PasswordResetToken.create({
+            userId: user._id,
+            tokenHash: sha256(rawToken),
+            expiresAt: new Date(Date.now() + PASSWORD_RESET_TTL_MS),
+          });
+          const appUrl = process.env.APP_URL || "http://localhost:3000";
+          const resetUrl = `${appUrl}/reset?token=${rawToken}`;
+          await sendMail({
+            to: user.email,
+            subject: "Reset your password",
+            text:
+              `Someone requested a password reset for your account.\n\n` +
+              `If this was you, follow this link within the next hour:\n\n` +
+              `${resetUrl}\n\n` +
+              `If not, ignore this email — your password is unchanged.`,
+          });
+        }
+      } catch (err) {
+        // Swallow on purpose. A DB or SMTP failure for a valid email must
+        // not turn into a different HTTP response than the unknown-email
+        // case — that's the enumeration oracle we're avoiding.
+        (req.log || logger).error(
+          { err },
+          "forgot-password: internal failure (response still 204)"
+        );
       }
     }
     res.status(204).end();
