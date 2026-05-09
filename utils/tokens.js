@@ -49,8 +49,14 @@ async function issueTokenPair(user, req) {
 /**
  * Validate an incoming refresh token, rotate it (revoke + replace), and
  * return a fresh (access, refresh) pair. Detects token reuse: if a caller
- * presents a token that has already been revoked, we revoke every token in
- * its family — the assumption is the token has been stolen.
+ * presents a token that has already been revoked — or loses a race against
+ * a concurrent /auth/refresh — we revoke EVERY active refresh token for
+ * that user. The assumption is the token has been stolen.
+ *
+ * The atomic claim via findOneAndUpdate is load-bearing: two concurrent
+ * /auth/refresh calls with the same valid token must not both succeed in
+ * minting fresh tokens. The first request flips revokedAt and proceeds;
+ * the loser sees an already-revoked record and is treated as reuse.
  */
 async function rotateRefreshToken(presentedToken, req) {
   if (!presentedToken || typeof presentedToken !== 'string') {
@@ -58,30 +64,38 @@ async function rotateRefreshToken(presentedToken, req) {
   }
 
   const tokenHash = sha256(presentedToken);
-  const record = await RefreshToken.findOne({ tokenHash });
-  if (!record) {
-    throw new UnauthorizedError('Invalid refresh token');
-  }
+  const now = new Date();
 
-  // Reuse detection: a revoked token was just presented again. Revoke the
-  // whole family so the attacker (or whichever client got out of sync) loses
-  // access to the chain.
-  if (record.revokedAt) {
+  // Atomically claim the token: only the request whose predicate matches
+  // (token exists, not revoked, not expired) wins. Returns the pre-update
+  // doc so we keep the original userId/familyId. Concurrent calls and
+  // replays of revoked tokens fall through to the "investigate why we
+  // didn't win" branch below.
+  const claimed = await RefreshToken.findOneAndUpdate(
+    { tokenHash, revokedAt: null, expiresAt: { $gt: now } },
+    { $set: { revokedAt: now } },
+    { new: false }
+  );
+
+  if (!claimed) {
+    const record = await RefreshToken.findOne({ tokenHash });
+    if (!record) throw new UnauthorizedError('Invalid refresh token');
+    if (record.expiresAt < now && !record.revokedAt) {
+      throw new UnauthorizedError('Refresh token expired');
+    }
+    // Token was already revoked (replay) OR we lost a concurrent rotation
+    // race. Both paths are treated as theft: revoke EVERY active refresh
+    // token for this user, not just this family.
     await RefreshToken.updateMany(
-      { familyId: record.familyId, revokedAt: null },
-      { $set: { revokedAt: new Date() } }
+      { userId: record.userId, revokedAt: null },
+      { $set: { revokedAt: now } }
     );
     throw new UnauthorizedError('Refresh token reuse detected');
   }
 
-  if (record.expiresAt < new Date()) {
-    throw new UnauthorizedError('Refresh token expired');
-  }
-
-  // Mint the replacement, link it back to the old via replacedByHash, and
-  // mark the old as revoked.
+  // We won the claim. Mint the replacement and link it via replacedByHash.
   const User = require('../model/user');
-  const user = await User.findById(record.userId).select('_id email');
+  const user = await User.findById(claimed.userId).select('_id email');
   if (!user) throw new UnauthorizedError('User no longer exists');
 
   const newRefresh = generateRefreshToken();
@@ -89,16 +103,17 @@ async function rotateRefreshToken(presentedToken, req) {
 
   await RefreshToken.create({
     userId: user._id,
-    familyId: record.familyId,
+    familyId: claimed.familyId,
     tokenHash: newHash,
     expiresAt: refreshExpiry(),
     userAgent: req?.get?.('user-agent') || null,
     ip: req?.ip || null,
   });
 
-  record.revokedAt = new Date();
-  record.replacedByHash = newHash;
-  await record.save();
+  await RefreshToken.updateOne(
+    { _id: claimed._id },
+    { $set: { replacedByHash: newHash } }
+  );
 
   return {
     accessToken: signAccessToken(user),

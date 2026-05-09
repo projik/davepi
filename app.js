@@ -469,6 +469,11 @@ app.post("/login", authLimiter, asyncHandler(async (req, res) => {
   res.status(200).json({ ...tokens, user: buildUserResponse(user) });
 }));
 
+// Public on purpose: /auth/refresh is the path clients take when their
+// access-token JWT has already expired, so requiring auth(true) here
+// would make the endpoint useless. The refresh token in the body is the
+// authentication — rotateRefreshToken hashes and looks it up against
+// refresh_tokens, throws UnauthorizedError on miss/expired/reuse.
 app.post("/auth/refresh", authLimiter, asyncHandler(async (req, res) => {
   const { refreshToken } = req.body || {};
   if (!refreshToken) {
@@ -478,6 +483,9 @@ app.post("/auth/refresh", authLimiter, asyncHandler(async (req, res) => {
   res.status(200).json(tokens);
 }));
 
+// Public on purpose: a user whose access token has expired must still
+// be able to log out (revoke their refresh token). The refresh token
+// in the body identifies the session being terminated.
 app.post("/auth/logout", asyncHandler(async (req, res) => {
   const { refreshToken } = req.body || {};
   await revokeRefreshToken(refreshToken);

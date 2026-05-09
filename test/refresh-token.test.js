@@ -111,32 +111,72 @@ describe('/auth/refresh — failure modes', () => {
     expect(res.body.error.message).toMatch(/expired/i);
   });
 
-  test('reusing a revoked token returns 401 AND revokes the entire family', async () => {
-    const user = await registerUser(ctx.request, ctx.app);
+  test('reusing a revoked token revokes ALL of the user\'s active refresh tokens (across families)', async () => {
+    const user = await registerUser(ctx.request, ctx.app, {
+      email: 'reuse@example.com',
+    });
 
-    // Rotate forward twice to build a chain: original -> r1 -> r2.
+    // First family: original -> r1 -> r2 (rotate twice).
     const r1 = await post('/auth/refresh', { refreshToken: user.refreshToken });
     const r2 = await post('/auth/refresh', { refreshToken: r1.body.refreshToken });
     expect(r2.status).toBe(200);
 
-    // Replay the original (already revoked when rotated to r1).
-    const replay = await post('/auth/refresh', {
-      refreshToken: user.refreshToken,
-    });
+    // Second family: a parallel /login mints a separate refresh token chain
+    // for the same user (think: same human signed in on a second device).
+    const secondLogin = await ctx
+      .request(ctx.app)
+      .post('/login')
+      .send({ email: 'reuse@example.com', password: 'pw12345!' });
+    expect(secondLogin.status).toBe(200);
+    const otherSession = secondLogin.body.refreshToken;
+
+    // Replay the original from family #1 — already revoked.
+    const replay = await post('/auth/refresh', { refreshToken: user.refreshToken });
     expect(replay.status).toBe(401);
     expect(replay.body.error.message).toMatch(/reuse/i);
 
-    // The currently-active r2 is now also revoked because the family
-    // was tripped by the replay attack.
-    const afterAttack = await post('/auth/refresh', {
+    // The currently-active r2 (family #1) is revoked.
+    const family1AfterAttack = await post('/auth/refresh', {
       refreshToken: r2.body.refreshToken,
     });
-    expect(afterAttack.status).toBe(401);
+    expect(family1AfterAttack.status).toBe(401);
+
+    // AND the other-device session (family #2) is revoked too — the spec
+    // is "all of that user's active refresh tokens", not "just the family
+    // that was attacked".
+    const family2AfterAttack = await post('/auth/refresh', {
+      refreshToken: otherSession,
+    });
+    expect(family2AfterAttack.status).toBe(401);
 
     const all = await RefreshToken.find({ userId: user._id });
     for (const record of all) {
       expect(record.revokedAt).not.toBeNull();
     }
+  });
+
+  test('concurrent /auth/refresh with the same token: one wins, the other is treated as reuse', async () => {
+    const user = await registerUser(ctx.request, ctx.app);
+
+    // Fire two refresh requests simultaneously with the same refresh token.
+    // The atomic findOneAndUpdate guarantees exactly one wins.
+    const [a, b] = await Promise.all([
+      post('/auth/refresh', { refreshToken: user.refreshToken }),
+      post('/auth/refresh', { refreshToken: user.refreshToken }),
+    ]);
+
+    const successes = [a, b].filter((r) => r.status === 200);
+    const failures = [a, b].filter((r) => r.status === 401);
+    expect(successes).toHaveLength(1);
+    expect(failures).toHaveLength(1);
+    expect(failures[0].body.error.message).toMatch(/reuse/i);
+
+    // The losing request triggered the user-wide revoke, so the winner's
+    // freshly-minted token has also been killed.
+    const winnerRetry = await post('/auth/refresh', {
+      refreshToken: successes[0].body.refreshToken,
+    });
+    expect(winnerRetry.status).toBe(401);
   });
 });
 
