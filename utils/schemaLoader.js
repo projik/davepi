@@ -213,14 +213,18 @@ function createSchemaLoader({ app, apiSpec, setApolloRouter, buildGraphqlContext
         };
         const record = await model.create(data);
         const plain = JSON.parse(JSON.stringify(record));
+        // Webhook payloads must NOT carry ACL-restricted fields: a
+        // subscriber whose roles can't read `salary` shouldn't see it
+        // delivered through this side channel either.
+        const projected = projectByAcl(plain, s, req.user);
         emitRecordEvent({
           type: `${path}.created`,
           version: s.version,
           userId: req.user.user_id,
           recordId: String(record._id),
-          record: plain,
+          record: projected,
         });
-        res.status(201).json(projectByAcl(plain, s, req.user));
+        res.status(201).json(projected);
       })
     );
 

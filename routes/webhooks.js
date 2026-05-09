@@ -5,6 +5,7 @@ const asyncHandler = require('../utils/asyncHandler');
 const { ValidationError, NotFoundError } = require('../utils/errors');
 const { emitRecordEvent } = require('../utils/events');
 const { generateSecret } = require('../utils/webhookDispatcher');
+const { validateWebhookUrl } = require('../utils/urlValidator');
 
 const router = express.Router();
 
@@ -24,8 +25,18 @@ router.post(
     if (!Array.isArray(events) || events.length === 0) {
       throw new ValidationError('events must be a non-empty array');
     }
-    if (typeof url !== 'string' || !/^https?:\/\//.test(url)) {
-      throw new ValidationError('url must be an http(s) URL');
+    if (typeof url !== 'string') {
+      throw new ValidationError('url must be a string');
+    }
+    // SSRF defense: reject loopback / private / link-local targets and
+    // hostnames that resolve to those. Test mode allows them so the
+    // suite's local express receiver (bound to 127.0.0.1) keeps working.
+    try {
+      await validateWebhookUrl(url, {
+        allowPrivate: process.env.NODE_ENV === 'test',
+      });
+    } catch (e) {
+      throw new ValidationError(e.message);
     }
     const secret = generateSecret();
     const sub = await Webhook.create({
