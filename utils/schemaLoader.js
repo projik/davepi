@@ -13,6 +13,13 @@ const asyncHandler = require('./asyncHandler');
 const logger = require('./logger');
 const { NotFoundError } = require('./errors');
 const {
+  projectByAcl,
+  projectListByAcl,
+  filterWritable,
+  bypassUserScopeForList,
+  bypassUserScopeForDelete,
+} = require('./acl');
+const {
   wrapFilter,
   wrapCreateOne,
   wrapCreateMany,
@@ -197,13 +204,15 @@ function createSchemaLoader({ app, apiSpec, setApolloRouter, buildGraphqlContext
       `/api/${s.version}/${path}`,
       auth(true),
       asyncHandler(async (req, res) => {
+        const writable = filterWritable(req.body, s, req.user, 'create');
         const data = {
-          ...req.body,
+          ...writable,
           accountId: req.user.user_id,
           userId: req.user.user_id,
         };
         const record = await model.create(data);
-        res.status(201).json(record);
+        const projected = projectByAcl(JSON.parse(JSON.stringify(record)), s, req.user);
+        res.status(201).json(projected);
       })
     );
 
@@ -224,20 +233,25 @@ function createSchemaLoader({ app, apiSpec, setApolloRouter, buildGraphqlContext
           if (q.startsWith('__')) delete querystring[q];
         });
         const query = qs.parse(querystring);
-        query['userId'] = req.user.user_id;
+        // Bypass the userId scope for callers whose roles match
+        // schema.acl.list. Otherwise default ownership applies.
+        if (!bypassUserScopeForList(s, req.user)) {
+          query['userId'] = req.user.user_id;
+        }
 
         const [list, count] = await Promise.all([
           model
             .find(query)
             .sort(sortObject)
             .skip((page - 1) * pageSize)
-            .limit(pageSize),
+            .limit(pageSize)
+            .lean(),
           model.find(query).countDocuments(),
         ]);
 
         const totalPages = Math.ceil(count / pageSize);
         const result = {
-          results: list,
+          results: projectListByAcl(list, s, req.user),
           totalResults: count,
           page,
           perPage: pageSize,
@@ -255,9 +269,10 @@ function createSchemaLoader({ app, apiSpec, setApolloRouter, buildGraphqlContext
       asyncHandler(async (req, res) => {
         const query = qs.parse(req.query);
         query['userId'] = req.user.user_id;
+        const writable = filterWritable(req.body, s, req.user, 'update');
         const record = await model.updateMany(
           query,
-          { $set: req.body },
+          { $set: writable },
           { upsert: true }
         );
         res.status(200).json(record);
@@ -268,7 +283,9 @@ function createSchemaLoader({ app, apiSpec, setApolloRouter, buildGraphqlContext
       `/api/${s.version}/${path}/:id`,
       auth(true),
       asyncHandler(async (req, res) => {
-        const query = { userId: req.user.user_id, _id: req.params.id };
+        const query = bypassUserScopeForList(s, req.user)
+          ? { _id: req.params.id }
+          : { userId: req.user.user_id, _id: req.params.id };
         const record = await model.findOne(query);
         if (!record) throw new NotFoundError(path);
 
@@ -280,7 +297,7 @@ function createSchemaLoader({ app, apiSpec, setApolloRouter, buildGraphqlContext
           const ref = await refModel.findById(copy[r]).lean().exec();
           if (ref) copy[r] = ref;
         }
-        res.status(200).json(copy);
+        res.status(200).json(projectByAcl(copy, s, req.user));
       })
     );
 
@@ -288,7 +305,9 @@ function createSchemaLoader({ app, apiSpec, setApolloRouter, buildGraphqlContext
       `/api/${s.version}/${path}/:id`,
       auth(true),
       asyncHandler(async (req, res) => {
-        const query = { userId: req.user.user_id, _id: req.params.id };
+        const query = bypassUserScopeForDelete(s, req.user)
+          ? { _id: req.params.id }
+          : { userId: req.user.user_id, _id: req.params.id };
         const result = await model.deleteOne(query);
         if (!result.deletedCount) throw new NotFoundError(path);
         res.status(200).json(result);
@@ -299,8 +318,12 @@ function createSchemaLoader({ app, apiSpec, setApolloRouter, buildGraphqlContext
       `/api/${s.version}/${path}/:id`,
       auth(true),
       asyncHandler(async (req, res) => {
+        // Updates stay strictly owner-bound. acl.list grants read
+        // visibility; the spec doesn't define a write-bypass slot, so
+        // only the record's owner may PUT regardless of role.
         const query = { userId: req.user.user_id, _id: req.params.id };
-        const result = await model.updateOne(query, { $set: req.body });
+        const writable = filterWritable(req.body, s, req.user, 'update');
+        const result = await model.updateOne(query, { $set: writable });
         if (!result.matchedCount) throw new NotFoundError(path);
         res.status(200).json(result);
       })
@@ -333,21 +356,26 @@ function createSchemaLoader({ app, apiSpec, setApolloRouter, buildGraphqlContext
       const r = (name) => tc.getResolver(name);
 
       const p = s.path;
-      queryFields[p + 'ById'] = wrapFindById(r('findById'));
-      queryFields[p + 'ByIds'] = wrapFindByIds(r('findByIds'));
-      queryFields[p + 'One'] = wrapFilter(r('findOne'));
-      queryFields[p + 'Many'] = wrapFilter(r('findMany'));
-      queryFields[p + 'Count'] = wrapFilter(r('count'));
-      queryFields[p + 'Connection'] = wrapFilter(r('connection'));
-      queryFields[p + 'Pagination'] = wrapFilter(r('pagination'));
+      // Reads honor schema.acl.list (admin/HR-style "see everything").
+      queryFields[p + 'ById'] = wrapFindById(r('findById'), { schema: s });
+      queryFields[p + 'ByIds'] = wrapFindByIds(r('findByIds'), { schema: s });
+      queryFields[p + 'One'] = wrapFilter(r('findOne'), { schema: s, kind: 'read' });
+      queryFields[p + 'Many'] = wrapFilter(r('findMany'), { schema: s, kind: 'read' });
+      queryFields[p + 'Count'] = wrapFilter(r('count'), { schema: s, kind: 'read' });
+      queryFields[p + 'Connection'] = wrapFilter(r('connection'), { schema: s, kind: 'read' });
+      queryFields[p + 'Pagination'] = wrapFilter(r('pagination'), { schema: s, kind: 'read' });
 
-      mutationFields[p + 'CreateOne'] = wrapCreateOne(r('createOne'));
-      mutationFields[p + 'CreateMany'] = wrapCreateMany(r('createMany'));
-      mutationFields[p + 'UpdateById'] = wrapById(r('updateById'));
-      mutationFields[p + 'UpdateOne'] = wrapFilter(r('updateOne'));
-      mutationFields[p + 'UpdateMany'] = wrapFilter(r('updateMany'));
-      mutationFields[p + 'RemoveById'] = wrapById(r('removeById'));
-      mutationFields[p + 'RemoveMany'] = wrapFilter(r('removeMany'));
+      // Writes pass field-level ACL (`action: 'create' | 'update'`) so
+      // the ACL'd fields a caller can't set are stripped from the
+      // record before insert/update.
+      mutationFields[p + 'CreateOne'] = wrapCreateOne(r('createOne'), { schema: s });
+      mutationFields[p + 'CreateMany'] = wrapCreateMany(r('createMany'), { schema: s });
+      mutationFields[p + 'UpdateById'] = wrapById(r('updateById'), { schema: s, action: 'update' });
+      mutationFields[p + 'UpdateOne'] = wrapFilter(r('updateOne'), { schema: s, action: 'update' });
+      mutationFields[p + 'UpdateMany'] = wrapFilter(r('updateMany'), { schema: s, action: 'update' });
+      // Deletes honor schema.acl.delete.
+      mutationFields[p + 'RemoveById'] = wrapById(r('removeById'), { schema: s, kind: 'delete' });
+      mutationFields[p + 'RemoveMany'] = wrapFilter(r('removeMany'), { schema: s, kind: 'delete' });
     }
 
     composer.Query.addFields(queryFields);

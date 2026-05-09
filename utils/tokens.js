@@ -17,7 +17,14 @@ const generateRefreshToken = () => crypto.randomBytes(48).toString('hex');
 
 const signAccessToken = (user) =>
   jwt.sign(
-    { user_id: user._id, email: user.email },
+    {
+      user_id: user._id,
+      email: user.email,
+      // Roles travel in the JWT so RBAC checks are stateless. Stale
+      // until the next refresh — clients holding an access token see
+      // the role-set as of the last token issuance.
+      roles: Array.isArray(user.roles) && user.roles.length ? user.roles : ['user'],
+    },
     process.env.TOKEN_KEY,
     { expiresIn: ACCESS_TTL }
   );
@@ -94,8 +101,10 @@ async function rotateRefreshToken(presentedToken, req) {
   }
 
   // We won the claim. Mint the replacement and link it via replacedByHash.
+  // Re-fetch roles too so the new access token reflects any role changes
+  // made since the previous token was issued.
   const User = require('../model/user');
-  const user = await User.findById(claimed.userId).select('_id email');
+  const user = await User.findById(claimed.userId).select('_id email roles');
   if (!user) throw new UnauthorizedError('User no longer exists');
 
   const newRefresh = generateRefreshToken();
