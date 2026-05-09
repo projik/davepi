@@ -200,14 +200,18 @@ async function applyIncludes(records, normalized, includes, { user, getResource 
       ...(def.where || {}),
     };
     const matches = await TargetModel.find(baseFilter).lean();
-    const projected = matches.map((m) => projectByAcl(m, targetSchema, user));
 
+    // Critical ordering: read the join key off the RAW match, then
+    // project. If we projected first, an ACL'd foreignKey field on
+    // the target schema would be stripped before grouping and every
+    // relation would silently return empty buckets.
     if (def.kind === 'hasMany') {
       const byParent = new Map();
-      for (const c of projected) {
-        const k = String(c[def.foreignKey]);
+      for (const m of matches) {
+        const k = String(m[def.foreignKey]);
+        const projectedChild = projectByAcl(m, targetSchema, user);
         if (!byParent.has(k)) byParent.set(k, []);
-        byParent.get(k).push(c);
+        byParent.get(k).push(projectedChild);
       }
       for (const r of records) r[name] = byParent.get(String(r._id)) || [];
     } else {
@@ -216,9 +220,10 @@ async function applyIncludes(records, normalized, includes, { user, getResource 
       // — which is fine if the schema's `where` filter is selective
       // enough (e.g. `isPrimary: true`).
       const byParent = new Map();
-      for (const m of projected) {
+      for (const m of matches) {
         const k = String(m[def.foreignKey]);
-        if (!byParent.has(k)) byParent.set(k, m);
+        if (byParent.has(k)) continue;
+        byParent.set(k, projectByAcl(m, targetSchema, user));
       }
       for (const r of records) r[name] = byParent.get(String(r._id)) || null;
     }

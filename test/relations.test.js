@@ -303,6 +303,36 @@ describe('relations: REST + GraphQL integration', () => {
       expect(res.body.primaryContact).toBeUndefined();
     });
 
+    test('hasMany still groups correctly when the foreignKey is read-ACL restricted on the child', async () => {
+      // Regression: projecting children through ACL before grouping
+      // would strip the foreignKey from each child and break the
+      // bucket. Force that condition by mutating the loaded child
+      // schema to put `acl.read` on `acctId` for a role User A
+      // doesn't have, then verify the include still groups.
+      const childEntry = ctx.app.locals.schemaLoader.getEntry('v1/rel_contact');
+      const acctIdField = childEntry.schema.fields.find((f) => f.name === 'acctId');
+      const originalAcl = acctIdField.acl;
+      acctIdField.acl = { read: ['admin'] }; // userA only has 'user'
+      try {
+        const res = await ctx
+          .request(ctx.app)
+          .get('/api/v1/rel_account?__include=contacts')
+          .set('Authorization', `Bearer ${userA.token}`);
+        expect(res.status).toBe(200);
+        const byName = Object.fromEntries(res.body.results.map((a) => [a.name, a]));
+        // Buckets are still correctly populated...
+        expect(byName['A-acct'].contacts).toHaveLength(2);
+        expect(byName['A-acct2'].contacts).toHaveLength(1);
+        // ...and the ACL still hides acctId from the projected
+        // children (otherwise we'd be leaking the field).
+        for (const c of byName['A-acct'].contacts) {
+          expect(c.acctId).toBeUndefined();
+        }
+      } finally {
+        acctIdField.acl = originalAcl;
+      }
+    });
+
     test('Swagger documents __include per resource with the allowed names', async () => {
       const swagger = await ctx
         .request(ctx.app)
