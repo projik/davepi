@@ -62,9 +62,6 @@
     },
     hooks: {
       before: (req) => {
-        console.log('body', req.body);
-        console.log(req.user);
-        req.test = "somestring";
         return;
       }
     }

@@ -1,17 +1,16 @@
 const mongoose = require("mongoose");
+const logger = require("../utils/logger");
 
-const { MONGO_USER, MONGO_PASSWORD, MONGO_URI } = process.env;
+const { MONGO_URI } = process.env;
 
 exports.connect = () => {
-  // Connecting to the database
   mongoose
     .connect(MONGO_URI, {})
     .then(() => {
-      console.log("Successfully connected to database");
+      logger.info('connected to database');
     })
-    .catch((error) => {
-      console.log("database connection failed. exiting now...");
-      console.error(error);
+    .catch((err) => {
+      logger.fatal({ err }, 'database connection failed; exiting');
       process.exit(1);
     });
 };

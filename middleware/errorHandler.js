@@ -1,5 +1,6 @@
 const mongoose = require('mongoose');
 const { AppError } = require('../utils/errors');
+const logger = require('../utils/logger');
 
 const isProduction = () => process.env.NODE_ENV === 'production';
 
@@ -40,7 +41,8 @@ module.exports = (err, req, res, next) => {
   }
 
   if (status >= 500) {
-    console.error('[error]', { code, message, stack: err.stack });
+    const log = req.log || logger;
+    log.error({ err, code }, message);
   }
 
   res.status(status).json({ error: { code, message } });

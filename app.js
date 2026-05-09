@@ -19,7 +19,9 @@ const dirTree = require("directory-tree");
 
 const auth = require("./middleware/auth");
 const errorHandler = require("./middleware/errorHandler");
+const httpLogger = require("./middleware/httpLogger");
 const asyncHandler = require("./utils/asyncHandler");
+const logger = require("./utils/logger");
 const {
   NotFoundError,
   ValidationError,
@@ -44,13 +46,13 @@ const schemaComposer = new mongoSc.SchemaComposer();
 
 app.use(cors());
 app.use(express.json());
+app.use(httpLogger);
 
 const qs = new MongoQS();
 
 const filteredTree = dirTree("./schema/versions", { extensions: /\.js/ });
 const schemas = [];
 filteredTree.children.forEach((t) => {
-  // console.log(t);
   t.children.forEach((c) => {
     const schema = require("./" + c.path);
     schema.version = t.name;
@@ -77,7 +79,6 @@ const apiSpec = {
   }
 
 schemas.forEach((s) => {
-  // console.log(s);
   const fields = {};
   const unique = [];
   const references = [];
@@ -140,17 +141,13 @@ schemas.forEach((s) => {
 
   // Swagger Schema generation
   const swaggerSchema = m2s(model[path]);
-  // console.log(swaggerSchema);
   const postSchema = m2s(model[path], { omitFields: ['_id', 'createdAt', 'updatedAt']});
   const putSchema = JSON.parse(JSON.stringify(postSchema));
   delete putSchema.required;
-  console.log('ps', postSchema);
   swaggerSchema.type = 'object';
   apiSpec.definitions[path] = swaggerSchema;
-  // apiSpec.definitions[`update-${path}`] = putSchema;
   app.get(`/api/${s.version}/${path}-schema`, async (req, res) => {
     const jsSchema = schema[path].jsonSchema();
-    console.log(jsSchema);
     ['_id', 'createdAt', 'updatedAt', '__v'].forEach((s) => {
       delete jsSchema.properties[s];
     })
@@ -382,8 +379,9 @@ schemas.forEach((s) => {
   }));
 
 });
-// Logic goes here
-// importing user context
+
+logger.info({ schemas: schemas.map((s) => `${s.version}/${s.path}`) }, 'schemas loaded');
+
 const User = require("./model/user");
 
 // Register
