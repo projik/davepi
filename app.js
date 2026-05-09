@@ -326,6 +326,20 @@ app.get('/api-docs/swagger.json', (req, res) => {
 });
 app.use('/api-docs', swaggerUI.serve, swaggerUI.setup(apiSpec));
 
+// Admin SPA — built artifacts live under admin/dist/. Only mounted
+// when the build exists so a fresh clone without `npm run build:admin`
+// boots cleanly and just returns 404 for /admin/*. The SPA uses
+// client-side routing under /admin/<resource>/...; the wildcard
+// handler falls back to index.html for any unmatched path so a deep
+// link survives a refresh.
+const adminDist = path.resolve('./admin/dist');
+if (require('fs').existsSync(path.join(adminDist, 'index.html'))) {
+  app.use('/admin', express.static(adminDist));
+  app.get(/^\/admin(?:\/.*)?$/, (req, res) => {
+    res.sendFile(path.join(adminDist, 'index.html'));
+  });
+}
+
 // Errors from any route — REST handlers, /auth/*, the indirection
 // middleware that delegates to the current Apollo router — flow through
 // this single handler. The Apollo router is mounted ABOVE this in the
