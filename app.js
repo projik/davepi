@@ -234,17 +234,8 @@ schemas.forEach((s) => {
       accountId: req.user.user_id,
       userId: req.user.user_id,
     };
-    try {
-      const record = await model[path].create(data);
-      res.status(201).json(record);
-    } catch (err) {
-      if (err.code === 11000 && unique.length) {
-        throw new ConflictError(
-          `Duplicate record error. [${unique.join(', ')}] must be unique.`
-        );
-      }
-      throw err;
-    }
+    const record = await model[path].create(data);
+    res.status(201).json(record);
   }));
 
   app.get(`/api/${s.version}/${path}`, auth(true), asyncHandler(async (req, res) => {
@@ -492,7 +483,17 @@ const server = new apollo.ApolloServer({
     context: buildGraphqlContext,
 });
 
-server.start().then(res => {
+app.get('/api-docs/swagger.json', (req, res) => {
+  res.status(200).json(apiSpec);
+});
+app.use('/api-docs', swaggerUI.serve, swaggerUI.setup(apiSpec));
+
+// Registered here so REST/auth/swagger errors are handled even before
+// Apollo finishes its async start. Re-registered below once /graphql/
+// has been mounted so its errors flow through the same handler.
+app.use(errorHandler);
+
+server.start().then(() => {
   server.applyMiddleware({
       app,
       path: '/graphql/',
@@ -507,13 +508,7 @@ server.start().then(res => {
               }
           }),
   });
+  app.use(errorHandler);
 });
-
-app.get('/api-docs/swagger.json', (req, res) => {
-  res.status(200).json(apiSpec);
-});
-app.use('/api-docs', swaggerUI.serve, swaggerUI.setup(apiSpec));
-
-app.use(errorHandler);
 
 module.exports = app;

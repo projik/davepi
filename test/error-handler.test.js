@@ -173,6 +173,43 @@ describe('Centralized error handler', () => {
     });
   });
 
+  describe('middleware mappings (unit)', () => {
+    const mockRes = () => ({
+      headersSent: false,
+      status(code) {
+        this.statusCode = code;
+        return this;
+      },
+      json(body) {
+        this.body = body;
+        return this;
+      },
+    });
+
+    test('Mongoose 11000 duplicate-key error maps to 409 DUPLICATE with offending field', () => {
+      const errorHandler = require('../middleware/errorHandler');
+      const res = mockRes();
+      const err = Object.assign(new Error('E11000 duplicate'), {
+        code: 11000,
+        keyValue: { email: 'dup@x.com' },
+      });
+      errorHandler(err, {}, res, () => {});
+      expect(res.statusCode).toBe(409);
+      expect(res.body.error.code).toBe('DUPLICATE');
+      expect(res.body.error.message).toContain('email');
+    });
+
+    test('AppError subclasses pass through with their declared status and code', () => {
+      const errorHandler = require('../middleware/errorHandler');
+      const { NotFoundError } = require('../utils/errors');
+      const res = mockRes();
+      errorHandler(new NotFoundError('widget'), {}, res, () => {});
+      expect(res.statusCode).toBe(404);
+      expect(res.body.error.code).toBe('NOT_FOUND');
+      expect(res.body.error.message).toBe('widget not found');
+    });
+  });
+
   describe('production hardening', () => {
     test('production hides raw error messages for unknown errors', () => {
       const errorHandler = require('../middleware/errorHandler');
