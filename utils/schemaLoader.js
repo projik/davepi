@@ -124,7 +124,26 @@ function createSchemaLoader({ app, apiSpec, setApolloRouter, buildGraphqlContext
       s.compositeIndex.forEach((i) => mongooseSchema.index(i, { unique: true }));
     }
 
-    return { mongooseSchema, unique, references, fileFields };
+    // Mongo only allows one text index per collection, so the
+    // framework owns it: we collect every `searchable: true` field and
+    // emit a single compound text index. Title-like fields (name)
+    // are weighted higher than body fields by convention so they bubble
+    // up the score ranking; callers can override via `searchWeight`.
+    const searchableFields = (s.fields || []).filter((f) => f && f.searchable);
+    if (searchableFields.length) {
+      const textIndex = {};
+      const weights = {};
+      for (const f of searchableFields) {
+        textIndex[f.name] = 'text';
+        weights[f.name] = f.searchWeight || 1;
+      }
+      mongooseSchema.index(textIndex, {
+        name: `${s.path}_text`,
+        weights,
+      });
+    }
+
+    return { mongooseSchema, unique, references, fileFields, searchableFields };
   }
 
   function buildSwagger(s, model) {
@@ -152,12 +171,25 @@ function createSchemaLoader({ app, apiSpec, setApolloRouter, buildGraphqlContext
         tags: [tag],
         consumes: ['application/json'],
         produces: ['application/json'],
-        parameters: Object.keys(swaggerSchema.properties).map((sc) => ({
-          name: sc,
-          in: 'query',
-          type: 'string',
-          description: 'mongo-querystring formatted query parameters',
-        })),
+        parameters: [
+          ...Object.keys(swaggerSchema.properties).map((sc) => ({
+            name: sc,
+            in: 'query',
+            type: 'string',
+            description: 'mongo-querystring formatted query parameters',
+          })),
+          ...((s.fields || []).some((f) => f && f.searchable)
+            ? [
+                {
+                  name: '__q',
+                  in: 'query',
+                  type: 'string',
+                  description:
+                    'Full-text search across all `searchable: true` fields. Pair with `__sort=score` to order by relevance.',
+                },
+              ]
+            : []),
+        ],
         responses: {
           200: {
             description: 'success',
@@ -281,7 +313,7 @@ function createSchemaLoader({ app, apiSpec, setApolloRouter, buildGraphqlContext
     };
   }
 
-  function buildRestRouter(s, model, references, mongooseSchema, fileFields) {
+  function buildRestRouter(s, model, references, mongooseSchema, fileFields, searchableFields) {
     const router = express.Router();
     const path = s.path;
     const PAGE_SIZE = process.env.PAGE_SIZE;
@@ -484,14 +516,24 @@ function createSchemaLoader({ app, apiSpec, setApolloRouter, buildGraphqlContext
         const pageSize = parseInt(PAGE_SIZE);
         const page = parseInt(req.query.__page) || 1;
         const sort = req.query.__sort || false;
+        const q = req.query.__q;
         const sortObject = {};
+        let projection = null;
         if (sort) {
-          const vals = sort.split(':');
-          sortObject[vals[0]] = vals[1];
+          const [k, dir] = sort.split(':');
+          if (k === 'score' && q) {
+            // Special case: order by full-text relevance. Mongo
+            // requires the score to be projected before it can be
+            // used in $sort.
+            sortObject.score = { $meta: 'textScore' };
+            projection = { score: { $meta: 'textScore' } };
+          } else {
+            sortObject[k] = dir;
+          }
         }
         const querystring = { ...req.query };
-        Object.keys(req.query).forEach((q) => {
-          if (q.startsWith('__')) delete querystring[q];
+        Object.keys(req.query).forEach((qq) => {
+          if (qq.startsWith('__')) delete querystring[qq];
         });
         const query = qs.parse(querystring);
         // Bypass the userId scope for callers whose roles match
@@ -499,10 +541,17 @@ function createSchemaLoader({ app, apiSpec, setApolloRouter, buildGraphqlContext
         if (!bypassUserScopeForList(s, req.user)) {
           query['userId'] = req.user.user_id;
         }
+        // Full-text search: only valid when the schema has at least
+        // one searchable field. The framework owns the text index;
+        // schemas without one quietly ignore __q to keep the surface
+        // permissive.
+        if (q && Array.isArray(searchableFields) && searchableFields.length) {
+          query.$text = { $search: String(q) };
+        }
 
+        const findQuery = model.find(query, projection);
         const [list, count] = await Promise.all([
-          model
-            .find(query)
+          findQuery
             .sort(sortObject)
             .skip((page - 1) * pageSize)
             .limit(pageSize)
@@ -668,7 +717,20 @@ function createSchemaLoader({ app, apiSpec, setApolloRouter, buildGraphqlContext
       const { schema: s, model } = entry;
       const tc = mongoGql.composeWithMongoose(model, { schemaComposer: composer });
       const wrapById = wrapByIdMutation(model);
-      const r = (name) => tc.getResolver(name);
+      const hasSearchable = (s.fields || []).some((f) => f && f.searchable);
+      const r = (name) => {
+        const resolver = tc.getResolver(name);
+        // Schemas with searchable fields get a `search: String` arg
+        // on every read resolver. wrapFilter peels it off and folds
+        // it into a $text predicate on the filter.
+        if (
+          hasSearchable &&
+          ['findOne', 'findMany', 'count', 'connection', 'pagination'].includes(name)
+        ) {
+          resolver.addArgs({ search: 'String' });
+        }
+        return resolver;
+      };
 
       const p = s.path;
       // Reads honor schema.acl.list (admin/HR-style "see everything").
@@ -758,7 +820,7 @@ function createSchemaLoader({ app, apiSpec, setApolloRouter, buildGraphqlContext
       await unloadSchemaImpl(key, { skipGraphqlRebuild: true });
     }
 
-    const { mongooseSchema, references, fileFields } = buildSchemaArtifacts(s);
+    const { mongooseSchema, references, fileFields, searchableFields } = buildSchemaArtifacts(s);
 
     // mongoose throws if a model with the same name is already registered;
     // belt-and-suspenders cleanup in case unload missed it.
@@ -767,8 +829,22 @@ function createSchemaLoader({ app, apiSpec, setApolloRouter, buildGraphqlContext
     }
     const model = mongoose.model(s.collection, mongooseSchema);
 
+    // Ensure the model's indexes (including any text index from
+    // searchable: true fields) are actually built before requests
+    // fly. Mongoose schedules autoIndex async, and routes that use
+    // $text immediately after load would otherwise race the index
+    // creation. Errors are non-fatal — log and proceed so a single
+    // bad index doesn't block the whole load.
+    if (mongoose.connection && mongoose.connection.readyState === 1) {
+      try {
+        await model.init();
+      } catch (err) {
+        logger.warn({ err, schema: key }, 'index creation failed; continuing without indexes');
+      }
+    }
+
     const swaggerKeys = buildSwagger(s, model);
-    const router = buildRestRouter(s, model, references, mongooseSchema, fileFields);
+    const router = buildRestRouter(s, model, references, mongooseSchema, fileFields, searchableFields);
     app.use(router);
     moveErrorHandlerToEnd();
 

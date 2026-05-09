@@ -101,6 +101,10 @@ const toPlain = (doc) => {
  */
 const projectResult = (result, schema, user) => {
   if (!result || !schema) return result;
+  // Primitive results (e.g., the integer returned by `count`) can't
+  // be projected — and `{ ...5 }` produces `{}` which breaks GraphQL
+  // serialization of Int return types. Pass them through unchanged.
+  if (typeof result !== 'object') return result;
   if (Array.isArray(result)) {
     return result.map((r) => projectByAcl(toPlain(r), schema, user));
   }
@@ -149,6 +153,18 @@ const wrapFilter = (resolver, { schema, action, kind = 'write' } = {}) => {
       ...(rp.args.filter || {}),
       ...(bypass ? {} : { userId }),
     };
+
+    // Full-text search: opt-in via the `search` arg added in
+    // schemaLoader for read resolvers on schemas with searchable
+    // fields. Inject $text into the filter so Mongo runs it through
+    // the schema-owned text index alongside any other predicates.
+    if (rp.args.search) {
+      rp.args.filter = {
+        ...rp.args.filter,
+        $text: { $search: String(rp.args.search) },
+      };
+      delete rp.args.search;
+    }
 
     if (rp.args.record) {
       // Order matters: ACL-filter the client-provided payload first,

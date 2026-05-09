@@ -461,7 +461,13 @@ describe('Event bus + webhook dispatcher', () => {
             await new Promise((r) => setTimeout(r, 30));
           }
           expect(attempts).toBe(3);
-          const after = await Webhook.findById(sub._id);
+          // The dispatcher's success-path DB update runs async after
+          // the receiver returns 200; poll until failureCount settles.
+          let after = await Webhook.findById(sub._id);
+          for (let i = 0; i < 30 && after.failureCount !== 0; i++) {
+            await new Promise((r) => setTimeout(r, 20));
+            after = await Webhook.findById(sub._id);
+          }
           expect(after.failureCount).toBe(0);
           expect(after.active).toBe(true);
         } finally {
