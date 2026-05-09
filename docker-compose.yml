@@ -30,7 +30,11 @@ services:
       NODE_ENV: development
       LOG_LEVEL: info
       CORS_ORIGINS: http://localhost:3000
-      APP_URL: http://localhost:4001
+      # Public-facing app URL used in password reset email links. The
+      # frontend conventionally lives on :3000 in dev; the API runs on
+      # :4001 inside this stack but reset links go to the user, not the
+      # API. Override at the shell if your frontend lives elsewhere.
+      APP_URL: http://localhost:3000
     ports:
       - "4001:4001"
     # Bind-mount the source so nodemon picks up host edits. The
