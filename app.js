@@ -18,6 +18,13 @@ const app = express();
 const dirTree = require("directory-tree");
 
 const auth = require("./middleware/auth");
+const errorHandler = require("./middleware/errorHandler");
+const asyncHandler = require("./utils/asyncHandler");
+const {
+  NotFoundError,
+  ValidationError,
+  ConflictError,
+} = require("./utils/errors");
 const {
   wrapFilter,
   wrapCreateOne,
@@ -221,99 +228,73 @@ schemas.forEach((s) => {
     }
   }
 
-  app.post(`/api/${s.version}/${path}`, auth(true), async (req, res) => {
+  app.post(`/api/${s.version}/${path}`, auth(true), asyncHandler(async (req, res) => {
+    const data = {
+      ...req.body,
+      accountId: req.user.user_id,
+      userId: req.user.user_id,
+    };
     try {
-      const data = req.body;
-      data.accountId = req.user.user_id;
-      data.userId = req.user.user_id;
-      console.log(req.user);
-      console.log(data);
       const record = await model[path].create(data);
-      res.status(201).send(record);
+      res.status(201).json(record);
     } catch (err) {
-      if (err.code === 11000) {
-        return res.status(409).send('Duplicate record error. [' + unique.join(', ') + '] must be unique.');
+      if (err.code === 11000 && unique.length) {
+        throw new ConflictError(
+          `Duplicate record error. [${unique.join(', ')}] must be unique.`
+        );
       }
-      console.log('err', err);
-      res.status(500).send(err.message);
+      throw err;
     }
-  });
+  }));
 
-  app.get(`/api/${s.version}/${path}`, auth(true), async (req, res) => {
+  app.get(`/api/${s.version}/${path}`, auth(true), asyncHandler(async (req, res) => {
     const pageSize = parseInt(PAGE_SIZE);
     const page = parseInt(req.query.__page) || 1;
     const sort = req.query.__sort || false;
     const sortObject = {};
     if (sort) {
-      var vals = sort.split(':');
+      const vals = sort.split(':');
       sortObject[vals[0]] = vals[1];
     }
-    var querystring = {...req.query};
+    const querystring = { ...req.query };
     Object.keys(req.query).forEach((q) => {
       if (q.startsWith('__')) delete querystring[q];
     });
     const query = qs.parse(querystring);
     query['userId'] = req.user.user_id;
-    console.log(query);
-      async.parallel({
-        list: (done) => {
-          try {
-            model[path].find(query).sort(sortObject).skip((page - 1) * pageSize).limit(pageSize).exec((err, records) => {
-              done(err, records)
-            });
-          } catch (err) {
-            done(err)
-          }
-        },
-        count: (done) => {
-          try {
-            model[path].find(query).countDocuments((err, count) => {
-              done(null, count);
-            });
-          } catch (err) {
-            done(err);
-          }
-        }
-      }, (err, results) => {
-        console.log(err);
-        if (err) {
-          return res.status(500).send({ err });
-        } else {
-          let totalPages = Math.ceil(results.count / pageSize);
-          if (references.length > 0) {
-            console.log(references);
-          }
-          const result = {
-            results: results.list,
-            totalResults: results.count,
-            page: page,
-            perPage: pageSize,
-            totalPages: totalPages
-          };
-          if (totalPages > page) {
-            result.nextPage = page + 1;
-          };
-          if (page > 1) {
-            result.prevPage = page - 1;
-          }
-          return res.status(200).send(result);
-        }
-      });
-  });
 
-  app.put(`/api/${s.version}/${path}`, auth(true), async (req, res) => {
-    try {
-      const query = qs.parse(req.query);
-      query['userId'] = req.user.user_id;
-      console.log(query);
-      console.log(req.body);
-      const record = await model[path].updateMany(query,  { $set: req.body }, { upsert: true });
-      res.status(200).send(record);
-    } catch (err) {
-      console.log('err', err);
-      res.status(404).send({error: 'not found'});
-    }
-  });
+    const [list, count] = await Promise.all([
+      model[path]
+        .find(query)
+        .sort(sortObject)
+        .skip((page - 1) * pageSize)
+        .limit(pageSize),
+      model[path].find(query).countDocuments(),
+    ]);
+
+    const totalPages = Math.ceil(count / pageSize);
+    const result = {
+      results: list,
+      totalResults: count,
+      page,
+      perPage: pageSize,
+      totalPages,
+    };
+    if (totalPages > page) result.nextPage = page + 1;
+    if (page > 1) result.prevPage = page - 1;
+    res.status(200).json(result);
+  }));
+
+  app.put(`/api/${s.version}/${path}`, auth(true), asyncHandler(async (req, res) => {
+    const query = qs.parse(req.query);
+    query['userId'] = req.user.user_id;
+    const record = await model[path].updateMany(
+      query,
+      { $set: req.body },
+      { upsert: true }
+    );
+    res.status(200).json(record);
+  }));
 
   apiSpec.paths[`/api/${s.version}/${path}/{id}`] = {
     "get": {
@@ -381,61 +362,33 @@ schemas.forEach((s) => {
       }
     }
   }
-  app.get(`/api/${s.version}/${path}/:id`, auth(true), async (req, res) => {
-    try {
-      const query = {
-        userId: req.user.user_id,
-        _id: req.params.id
-      }
-      const record = await model[path].findOne(query);
-      if (!record) {
-        return res.status(404).send({error: 'not found'});
-      }
-      const copy = JSON.parse(JSON.stringify(record));
-      async.each(references, async (r, done) => {
-        const ref = await model[r].findById(copy[r]).lean().exec();
-        console.log(copy[r]);
-        console.log(ref);
-        copy[r] = JSON.parse(JSON.stringify(ref));
-      console.log(copy[r]);
-        done(null)
-      }, (err) => {
-      console.log(copy);
-        res.status(200).send(copy);
-      })
-    } catch (err) {
-      console.log('err', err);
-      res.status(404).send({error: 'not found'});
-    }
-  });
+  app.get(`/api/${s.version}/${path}/:id`, auth(true), asyncHandler(async (req, res) => {
+    const query = { userId: req.user.user_id, _id: req.params.id };
+    const record = await model[path].findOne(query);
+    if (!record) throw new NotFoundError(path);
 
-  app.delete(`/api/${s.version}/${path}/:id`, auth(true), async (req, res) => {
-    try {
-      const query = {
-        userId: req.user.user_id,
-        _id: req.params.id
-      }
-      const record = await model[path].deleteOne(query);
-      res.status(200).send(record);
-    } catch (err) {
-      console.log('err', err);
-      res.status(404).send({error: 'not found'});
+    const copy = JSON.parse(JSON.stringify(record));
+    for (const r of references) {
+      if (!copy[r]) continue;
+      const ref = await model[r].findById(copy[r]).lean().exec();
+      if (ref) copy[r] = ref;
     }
-  });
+    res.status(200).json(copy);
+  }));
 
-  app.put(`/api/${s.version}/${path}/:id`, auth(true), async (req, res) => {
-    try {
-      const query = {
-        userId: req.user.user_id,
-        _id: req.params.id
-      }
-      const record = await model[path].updateOne(query, { $set: req.body });
-      res.status(200).send(record);
-    } catch (err) {
-      console.log('err', err);
-      res.status(404).send({error: 'not found'});
-    }
-  });
+  app.delete(`/api/${s.version}/${path}/:id`, auth(true), asyncHandler(async (req, res) => {
+    const query = { userId: req.user.user_id, _id: req.params.id };
+    const result = await model[path].deleteOne(query);
+    if (!result.deletedCount) throw new NotFoundError(path);
+    res.status(200).json(result);
+  }));
+
+  app.put(`/api/${s.version}/${path}/:id`, auth(true), asyncHandler(async (req, res) => {
+    const query = { userId: req.user.user_id, _id: req.params.id };
+    const result = await model[path].updateOne(query, { $set: req.body });
+    if (!result.matchedCount) throw new NotFoundError(path);
+    res.status(200).json(result);
+  }));
 
 });
 // Logic goes here
@@ -449,99 +402,69 @@ const User = require("./model/user");
  * @param res - The response object.
  * @returns A new user object with a token
  */
-app.post("/register", async (req, res) => {
+app.post("/register", asyncHandler(async (req, res) => {
+  const { first_name, last_name, email, password } = req.body;
 
-  // Our register logic starts here
-  try {
-    // Get user input
-    console.log(req.body);
-    const { first_name, last_name, email, password } = req.body;
-
-    // Validate user input
-    if (!(email && password && first_name && last_name)) {
-      return res.json({ status: 'error', code: 400, message: "All input is required"});
-    }
-
-    // check if user already exist
-    // Validate if user exist in our database
-    const oldUser = await User.findOne({ email });
-
-    if (oldUser) {
-      return res.json({ status: 'error', code: 409, message:"User Already Exists. Please Login" });
-    }
-
-    //Encrypt user password
-    const encryptedPassword = await bcrypt.hash(password, 10);
-
-    // Create user in our database
-    const user = await User.create({
-      first_name,
-      last_name,
-      email: email.toLowerCase(), // sanitize: convert email to lowercase
-      password: encryptedPassword,
-    });
-
-    // Create token
-    const token = jwt.sign(
-      { user_id: user._id, email },
-      process.env.TOKEN_KEY,
-      {
-        expiresIn: "2h",
-      }
-    );
-    // save user token
-    user.token = token;
-    const response = JSON.parse(JSON.stringify(user));
-
-    // return new user
-    delete response.password;
-    delete response.__v;
-
-    return res.status(201).json(response);
-  } catch (err) {
-    console.log(err);
+  if (!(email && password && first_name && last_name)) {
+    throw new ValidationError("All input is required");
   }
-  // Our register logic ends here
-});
-// Login
-app.post("/login", async (req, res) => {
 
-  // Our login logic starts here
-  try {
-    // Get user input
-    const { email, password } = req.body;
-
-    // Validate user input
-    if (!(email && password)) {
-      res.status(400).send("All input is required");
-    }
-    // Validate if user exist in our database
-    const user = await User.findOne({ email }, { first_name: 1, last_name: 1, email: 1, password: 1 });
-
-    if (user && (await bcrypt.compare(password, user.password))) {
-      // Create token
-      const token = jwt.sign(
-        { user_id: user._id, email },
-        process.env.TOKEN_KEY,
-        {
-          expiresIn: "2h",
-        }
-      );
-
-      // save user token
-      user.token = token;
-      const response = JSON.parse(JSON.stringify(user));
-      delete response.password;
-      
-      // user
-      return res.status(200).json(response);
-    }
-    res.status(400).send("Invalid Credentials");
-  } catch (err) {
-    console.log(err);
+  const oldUser = await User.findOne({ email: email.toLowerCase() });
+  if (oldUser) {
+    throw new ConflictError("User Already Exists. Please Login");
   }
-  // Our register logic ends here
-});
+
+  const encryptedPassword = await bcrypt.hash(password, 10);
+
+  const user = await User.create({
+    first_name,
+    last_name,
+    email: email.toLowerCase(),
+    password: encryptedPassword,
+  });
+
+  const token = jwt.sign(
+    { user_id: user._id, email },
+    process.env.TOKEN_KEY,
+    { expiresIn: "2h" }
+  );
+
+  user.token = token;
+  const response = JSON.parse(JSON.stringify(user));
+  delete response.password;
+  delete response.__v;
+
+  res.status(201).json(response);
+}));
+
+app.post("/login", asyncHandler(async (req, res) => {
+  const { email, password } = req.body;
+
+  if (!(email && password)) {
+    throw new ValidationError("All input is required");
+  }
+
+  const user = await User.findOne(
+    { email: email.toLowerCase() },
+    { first_name: 1, last_name: 1, email: 1, password: 1 }
+  );
+
+  if (!user || !(await bcrypt.compare(password, user.password))) {
+    throw new ValidationError("Invalid Credentials");
+  }
+
+  const token = jwt.sign(
+    { user_id: user._id, email },
+    process.env.TOKEN_KEY,
+    { expiresIn: "2h" }
+  );
+
+  user.token = token;
+  const response = JSON.parse(JSON.stringify(user));
+  delete response.password;
+
+  res.status(200).json(response);
+}));
 
 // const schemaBuild = schemaComposer.buildSchema();
 
@@ -590,4 +513,7 @@ app.get('/api-docs/swagger.json', (req, res) => {
   res.status(200).json(apiSpec);
 });
 app.use('/api-docs', swaggerUI.serve, swaggerUI.setup(apiSpec));
+
+app.use(errorHandler);
+
 module.exports = app;
