@@ -178,6 +178,162 @@ describe('Soft delete + audit history', () => {
     });
   });
 
+  describe('Soft-deleted records are read-only on the bulk PUT path', () => {
+    test('PUT /api/v1/account with a query that matches a tombstoned record does NOT touch it', async () => {
+      const u = await registerUser(ctx.request, ctx.app);
+      const c = await post('/api/v1/account', { accountName: 'tombbulk' }, u.token);
+      await del(`/api/v1/account/${c.body._id}`, u.token);
+
+      // Bulk PUT targeting accountName=tombbulk used to silently
+      // mutate the tombstoned doc; with deletedAt:null in the safe
+      // query it must NOT modify the existing tombstoned record.
+      // (updateMany with upsert:true may still insert a fresh doc;
+      // the contract here is "tombstones are read-only", not "no
+      // doc anywhere is touched".)
+      const r = await ctx.request(ctx.app)
+        .put('/api/v1/account?accountName=tombbulk')
+        .set('Authorization', `Bearer ${u.token}`)
+        .send({ description: 'should not land' });
+      expect(r.status).toBe(200);
+      expect(r.body.modifiedCount).toBe(0);
+
+      // Confirm the tombstoned record is unchanged.
+      const fetched = await get(
+        `/api/v1/account/${c.body._id}?__includeDeleted=true`,
+        u.token
+      );
+      expect(fetched.body.description).toBeFalsy();
+      expect(fetched.body.deletedAt).not.toBeNull();
+    });
+  });
+
+  describe('Audit history applies field-level read ACL', () => {
+    test('a plain user does NOT see ACL-protected fields in their own audit trail', async () => {
+      // Schema with `salary` admin-only on read.
+      await ctx.app.locals.schemaLoader.loadSchema({
+        path: 'auditemp',
+        collection: 'auditemps',
+        version: 'v1',
+        audit: true,
+        fields: [
+          { name: 'userId', type: String, required: true },
+          { name: 'name', type: String, required: true },
+          {
+            name: 'salary',
+            type: Number,
+            acl: { read: ['admin', 'hr'], create: ['admin', 'hr'] },
+          },
+        ],
+      });
+      const User = require('../model/user');
+      // Bring up an HR-roled user so we can plant a salary.
+      const hr = await registerUser(ctx.request, ctx.app, { email: 'hr@a.com' });
+      await User.updateOne({ _id: hr._id }, { $set: { roles: ['user', 'hr'] } });
+      const fresh = await ctx.request(ctx.app)
+        .post('/login')
+        .send({ email: 'hr@a.com', password: 'pw12345!' });
+      const hrToken = fresh.body.accessToken;
+
+      const c = await post('/api/v1/auditemp', { name: 'X', salary: 90000 }, hrToken);
+      const id = c.body._id;
+      await put(`/api/v1/auditemp/${id}`, { name: 'X2' }, hrToken);
+
+      // Now a plain user (the same person but downgraded) hits
+      // /history. Since they don't have hr/admin, salary must NOT
+      // appear in any of: before, after, or diff.
+      await User.updateOne({ _id: hr._id }, { $set: { roles: ['user'] } });
+      const stale = await ctx.request(ctx.app)
+        .post('/login')
+        .send({ email: 'hr@a.com', password: 'pw12345!' });
+      const plainToken = stale.body.accessToken;
+      const history = await get(`/api/v1/auditemp/${id}/history`, plainToken);
+      expect(history.status).toBe(200);
+      // For each entry, walk the snapshots and the diff: salary must
+      // not appear under any of the keys the plain user can see.
+      for (const entry of history.body.results) {
+        if (entry.before) expect('salary' in entry.before).toBe(false);
+        if (entry.after) expect('salary' in entry.after).toBe(false);
+        if (entry.diff) expect('salary' in entry.diff).toBe(false);
+      }
+    });
+  });
+
+  describe('Audit log diff is populated for every action', () => {
+    test('create / delete / restore each carry a diff (not just update)', async () => {
+      const u = await registerUser(ctx.request, ctx.app);
+      const c = await post('/api/v1/account', { accountName: 'allthediffs' }, u.token);
+      const id = c.body._id;
+      await del(`/api/v1/account/${id}`, u.token);
+      await post(`/api/v1/account/${id}/restore`, {}, u.token);
+
+      const history = await get(`/api/v1/account/${id}/history`, u.token);
+      const byAction = (a) => history.body.results.find((e) => e.action === a);
+      // Create: every non-framework field shows null → value.
+      expect(byAction('create').diff.accountName).toEqual([null, 'allthediffs']);
+      // Delete: deletedAt flips from null → ISO string (or Date —
+      // serialized as string through JSON).
+      expect(byAction('delete').diff.deletedAt[0]).toBeFalsy();
+      expect(byAction('delete').diff.deletedAt[1]).toBeTruthy();
+      // Restore: deletedAt flips back.
+      expect(byAction('restore').diff.deletedAt[1]).toBeFalsy();
+    });
+  });
+
+  describe('Retention sweep cascades file-blob cleanup', () => {
+    test('aged tombstones with File fields drop both the doc AND the blob', async () => {
+      const fs = require('fs');
+      const path = require('path');
+      const os = require('os');
+      const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'davepi-rsweep-'));
+      const oldUploads = process.env.UPLOADS_DIR;
+      process.env.UPLOADS_DIR = tmp;
+      // Reset the cached storage driver so it picks up the new dir.
+      require('../utils/storage').resetStorageDriver();
+      try {
+        await ctx.app.locals.schemaLoader.loadSchema({
+          path: 'reaped',
+          collection: 'reaped',
+          version: 'v1',
+          softDelete: { retentionDays: 1 },
+          audit: false,
+          fields: [
+            { name: 'userId', type: String, required: true },
+            { name: 'title', type: String, required: true },
+            { name: 'attachment', type: 'File', file: { maxBytes: 1024 } },
+          ],
+        });
+
+        const u = await registerUser(ctx.request, ctx.app);
+        const c = await post('/api/v1/reaped', { title: 'with-blob' }, u.token);
+        const upload = await ctx.request(ctx.app)
+          .post(`/api/v1/reaped/${c.body._id}/attachment`)
+          .set('Authorization', `Bearer ${u.token}`)
+          .attach('file', Buffer.from('payload'), {
+            filename: 'r.txt', contentType: 'text/plain',
+          });
+        const blobPath = path.join(tmp, upload.body.key);
+        expect(fs.existsSync(blobPath)).toBe(true);
+
+        // Soft-delete and backdate so it's eligible for purge.
+        await del(`/api/v1/reaped/${c.body._id}`, u.token);
+        const Model = require('mongoose').models.reaped;
+        await Model.updateOne(
+          { _id: c.body._id },
+          { $set: { deletedAt: new Date(Date.now() - 2 * 24 * 60 * 60 * 1000) } }
+        );
+
+        const summary = await purgeExpiredSoftDeletes(ctx.app.locals.schemaLoader);
+        expect(summary.reaped).toBe(1);
+        // Blob is gone, doc is gone.
+        expect(fs.existsSync(blobPath)).toBe(false);
+      } finally {
+        process.env.UPLOADS_DIR = oldUploads;
+        require('../utils/storage').resetStorageDriver();
+        try { fs.rmSync(tmp, { recursive: true, force: true }); } catch (_) {}
+      }
+    });
+  });
+
   describe('computeDiff', () => {
     test('returns only fields whose values differ', () => {
       const d = computeDiff(

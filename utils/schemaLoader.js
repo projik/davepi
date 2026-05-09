@@ -391,9 +391,12 @@ function createSchemaLoader({ app, apiSpec, setApolloRouter, buildGraphqlContext
         }),
         asyncHandler(async (req, res) => {
           if (!req.file) throw new ValidationError('multipart field "file" required');
-          const ownerQuery = bypassUserScopeForList(s, req.user)
+          // File-field mutations always exclude tombstones — soft-
+          // deleted records aren't writable through any HTTP path.
+          const baseOwner = bypassUserScopeForList(s, req.user)
             ? { _id: req.params.id }
             : { _id: req.params.id, userId: req.user.user_id };
+          const ownerQuery = softDeleteEnabled ? { ...baseOwner, deletedAt: null } : baseOwner;
           const record = await model.findOne(ownerQuery);
           if (!record) throw new NotFoundError(path);
 
@@ -468,9 +471,10 @@ function createSchemaLoader({ app, apiSpec, setApolloRouter, buildGraphqlContext
         `/api/${s.version}/${path}/:id/${fieldName}`,
         auth(true),
         asyncHandler(async (req, res) => {
-          const ownerQuery = bypassUserScopeForList(s, req.user)
+          const baseOwner = bypassUserScopeForList(s, req.user)
             ? { _id: req.params.id }
             : { _id: req.params.id, userId: req.user.user_id };
+          const ownerQuery = softDeleteEnabled ? { ...baseOwner, deletedAt: null } : baseOwner;
           const record = await model.findOne(ownerQuery).lean();
           if (!record) throw new NotFoundError(path);
           const meta = record[fieldName];
@@ -488,9 +492,10 @@ function createSchemaLoader({ app, apiSpec, setApolloRouter, buildGraphqlContext
         `/api/${s.version}/${path}/:id/${fieldName}`,
         auth(true),
         asyncHandler(async (req, res) => {
-          const ownerQuery = bypassUserScopeForDelete(s, req.user)
+          const baseOwner = bypassUserScopeForDelete(s, req.user)
             ? { _id: req.params.id }
             : { _id: req.params.id, userId: req.user.user_id };
+          const ownerQuery = softDeleteEnabled ? { ...baseOwner, deletedAt: null } : baseOwner;
           const record = await model.findOne(ownerQuery);
           if (!record) throw new NotFoundError(path);
           const meta = record.get(fieldName);
@@ -637,7 +642,15 @@ function createSchemaLoader({ app, apiSpec, setApolloRouter, buildGraphqlContext
         // userId so tenant isolation is non-bypassable.
         const rawQuery = qs.parse(req.query);
         const filteredQuery = filterWritable(rawQuery, s, req.user, 'create');
-        const safeQuery = { ...filteredQuery, userId: req.user.user_id };
+        const safeQuery = {
+          ...filteredQuery,
+          userId: req.user.user_id,
+          // Bulk PUT must NOT touch tombstones — soft-deleted records
+          // are read-only at the API layer until restored. Without
+          // this constraint, an unsuspecting `?accountName=X` could
+          // resurrect (or upsert via) a tombstoned doc.
+          ...(softDeleteEnabled ? { deletedAt: null } : {}),
+        };
         const writable = filterWritable(req.body, s, req.user, 'update');
         const record = await model.updateMany(
           safeQuery,
@@ -799,9 +812,36 @@ function createSchemaLoader({ app, apiSpec, setApolloRouter, buildGraphqlContext
             .lean(),
           AuditLog.countDocuments(auditQuery),
         ]);
+        // Apply field-level read ACL to every audit entry. Without
+        // this the history endpoint would expose ACL-restricted
+        // fields (e.g. salary) via before/after/diff that
+        // projectByAcl would otherwise hide on the regular GET path.
+        const fieldByName = new Map(
+          (s.fields || []).map((f) => [f.name, f])
+        );
+        const allowedDiffKey = (k) => {
+          const f = fieldByName.get(k);
+          if (!f || !f.acl || !f.acl.read) return true;
+          // hasOverlap-style check inlined: keep the diff key if the
+          // caller has at least one of the field's `read` roles.
+          const userRolesArr = Array.isArray(req.user.roles) && req.user.roles.length
+            ? req.user.roles
+            : ['user'];
+          return f.acl.read.some((r) => userRolesArr.includes(r));
+        };
+        const projected = list.map((entry) => ({
+          ...entry,
+          before: entry.before ? projectByAcl(entry.before, s, req.user) : entry.before,
+          after: entry.after ? projectByAcl(entry.after, s, req.user) : entry.after,
+          diff: entry.diff
+            ? Object.fromEntries(
+                Object.entries(entry.diff).filter(([k]) => allowedDiffKey(k))
+              )
+            : entry.diff,
+        }));
         const totalPages = Math.ceil(count / pageSize);
         const result = {
-          results: list,
+          results: projected,
           totalResults: count,
           page,
           perPage: pageSize,

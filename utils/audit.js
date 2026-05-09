@@ -49,8 +49,11 @@ async function recordAudit({ req, resource, recordId, action, before, after }) {
     if (!userId || !resource || !recordId || !action) return;
     const plainBefore = toPlain(before);
     const plainAfter = toPlain(after);
-    const diff =
-      action === 'update' ? computeDiff(plainBefore, plainAfter) : null;
+    // Compute diff for every action — computeDiff naturally encodes
+    // create as `null → value` and delete as `value → null`, which
+    // matches the rest of the framework's "every mutation has a
+    // diff" contract.
+    const diff = computeDiff(plainBefore, plainAfter);
     await AuditLog.create({
       userId,
       resource,
