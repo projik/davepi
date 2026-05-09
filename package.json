@@ -2,6 +2,9 @@
   "name": "davepi",
   "version": "1.0.0",
   "main": "index.js",
+  "bin": {
+    "davepi": "bin/davepi.js"
+  },
   "scripts": {
     "start": "nodemon index.js",
     "dev": "nodemon --ignore 'swagger/*.json' index.js",
