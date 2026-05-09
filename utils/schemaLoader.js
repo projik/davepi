@@ -16,6 +16,15 @@ const { emitRecordEvent } = require('./events');
 const { recordAudit } = require('./audit');
 const AuditLog = require('../model/auditLog');
 const {
+  validateAndCastParams,
+  buildPipeline,
+  AggregationParamError,
+  AggregationSafetyError,
+  ALLOWED_PARAM_TYPES,
+} = require('./aggregations');
+const { createAggregationCache } = require('./aggregationCache');
+const aggregationCache = createAggregationCache();
+const {
   projectByAcl,
   projectListByAcl,
   filterWritable,
@@ -324,11 +333,55 @@ function createSchemaLoader({ app, apiSpec, setApolloRouter, buildGraphqlContext
       fileSwaggerPaths.push(filePath);
     }
 
+    // Per-aggregation Swagger paths. Declared params surface as query
+    // parameters so generated SDKs and humans see what's required.
+    const aggregationSwaggerPaths = [];
+    const aggregationList = Array.isArray(s.aggregations) ? s.aggregations : [];
+    for (const agg of aggregationList) {
+      if (!agg || typeof agg.name !== 'string' || !Array.isArray(agg.pipeline)) {
+        continue;
+      }
+      const aggPath = `/api/${s.version}/${path}/aggregations/${agg.name}`;
+      const swaggerParams = Object.entries(agg.params || {}).map(
+        ([paramName, def]) => ({
+          name: paramName,
+          in: 'query',
+          type:
+            def.type === 'number'
+              ? 'number'
+              : def.type === 'boolean'
+              ? 'boolean'
+              : 'string',
+          required: !!def.required,
+          description: def.description || `${def.type} parameter`,
+        })
+      );
+      apiSpec.paths[aggPath] = {
+        get: {
+          tags: [tag],
+          description: agg.description || `Aggregation ${agg.name} on ${path}`,
+          parameters: swaggerParams,
+          responses: {
+            200: {
+              description: 'aggregation results',
+              schema: {
+                type: 'array',
+                items: { type: 'object' },
+              },
+            },
+            400: { description: 'parameter validation or unsafe-stage rejection' },
+          },
+        },
+      };
+      aggregationSwaggerPaths.push(aggPath);
+    }
+
     return {
       collectionPath,
       itemPath,
       schemaPath: `${collectionPath}-schema`,
       fileSwaggerPaths,
+      aggregationSwaggerPaths,
     };
   }
 
@@ -902,7 +955,96 @@ function createSchemaLoader({ app, apiSpec, setApolloRouter, buildGraphqlContext
       })
     );
 
+    // Per-aggregation REST endpoints. Each schema can declare:
+    //   aggregations: [
+    //     { name: 'totalsByMonth', pipeline: [...], params: {...},
+    //       cache: { ttlSeconds: 60 }, unsafe: false }
+    //   ]
+    // Each entry produces GET /api/{v}/{path}/aggregations/{name}.
+    for (const agg of (s.aggregations || [])) {
+      if (!agg || typeof agg.name !== 'string' || !Array.isArray(agg.pipeline)) {
+        logger.warn(
+          { schema: s.path, agg: agg && agg.name },
+          'aggregation declaration missing name or pipeline; skipping'
+        );
+        continue;
+      }
+      router.get(
+        `/api/${s.version}/${path}/aggregations/${agg.name}`,
+        auth(true),
+        asyncHandler(async (req, res) => {
+          const result = await runAggregation({
+            agg,
+            schema: s,
+            model,
+            user: req.user,
+            rawParams: req.query,
+          });
+          if (result.cacheStatus) {
+            res.setHeader('X-davepi-Aggregation-Cache', result.cacheStatus);
+          }
+          res.status(200).json(result.data);
+        })
+      );
+    }
+
     return router;
+  }
+
+  /**
+   * Shared aggregation runner used by both REST and GraphQL paths so
+   * the safety / param / cache rules stay consistent across surfaces.
+   *
+   * Returns `{ data, cacheStatus }` where `cacheStatus` is `'hit'`,
+   * `'miss'`, or `null` when caching is disabled for this aggregation.
+   */
+  async function runAggregation({ agg, schema, model, user, rawParams }) {
+    let castedParams;
+    try {
+      castedParams = validateAndCastParams(agg.params, rawParams);
+    } catch (err) {
+      if (err instanceof AggregationParamError) {
+        throw new ValidationError(err.message);
+      }
+      throw err;
+    }
+
+    // Cache key includes userId so cross-tenant cache hits are
+    // impossible. ttlSeconds <= 0 (or absent) opts out of caching.
+    const cacheTtl =
+      agg.cache && Number.isFinite(agg.cache.ttlSeconds) && agg.cache.ttlSeconds > 0
+        ? agg.cache.ttlSeconds
+        : 0;
+    const cacheKey =
+      cacheTtl > 0
+        ? aggregationCache.key({
+            resource: schema.path,
+            name: agg.name,
+            userId: user.user_id,
+            params: castedParams,
+          })
+        : null;
+    if (cacheKey) {
+      const cached = aggregationCache.get(cacheKey);
+      if (cached !== undefined) return { data: cached, cacheStatus: 'hit' };
+    }
+
+    let pipeline;
+    try {
+      pipeline = buildPipeline(agg, { userId: user.user_id, params: castedParams });
+    } catch (err) {
+      if (err instanceof AggregationSafetyError) {
+        throw new ValidationError(err.message);
+      }
+      throw err;
+    }
+
+    const results = await model.aggregate(pipeline);
+    if (cacheKey) {
+      aggregationCache.set(cacheKey, results, cacheTtl);
+      return { data: results, cacheStatus: 'miss' };
+    }
+    return { data: results, cacheStatus: null };
   }
 
   /**
@@ -921,6 +1063,19 @@ function createSchemaLoader({ app, apiSpec, setApolloRouter, buildGraphqlContext
     const composer = new mongoSc.SchemaComposer();
     const queryFields = {};
     const mutationFields = {};
+
+    // Aggregation results have a dynamic shape (whatever the user's
+    // pipeline produces), so we expose them through a JSON scalar
+    // instead of synthesising an output type per aggregation. The
+    // scalar is added once per rebuild — every aggregation query
+    // references the same instance.
+    const jsonScalar = composer.createScalarTC({
+      name: 'AggregationJSON',
+      description: 'Arbitrary JSON value emitted by an aggregation pipeline.',
+      serialize: (v) => v,
+      parseValue: (v) => v,
+      parseLiteral: () => null,
+    });
 
     for (const entry of registry.values()) {
       const { schema: s, model } = entry;
@@ -962,7 +1117,57 @@ function createSchemaLoader({ app, apiSpec, setApolloRouter, buildGraphqlContext
       // Deletes honor schema.acl.delete.
       mutationFields[p + 'RemoveById'] = wrapById(r('removeById'), { schema: s, kind: 'delete' });
       mutationFields[p + 'RemoveMany'] = wrapFilter(r('removeMany'), { schema: s, kind: 'delete' });
+
+      // Per-aggregation top-level GraphQL queries. Query name is
+      // `${path}${PascalCase(name)}`, return type is `[AggregationJSON]`.
+      // Auth and tenant isolation flow through the same runAggregation
+      // helper as the REST path so behaviour is identical.
+      for (const agg of (s.aggregations || [])) {
+        if (!agg || typeof agg.name !== 'string' || !Array.isArray(agg.pipeline)) {
+          continue;
+        }
+        const queryName =
+          p + agg.name.charAt(0).toUpperCase() + agg.name.slice(1);
+        const args = {};
+        for (const [paramName, def] of Object.entries(agg.params || {})) {
+          // Map declared aggregation param types to GraphQL scalars.
+          // dates and objectIds travel as strings on the wire and are
+          // cast by validateAndCastParams inside runAggregation, so
+          // there's exactly one place that knows how to parse them.
+          const t =
+            def.type === 'number'
+              ? 'Float'
+              : def.type === 'boolean'
+              ? 'Boolean'
+              : 'String';
+          args[paramName] = def.required ? `${t}!` : t;
+        }
+        const aggSchema = s;
+        const aggModel = model;
+        const aggDef = agg;
+        queryFields[queryName] = {
+          type: '[AggregationJSON]',
+          args,
+          description: agg.description || `Aggregation ${agg.name} on ${s.path}`,
+          resolve: async (_root, params, ctx) => {
+            if (!ctx || !ctx.user || !ctx.user.user_id) {
+              throw new apollo.AuthenticationError('Authentication required');
+            }
+            const result = await runAggregation({
+              agg: aggDef,
+              schema: aggSchema,
+              model: aggModel,
+              user: ctx.user,
+              rawParams: params,
+            });
+            return result.data;
+          },
+        };
+      }
     }
+    // Suppress unused-variable warning on jsonScalar — it's referenced
+    // implicitly by the `'[AggregationJSON]'` string type used above.
+    void jsonScalar;
 
     composer.Query.addFields(queryFields);
     composer.Mutation.addFields(mutationFields);
@@ -1092,6 +1297,9 @@ function createSchemaLoader({ app, apiSpec, setApolloRouter, buildGraphqlContext
     delete apiSpec.paths[entry.swaggerKeys.collectionPath];
     delete apiSpec.paths[entry.swaggerKeys.itemPath];
     for (const p of entry.swaggerKeys.fileSwaggerPaths || []) {
+      delete apiSpec.paths[p];
+    }
+    for (const p of entry.swaggerKeys.aggregationSwaggerPaths || []) {
       delete apiSpec.paths[p];
     }
     delete apiSpec.definitions[entry.schema.path];
