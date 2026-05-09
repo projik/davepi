@@ -16,6 +16,11 @@ jobs:
           node-version: 20.x
           cache: npm
       - run: npm ci
+      # Build the admin SPA so the smoke tests in test/admin-ui.test.js
+      # actually run on CI. Without this they skip cleanly and the
+      # bundle's regression guards (e.g. "must reference
+      # /api-docs/swagger.json") never fire.
+      - run: npm run build:admin
       - run: npm test
         env:
           NODE_ENV: test

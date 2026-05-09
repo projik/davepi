@@ -107,6 +107,35 @@ npm start
 npm run dev
 ```
 
+### Admin UI
+
+A schema-driven admin UI is available at `/admin` once you've built it. It's
+a separate Vite + Refine SPA under `admin/` that fetches
+`/api-docs/swagger.json` at boot and renders list / show / create / edit /
+delete views for every schema you've defined — no per-resource configuration.
+
+```bash
+# One-time install + production build (output: admin/dist/)
+npm run build:admin
+
+# Browse to the admin once the API is running
+open http://localhost:4001/admin
+```
+
+For development with hot-reload of the SPA itself, run the dev server alongside
+the API:
+
+```bash
+npm run dev:admin   # serves the SPA at http://localhost:5173 with API proxy
+```
+
+The admin uses `/login` for authentication; the JWT is stored in
+`localStorage` and attached as `Authorization: Bearer …` on every request.
+Field types are inferred from the Swagger spec — string fields become
+text inputs, numbers become number inputs, dates become date pickers, enums
+become selects, arrays become tag inputs. File-typed fields are shown read-
+only in the form (uploads still go through the dedicated multipart route).
+
 The server will start on the configured port (default: 4001).
 
 ## Usage

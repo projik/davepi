@@ -43,16 +43,23 @@ require('mongoose-schema-jsonschema')(mongoose);
 
 const isProduction = () => process.env.NODE_ENV === 'production';
 
-// Default helmet (CSP enabled) for all routes. Swagger UI and Apollo's
-// GraphQL Playground need inline scripts / remote bundles, so CSP and
+// Default helmet (CSP enabled) for all routes. Swagger UI, Apollo's
+// GraphQL Playground, and the admin SPA need inline scripts / styles
+// that the default CSP would block, so CSP and
 // crossOriginEmbedderPolicy are dropped only for those paths.
+// (ant-design in particular renders inline styles for every dynamic
+// component — the admin UI is unusable behind the default style-src.)
 const helmetDefault = helmet();
 const helmetForBrowserTooling = helmet({
   contentSecurityPolicy: false,
   crossOriginEmbedderPolicy: false,
 });
 app.use((req, res, next) => {
-  if (req.path.startsWith('/api-docs') || req.path.startsWith('/graphql')) {
+  if (
+    req.path.startsWith('/api-docs') ||
+    req.path.startsWith('/graphql') ||
+    req.path.startsWith('/admin')
+  ) {
     return helmetForBrowserTooling(req, res, next);
   }
   return helmetDefault(req, res, next);
@@ -325,6 +332,20 @@ app.get('/api-docs/swagger.json', (req, res) => {
   res.status(200).json(apiSpec);
 });
 app.use('/api-docs', swaggerUI.serve, swaggerUI.setup(apiSpec));
+
+// Admin SPA — built artifacts live under admin/dist/. Only mounted
+// when the build exists so a fresh clone without `npm run build:admin`
+// boots cleanly and just returns 404 for /admin/*. The SPA uses
+// client-side routing under /admin/<resource>/...; the wildcard
+// handler falls back to index.html for any unmatched path so a deep
+// link survives a refresh.
+const adminDist = path.resolve('./admin/dist');
+if (require('fs').existsSync(path.join(adminDist, 'index.html'))) {
+  app.use('/admin', express.static(adminDist));
+  app.get(/^\/admin(?:\/.*)?$/, (req, res) => {
+    res.sendFile(path.join(adminDist, 'index.html'));
+  });
+}
 
 // Errors from any route — REST handlers, /auth/*, the indirection
 // middleware that delegates to the current Apollo router — flow through

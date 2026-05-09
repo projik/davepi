@@ -9,7 +9,10 @@
     "start": "nodemon index.js",
     "dev": "nodemon --ignore 'swagger/*.json' index.js",
     "test": "jest --runInBand --forceExit",
-    "test:coverage": "jest --runInBand --forceExit --coverage"
+    "test:coverage": "jest --runInBand --forceExit --coverage",
+    "install:admin": "cd admin && npm install --no-audit --no-fund",
+    "build:admin": "cd admin && npm install --no-audit --no-fund && npm run build",
+    "dev:admin": "cd admin && npm run dev"
   },
   "keywords": [],
   "author": "David Baxter",
@@ -51,7 +54,14 @@
   },
   "nodemonConfig": {
     "ignore": [
-      "swagger/*"
+      "swagger/*",
+      "admin/*"
+    ]
+  },
+  "jest": {
+    "testPathIgnorePatterns": [
+      "/node_modules/",
+      "/admin/"
     ]
   },
   "repository": {

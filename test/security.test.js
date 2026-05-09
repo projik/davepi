@@ -90,6 +90,16 @@ describe('helmet scoping (integration)', () => {
     // Other helmet headers still present
     expect(res.headers['x-content-type-options']).toBe('nosniff');
   });
+
+  test('/admin/* does NOT get a CSP header (ant-design inline-styles carve-out)', async () => {
+    // The admin SPA uses ant-design which emits inline styles per
+    // dynamic component. The default CSP's `style-src 'self'` would
+    // make the UI render unstyled in production. Verify the carve-out
+    // applies regardless of whether the SPA bundle is built.
+    const res = await request(app).get('/admin/anything');
+    expect(res.headers['content-security-policy']).toBeUndefined();
+    expect(res.headers['x-content-type-options']).toBe('nosniff');
+  });
 });
 
 describe('CORS middleware', () => {
