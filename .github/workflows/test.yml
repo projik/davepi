@@ -1,0 +1,26 @@
+name: Test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node-version: [18.x, 20.x]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+      # The repo doesn't commit package-lock.json (see .gitignore), so we
+      # use `npm install` rather than `npm ci`.
+      - run: npm install --no-audit --no-fund
+      - run: npm test
+        env:
+          NODE_ENV: test

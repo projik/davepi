@@ -1,5 +1,8 @@
-require("dotenv").config();
-require("./config/database").connect();
+// Importing this module is a pure operation: it builds the Express app,
+// the Mongoose models, the GraphQL schema, and the Swagger spec, but
+// does NOT load .env or connect to MongoDB. The caller (index.js or a
+// test harness) is responsible for both. This makes app.js safe to
+// require from tests with an in-memory Mongo URI already set.
 const express = require("express");
 const helmet = require('helmet');
 const bcrypt = require('bcryptjs');
