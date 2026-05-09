@@ -557,11 +557,13 @@ const buildGraphqlContext = ({ req }) => {
   }
 };
 
+const isProduction = process.env.NODE_ENV === 'production';
+
 const server = new apollo.ApolloServer({
     schema: schemaComposer.buildSchema(),
     cors: true,
-    playground: process.env.NODE_ENV === 'development' ? true : false,
-    introspection: true,
+    playground: !isProduction,
+    introspection: !isProduction,
     tracing: true,
     path: '/',
     context: buildGraphqlContext,
