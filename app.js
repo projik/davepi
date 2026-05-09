@@ -182,7 +182,7 @@ app.post("/login", authLimiter, asyncHandler(async (req, res) => {
 
   const user = await User.findOne(
     { email: email.toLowerCase() },
-    { first_name: 1, last_name: 1, email: 1, password: 1 }
+    { first_name: 1, last_name: 1, email: 1, password: 1, roles: 1 }
   );
 
   if (!user || !(await bcrypt.compare(password, user.password))) {
