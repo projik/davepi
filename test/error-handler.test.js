@@ -15,14 +15,11 @@ beforeAll(async () => {
   process.env.NODE_ENV = 'test';
   process.env.API_PORT = '0';
 
+  await mongoose.connect(process.env.MONGO_URI);
+
   app = require('../app');
   request = require('supertest');
 
-  await new Promise((resolve, reject) => {
-    if (mongoose.connection.readyState === 1) return resolve();
-    mongoose.connection.once('open', resolve);
-    mongoose.connection.once('error', reject);
-  });
   await new Promise((r) => setTimeout(r, 500));
 }, 60000);
 
