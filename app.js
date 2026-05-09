@@ -33,6 +33,11 @@ const {
   ConflictError,
 } = require("./utils/errors");
 const {
+  issueTokenPair,
+  rotateRefreshToken,
+  revokeRefreshToken,
+} = require("./utils/tokens");
+const {
   wrapFilter,
   wrapCreateOne,
   wrapCreateMany,
@@ -411,6 +416,14 @@ const User = require("./model/user");
  * @param res - The response object.
  * @returns A new user object with a token
  */
+const buildUserResponse = (user) => {
+  const obj = JSON.parse(JSON.stringify(user));
+  delete obj.password;
+  delete obj.__v;
+  delete obj.token; // legacy field on the user model — never serialize it
+  return obj;
+};
+
 app.post("/register", authLimiter, asyncHandler(async (req, res) => {
   const { first_name, last_name, email, password } = req.body;
 
@@ -432,18 +445,8 @@ app.post("/register", authLimiter, asyncHandler(async (req, res) => {
     password: encryptedPassword,
   });
 
-  const token = jwt.sign(
-    { user_id: user._id, email },
-    process.env.TOKEN_KEY,
-    { expiresIn: "2h" }
-  );
-
-  user.token = token;
-  const response = JSON.parse(JSON.stringify(user));
-  delete response.password;
-  delete response.__v;
-
-  res.status(201).json(response);
+  const tokens = await issueTokenPair(user, req);
+  res.status(201).json({ ...tokens, user: buildUserResponse(user) });
 }));
 
 app.post("/login", authLimiter, asyncHandler(async (req, res) => {
@@ -462,17 +465,31 @@ app.post("/login", authLimiter, asyncHandler(async (req, res) => {
     throw new ValidationError("Invalid Credentials");
   }
 
-  const token = jwt.sign(
-    { user_id: user._id, email },
-    process.env.TOKEN_KEY,
-    { expiresIn: "2h" }
-  );
+  const tokens = await issueTokenPair(user, req);
+  res.status(200).json({ ...tokens, user: buildUserResponse(user) });
+}));
 
-  user.token = token;
-  const response = JSON.parse(JSON.stringify(user));
-  delete response.password;
+// Public on purpose: /auth/refresh is the path clients take when their
+// access-token JWT has already expired, so requiring auth(true) here
+// would make the endpoint useless. The refresh token in the body is the
+// authentication — rotateRefreshToken hashes and looks it up against
+// refresh_tokens, throws UnauthorizedError on miss/expired/reuse.
+app.post("/auth/refresh", authLimiter, asyncHandler(async (req, res) => {
+  const { refreshToken } = req.body || {};
+  if (!refreshToken) {
+    throw new ValidationError("refreshToken required");
+  }
+  const tokens = await rotateRefreshToken(refreshToken, req);
+  res.status(200).json(tokens);
+}));
 
-  res.status(200).json(response);
+// Public on purpose: a user whose access token has expired must still
+// be able to log out (revoke their refresh token). The refresh token
+// in the body identifies the session being terminated.
+app.post("/auth/logout", asyncHandler(async (req, res) => {
+  const { refreshToken } = req.body || {};
+  await revokeRefreshToken(refreshToken);
+  res.status(204).end();
 }));
 
 // const schemaBuild = schemaComposer.buildSchema();
