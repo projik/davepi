@@ -12,6 +12,7 @@ const auth = require('../middleware/auth');
 const asyncHandler = require('./asyncHandler');
 const logger = require('./logger');
 const { NotFoundError } = require('./errors');
+const { emitRecordEvent } = require('./events');
 const {
   projectByAcl,
   projectListByAcl,
@@ -211,7 +212,18 @@ function createSchemaLoader({ app, apiSpec, setApolloRouter, buildGraphqlContext
           userId: req.user.user_id,
         };
         const record = await model.create(data);
-        const projected = projectByAcl(JSON.parse(JSON.stringify(record)), s, req.user);
+        const plain = JSON.parse(JSON.stringify(record));
+        // Webhook payloads must NOT carry ACL-restricted fields: a
+        // subscriber whose roles can't read `salary` shouldn't see it
+        // delivered through this side channel either.
+        const projected = projectByAcl(plain, s, req.user);
+        emitRecordEvent({
+          type: `${path}.created`,
+          version: s.version,
+          userId: req.user.user_id,
+          recordId: String(record._id),
+          record: projected,
+        });
         res.status(201).json(projected);
       })
     );
@@ -282,6 +294,13 @@ function createSchemaLoader({ app, apiSpec, setApolloRouter, buildGraphqlContext
           { $set: writable },
           { upsert: true }
         );
+        emitRecordEvent({
+          type: `${path}.updated`,
+          version: s.version,
+          userId: req.user.user_id,
+          filter: safeQuery,
+          numAffected: record.modifiedCount + (record.upsertedCount || 0),
+        });
         res.status(200).json(record);
       })
     );
@@ -317,6 +336,12 @@ function createSchemaLoader({ app, apiSpec, setApolloRouter, buildGraphqlContext
           : { userId: req.user.user_id, _id: req.params.id };
         const result = await model.deleteOne(query);
         if (!result.deletedCount) throw new NotFoundError(path);
+        emitRecordEvent({
+          type: `${path}.deleted`,
+          version: s.version,
+          userId: req.user.user_id,
+          recordId: String(req.params.id),
+        });
         res.status(200).json(result);
       })
     );
@@ -332,6 +357,12 @@ function createSchemaLoader({ app, apiSpec, setApolloRouter, buildGraphqlContext
         const writable = filterWritable(req.body, s, req.user, 'update');
         const result = await model.updateOne(query, { $set: writable });
         if (!result.matchedCount) throw new NotFoundError(path);
+        emitRecordEvent({
+          type: `${path}.updated`,
+          version: s.version,
+          userId: req.user.user_id,
+          recordId: String(req.params.id),
+        });
         res.status(200).json(result);
       })
     );

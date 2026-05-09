@@ -5,6 +5,7 @@ const {
   bypassUserScopeForList,
   bypassUserScopeForDelete,
 } = require('./acl');
+const { emitRecordEvent } = require('./events');
 
 const STAMPED_FIELDS = ['userId', 'accountId'];
 
@@ -31,6 +32,58 @@ const stripFromInput = (resolver, argName) => {
 
 const userFromContext = (rp) =>
   (rp.context && rp.context.user) || null;
+
+/**
+ * Map the resolver's return value onto one or more `record` events.
+ * graphql-compose-mongoose returns:
+ *   - createOne / updateById / removeById → `{ record }`
+ *     (`recordId` is a child resolver computed from `record._id`)
+ *   - createMany → `{ records }`
+ *   - updateMany / removeMany → `{ numAffected }`
+ *
+ * The emitted `record` is always projected through the actor's ACL.
+ * Webhook delivery is a side channel; ACL-restricted fields visible
+ * via the API response must not leak through it either.
+ */
+const emitForMutation = (schema, action, user, result) => {
+  if (!schema || !result) return;
+  const userId = user && user.user_id;
+  const eventType = `${schema.path}.${action}`;
+  if (result.record) {
+    const plain = toPlain(result.record);
+    const projected = projectByAcl(plain, schema, user);
+    emitRecordEvent({
+      type: eventType,
+      version: schema.version,
+      userId,
+      recordId: plain && plain._id ? String(plain._id) : undefined,
+      record: projected,
+    });
+    return;
+  }
+  if (Array.isArray(result.records)) {
+    result.records.forEach((rec) => {
+      const plain = rec ? toPlain(rec) : null;
+      const projected = plain ? projectByAcl(plain, schema, user) : null;
+      emitRecordEvent({
+        type: eventType,
+        version: schema.version,
+        userId,
+        recordId: plain && plain._id ? String(plain._id) : undefined,
+        record: projected,
+      });
+    });
+    return;
+  }
+  if (typeof result.numAffected === 'number') {
+    emitRecordEvent({
+      type: eventType,
+      version: schema.version,
+      userId,
+      numAffected: result.numAffected,
+    });
+  }
+};
 
 const toPlain = (doc) => {
   if (!doc) return doc;
@@ -112,6 +165,8 @@ const wrapFilter = (resolver, { schema, action, kind = 'write' } = {}) => {
     }
 
     const result = await next(rp);
+    if (action === 'update') emitForMutation(schema, 'updated', user, result);
+    else if (kind === 'delete') emitForMutation(schema, 'deleted', user, result);
     return projectResult(result, schema, user);
   });
 };
@@ -124,6 +179,7 @@ const wrapCreateOne = (resolver, { schema } = {}) => {
     const filtered = filterWritable(rp.args.record || {}, schema, user, 'create');
     rp.args.record = { ...filtered, ...stampedValues(userId) };
     const result = await next(rp);
+    emitForMutation(schema, 'created', user, result);
     return projectResult(result, schema, user);
   });
 };
@@ -138,6 +194,7 @@ const wrapCreateMany = (resolver, { schema } = {}) => {
       return { ...filtered, ...stampedValues(userId) };
     });
     const result = await next(rp);
+    emitForMutation(schema, 'created', user, result);
     return projectResult(result, schema, user);
   });
 };
@@ -208,6 +265,8 @@ const wrapByIdMutation = (Model) => (resolver, { schema, action, kind = 'write' 
     }
 
     const result = await next(rp);
+    if (action === 'update') emitForMutation(schema, 'updated', user, result);
+    else if (kind === 'delete') emitForMutation(schema, 'deleted', user, result);
     return projectResult(result, schema, user);
   });
 };

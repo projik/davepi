@@ -308,6 +308,15 @@ app.post(
   })
 );
 
+// Webhook subscriptions for the user's records. The dispatcher itself
+// is started below; the routes hand-fire test deliveries through it
+// via app.locals.webhookDispatcher.
+const webhookRouter = require('./routes/webhooks');
+app.use(webhookRouter);
+
+const { startWebhookDispatcher } = require('./utils/webhookDispatcher');
+app.locals.webhookDispatcher = startWebhookDispatcher();
+
 app.get('/api-docs/swagger.json', (req, res) => {
   res.status(200).json(apiSpec);
 });
