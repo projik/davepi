@@ -287,6 +287,35 @@ const wrapByIdMutation = (Model) => (resolver, { schema, action, kind = 'write' 
   });
 };
 
+/**
+ * Wrap an aggregation runner into a graphql-compose field config.
+ *
+ * Aggregations don't fit the graphql-compose-mongoose resolver shape
+ * (they aren't `findMany`, `findById`, etc.), so they don't pass
+ * through wrapFilter / wrapByIdMutation / etc. — but the same tenant
+ * isolation contract still applies, and CLAUDE.md mandates that every
+ * GraphQL resolver for tenant-scoped data go through this module.
+ * This wrapper is the aggregation-shaped entry point: it enforces
+ * authentication, hands the runner the authenticated user, and
+ * returns the field config the schema composer expects.
+ *
+ * Tenant isolation itself lives inside `runner` — it builds the
+ * pipeline with a non-bypassable `$match: { userId }` from the
+ * authenticated user — so this wrapper's only job is to gate
+ * unauthenticated callers and pass `ctx.user` through.
+ */
+const wrapAggregation = ({ type, args, description, runner }) => ({
+  type,
+  args,
+  description,
+  resolve: async (_root, params, ctx) => {
+    if (!ctx || !ctx.user || !ctx.user.user_id) {
+      throw new AuthenticationError('Authentication required');
+    }
+    return runner({ user: ctx.user, params });
+  },
+});
+
 module.exports = {
   wrapFilter,
   wrapCreateOne,
@@ -294,4 +323,5 @@ module.exports = {
   wrapFindById,
   wrapFindByIds,
   wrapByIdMutation,
+  wrapAggregation,
 };
