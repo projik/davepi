@@ -311,6 +311,132 @@ describe('File fields', () => {
     expect(fs.existsSync(bPath)).toBe(false);
   });
 
+  test('private file: bare /_files access without sig is rejected (no longer falls through)', async () => {
+    const u = await registerUser(ctx.request, ctx.app);
+    const created = await ctx
+      .request(ctx.app)
+      .post('/api/v1/document')
+      .set('Authorization', `Bearer ${u.token}`)
+      .send({ title: 'sig-required' });
+    const id = created.body._id;
+    const upload = await ctx
+      .request(ctx.app)
+      .post(`/api/v1/document/${id}/private_doc`)
+      .set('Authorization', `Bearer ${u.token}`)
+      .attach('file', Buffer.from('private-only'), {
+        filename: 'p.txt',
+        contentType: 'text/plain',
+      });
+    expect(upload.body.key).toMatch(/^private\//);
+
+    // No exp / sig — must be 403, not a 200 leaking the body.
+    const bare = await ctx.request(ctx.app).get(`/_files/${upload.body.key}`);
+    expect(bare.status).toBe(403);
+    expect(bare.body.error.code).toBe('FORBIDDEN');
+  });
+
+  test('public file keys are prefixed `public/` and serve unsigned', async () => {
+    const u = await registerUser(ctx.request, ctx.app);
+    const created = await ctx
+      .request(ctx.app)
+      .post('/api/v1/document')
+      .set('Authorization', `Bearer ${u.token}`)
+      .send({ title: 'pub' });
+    const upload = await ctx
+      .request(ctx.app)
+      .post(`/api/v1/document/${created.body._id}/attachment`)
+      .set('Authorization', `Bearer ${u.token}`)
+      .attach('file', Buffer.from('p'), { filename: 'p.txt', contentType: 'text/plain' });
+    expect(upload.body.key).toMatch(/^public\//);
+  });
+
+  test('client-supplied File field is silently dropped on POST/PUT', async () => {
+    const u = await registerUser(ctx.request, ctx.app);
+    const created = await ctx
+      .request(ctx.app)
+      .post('/api/v1/document')
+      .set('Authorization', `Bearer ${u.token}`)
+      .send({
+        title: 'spoof',
+        attachment: {
+          key: 'private/owned-by-someone-else/blah',
+          size: 9999,
+          contentType: 'text/plain',
+          originalName: 'evil.txt',
+        },
+      });
+    expect(created.status).toBe(201);
+    expect(created.body.attachment).toBeFalsy();
+
+    // PUT update is also blocked.
+    const put = await ctx
+      .request(ctx.app)
+      .put(`/api/v1/document/${created.body._id}`)
+      .set('Authorization', `Bearer ${u.token}`)
+      .send({ attachment: { key: 'private/another/foo' } });
+    expect(put.status).toBe(200);
+
+    const got = await ctx
+      .request(ctx.app)
+      .get(`/api/v1/document/${created.body._id}`)
+      .set('Authorization', `Bearer ${u.token}`);
+    expect(got.body.attachment).toBeFalsy();
+  });
+
+  test('failed save after a successful put does NOT lose the previous blob', async () => {
+    // Plant a previous file on the field, then trigger a save failure
+    // by mocking record.save to throw on the next call. The old blob
+    // must still exist and the new blob must be removed.
+    const u = await registerUser(ctx.request, ctx.app);
+    const created = await ctx
+      .request(ctx.app)
+      .post('/api/v1/document')
+      .set('Authorization', `Bearer ${u.token}`)
+      .send({ title: 'durable' });
+    const id = created.body._id;
+    const first = await ctx
+      .request(ctx.app)
+      .post(`/api/v1/document/${id}/attachment`)
+      .set('Authorization', `Bearer ${u.token}`)
+      .attach('file', Buffer.from('old'), { filename: 'a.txt', contentType: 'text/plain' });
+    const oldPath = path.join(tmpRoot, first.body.key);
+    expect(fs.existsSync(oldPath)).toBe(true);
+
+    // Force the next save() to fail.
+    const Doc = require('mongoose').models.documents;
+    const orig = Doc.prototype.save;
+    Doc.prototype.save = function () { return Promise.reject(new Error('disk full')); };
+    try {
+      const r = await ctx
+        .request(ctx.app)
+        .post(`/api/v1/document/${id}/attachment`)
+        .set('Authorization', `Bearer ${u.token}`)
+        .attach('file', Buffer.from('new'), { filename: 'b.txt', contentType: 'text/plain' });
+      expect(r.status).toBe(500);
+    } finally {
+      Doc.prototype.save = orig;
+    }
+
+    // Old blob still there, record still references the old key.
+    expect(fs.existsSync(oldPath)).toBe(true);
+    const got = await ctx
+      .request(ctx.app)
+      .get(`/api/v1/document/${id}`)
+      .set('Authorization', `Bearer ${u.token}`);
+    expect(got.body.attachment.key).toBe(first.body.key);
+  });
+
+  test('Swagger spec lists the file field upload/get/delete paths', async () => {
+    const swagger = await ctx.request(ctx.app).get('/api-docs/swagger.json');
+    expect(swagger.status).toBe(200);
+    const upPath = swagger.body.paths['/api/v1/document/{id}/attachment'];
+    expect(upPath).toBeDefined();
+    expect(upPath.post.consumes).toContain('multipart/form-data');
+    expect(upPath.post.parameters.find((p) => p.name === 'file').type).toBe('file');
+    expect(upPath.get).toBeDefined();
+    expect(upPath.delete).toBeDefined();
+  });
+
   test('user isolation: User B cannot upload to User A record', async () => {
     const a = await registerUser(ctx.request, ctx.app);
     const b = await registerUser(ctx.request, ctx.app);

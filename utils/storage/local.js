@@ -85,6 +85,16 @@ function createLocalDriver({ rootDir, tokenKey, baseUrl } = {}) {
     return `${base}/_files/${encodeURI(key)}`;
   }
 
+  /**
+   * Inspect a key to decide whether the local serve route should
+   * require a signed URL. The framework prefixes every File-field key
+   * with `public/` or `private/` at upload time (see schemaLoader);
+   * unknown prefixes are treated as private — fail closed.
+   */
+  function isPublicKey(key) {
+    return typeof key === 'string' && key.startsWith('public/');
+  }
+
   function streamPath(key) {
     return fullPath(key);
   }
@@ -98,6 +108,7 @@ function createLocalDriver({ rootDir, tokenKey, baseUrl } = {}) {
     signedUrl,
     publicUrl,
     verifySignedRequest,
+    isPublicKey,
     streamPath,
     rootDir: root,
   };

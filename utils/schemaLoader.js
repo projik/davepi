@@ -202,7 +202,83 @@ function createSchemaLoader({ app, apiSpec, setApolloRouter, buildGraphqlContext
       },
     };
 
-    return { collectionPath, itemPath, schemaPath: `${collectionPath}-schema` };
+    // Per-File-field Swagger paths. Multipart contract is documented
+    // under `consumes: multipart/form-data`; the form field name is
+    // always `file`. maxBytes / accept constraints surface as the
+    // description so generated SDKs and humans can see them.
+    const fileSwaggerPaths = [];
+    const fileFieldList = (Array.isArray(s.fields) ? s.fields : []).filter(
+      (f) => f && f.type === 'File'
+    );
+    for (const ff of fileFieldList) {
+      const cfg = ff.file || {};
+      const filePath = `/api/${s.version}/${path}/{id}/${ff.name}`;
+      const constraints = [];
+      if (cfg.maxBytes) constraints.push(`maxBytes: ${cfg.maxBytes}`);
+      if (Array.isArray(cfg.accept) && cfg.accept.length) {
+        constraints.push(`accept: ${cfg.accept.join(', ')}`);
+      }
+      if (cfg.access) constraints.push(`access: ${cfg.access}`);
+      const desc = `Upload, fetch, or delete the ${ff.name} file. ${constraints.join('; ')}`.trim();
+      apiSpec.paths[filePath] = {
+        post: {
+          tags: [tag],
+          consumes: ['multipart/form-data'],
+          produces: ['application/json'],
+          description: desc,
+          parameters: [
+            { in: 'path', name: 'id', type: 'string', required: true },
+            {
+              in: 'formData',
+              name: 'file',
+              type: 'file',
+              required: true,
+              description: 'Multipart upload payload',
+            },
+          ],
+          responses: {
+            201: {
+              description: 'success',
+              schema: {
+                type: 'object',
+                properties: {
+                  key: { type: 'string' },
+                  url: { type: 'string' },
+                  size: { type: 'integer' },
+                  contentType: { type: 'string' },
+                  originalName: { type: 'string' },
+                },
+              },
+            },
+            400: { description: 'oversize, disallowed mime, or missing file' },
+            404: { description: 'record not found' },
+          },
+        },
+        get: {
+          tags: [tag],
+          description: `Redirect (302) to the storage URL for ${ff.name}. ${cfg.access === 'private' ? 'Returns a short-lived signed URL.' : 'Returns the public URL.'}`,
+          parameters: [{ in: 'path', name: 'id', type: 'string', required: true }],
+          responses: {
+            302: { description: 'redirect to storage URL' },
+            404: { description: 'record or file not found' },
+          },
+        },
+        delete: {
+          tags: [tag],
+          description: `Remove the ${ff.name} blob and clear the metadata.`,
+          parameters: [{ in: 'path', name: 'id', type: 'string', required: true }],
+          responses: { 204: { description: 'deleted' } },
+        },
+      };
+      fileSwaggerPaths.push(filePath);
+    }
+
+    return {
+      collectionPath,
+      itemPath,
+      schemaPath: `${collectionPath}-schema`,
+      fileSwaggerPaths,
+    };
   }
 
   function buildRestRouter(s, model, references, mongooseSchema, fileFields) {
@@ -253,18 +329,20 @@ function createSchemaLoader({ app, apiSpec, setApolloRouter, buildGraphqlContext
           const record = await model.findOne(ownerQuery);
           if (!record) throw new NotFoundError(path);
 
-          // Generate a key under <path>/<recordId>/<field>/<uuid>-name
-          // so multiple uploads to the same field don't collide.
+          // Generate a key prefixed with the access mode so the local
+          // serve route can decide whether to require a signed URL
+          // by inspecting the key alone:
+          //   public/<path>/<id>/<field>/<uuid>-<name>
+          //   private/<path>/<id>/<field>/<uuid>-<name>
           const safeName = req.file.originalname.replace(/[^A-Za-z0-9._-]+/g, '_');
-          const key = `${path}/${record._id}/${fieldName}/${crypto.randomUUID()}-${safeName}`;
+          const accessPrefix = access === 'private' ? 'private' : 'public';
+          const key = `${accessPrefix}/${path}/${record._id}/${fieldName}/${crypto.randomUUID()}-${safeName}`;
 
-          // If the record already has a file in this slot, drop the
-          // old blob so storage doesn't grow unbounded across replaces.
-          const previous = record.get(fieldName);
-          if (previous && previous.key) {
-            try { await storage.remove(previous.key); } catch (_) {}
-          }
-
+          // Order matters: write the new blob FIRST, then save the
+          // record, then best-effort cleanup of the old blob. If the
+          // put fails, the old key is still referenced and serveable.
+          // If the save fails after a successful put, we orphan the
+          // new blob (but compensate immediately below).
           await storage.put(key, req.file.buffer, { contentType: req.file.mimetype });
 
           const meta = {
@@ -275,8 +353,28 @@ function createSchemaLoader({ app, apiSpec, setApolloRouter, buildGraphqlContext
             originalName: req.file.originalname,
             uploadedAt: new Date(),
           };
+
+          const previous = record.get(fieldName);
           record.set(fieldName, meta);
-          await record.save();
+          try {
+            await record.save();
+          } catch (saveErr) {
+            // Compensate: remove the newly-uploaded blob so we don't
+            // leak orphan storage when the DB write fails.
+            try { await storage.remove(key); } catch (_) {}
+            throw saveErr;
+          }
+
+          if (previous && previous.key && previous.key !== key) {
+            try {
+              await storage.remove(previous.key);
+            } catch (cleanupErr) {
+              logger.warn(
+                { err: cleanupErr, oldKey: previous.key },
+                'failed to remove previous file blob; orphan left in storage'
+              );
+            }
+          }
 
           const decorated = await decorateFileUrls(
             JSON.parse(JSON.stringify(record)),
@@ -522,8 +620,20 @@ function createSchemaLoader({ app, apiSpec, setApolloRouter, buildGraphqlContext
         // only the record's owner may PUT regardless of role.
         const query = { userId: req.user.user_id, _id: req.params.id };
         const writable = filterWritable(req.body, s, req.user, 'update');
-        const result = await model.updateOne(query, { $set: writable });
-        if (!result.matchedCount) throw new NotFoundError(path);
+        let result;
+        if (Object.keys(writable).length === 0) {
+          // Empty $set is a no-op in Mongoose (matchedCount=0 even
+          // when the doc exists). Verify the record exists for the
+          // 404 semantics, then return a synthetic OK so callers who
+          // posted only ACL-stripped or File-field keys don't see a
+          // misleading 404.
+          const exists = await model.findOne(query).select('_id').lean();
+          if (!exists) throw new NotFoundError(path);
+          result = { acknowledged: true, matchedCount: 1, modifiedCount: 0 };
+        } else {
+          result = await model.updateOne(query, { $set: writable });
+          if (!result.matchedCount) throw new NotFoundError(path);
+        }
         emitRecordEvent({
           type: `${path}.updated`,
           version: s.version,
@@ -681,6 +791,9 @@ function createSchemaLoader({ app, apiSpec, setApolloRouter, buildGraphqlContext
 
     delete apiSpec.paths[entry.swaggerKeys.collectionPath];
     delete apiSpec.paths[entry.swaggerKeys.itemPath];
+    for (const p of entry.swaggerKeys.fileSwaggerPaths || []) {
+      delete apiSpec.paths[p];
+    }
     delete apiSpec.definitions[entry.schema.path];
 
     if (mongoose.models[entry.schema.collection]) {
