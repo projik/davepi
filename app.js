@@ -37,6 +37,10 @@ const {
   rotateRefreshToken,
   revokeRefreshToken,
 } = require("./utils/tokens");
+const { sendMail } = require("./utils/mailer");
+const PasswordResetToken = require("./model/passwordResetToken");
+const RefreshToken = require("./model/refreshToken");
+const crypto = require("crypto");
 const {
   wrapFilter,
   wrapCreateOne,
@@ -491,6 +495,98 @@ app.post("/auth/logout", asyncHandler(async (req, res) => {
   await revokeRefreshToken(refreshToken);
   res.status(204).end();
 }));
+
+const sha256 = (input) =>
+  crypto.createHash("sha256").update(input).digest("hex");
+
+const PASSWORD_RESET_TTL_MS = 60 * 60 * 1000; // 1 hour
+
+// Public on purpose: this endpoint is the entry point to the recovery
+// flow before the user has any credentials. Crucially it ALWAYS returns
+// 204 — including when the email is unknown OR when token creation /
+// email delivery fails internally — so it can't be used as a
+// user-enumeration oracle. Internal errors are logged for operators.
+app.post(
+  "/auth/forgot-password",
+  authLimiter,
+  asyncHandler(async (req, res) => {
+    const { email } = req.body || {};
+    if (typeof email === "string" && email.length) {
+      try {
+        const user = await User.findOne({ email: email.toLowerCase() });
+        if (user) {
+          const rawToken = crypto.randomBytes(32).toString("hex");
+          await PasswordResetToken.create({
+            userId: user._id,
+            tokenHash: sha256(rawToken),
+            expiresAt: new Date(Date.now() + PASSWORD_RESET_TTL_MS),
+          });
+          const appUrl = process.env.APP_URL || "http://localhost:3000";
+          const resetUrl = `${appUrl}/reset?token=${rawToken}`;
+          await sendMail({
+            to: user.email,
+            subject: "Reset your password",
+            text:
+              `Someone requested a password reset for your account.\n\n` +
+              `If this was you, follow this link within the next hour:\n\n` +
+              `${resetUrl}\n\n` +
+              `If not, ignore this email — your password is unchanged.`,
+          });
+        }
+      } catch (err) {
+        // Swallow on purpose. A DB or SMTP failure for a valid email must
+        // not turn into a different HTTP response than the unknown-email
+        // case — that's the enumeration oracle we're avoiding.
+        (req.log || logger).error(
+          { err },
+          "forgot-password: internal failure (response still 204)"
+        );
+      }
+    }
+    res.status(204).end();
+  })
+);
+
+// Public on purpose: the reset token in the body is the authentication.
+// The token is single-use, hashed at rest, and expires after one hour.
+app.post(
+  "/auth/reset-password",
+  authLimiter,
+  asyncHandler(async (req, res) => {
+    const { token, newPassword } = req.body || {};
+    if (!token || !newPassword) {
+      throw new ValidationError("token and newPassword are required");
+    }
+    if (typeof newPassword !== "string" || newPassword.length < 8) {
+      throw new ValidationError("Password must be at least 8 characters");
+    }
+
+    const record = await PasswordResetToken.findOneAndUpdate(
+      {
+        tokenHash: sha256(token),
+        usedAt: null,
+        expiresAt: { $gt: new Date() },
+      },
+      { $set: { usedAt: new Date() } },
+      { new: false }
+    );
+    if (!record) {
+      throw new ValidationError("Invalid or expired reset token");
+    }
+
+    const hashed = await bcrypt.hash(newPassword, 10);
+    await User.updateOne({ _id: record.userId }, { $set: { password: hashed } });
+
+    // Revoke every active refresh token for the user — a password reset
+    // means we're no longer sure who's holding the previous sessions.
+    await RefreshToken.updateMany(
+      { userId: record.userId, revokedAt: null },
+      { $set: { revokedAt: new Date() } }
+    );
+
+    res.status(204).end();
+  })
+);
 
 // const schemaBuild = schemaComposer.buildSchema();
 

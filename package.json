@@ -30,6 +30,7 @@
     "mongoose-schema-jsonschema": "^2.0.2",
     "mongoose-timestamp": "^0.6.0",
     "mongoose-to-swagger": "^1.4.0",
+    "nodemailer": "^8.0.7",
     "pino": "^10.3.1",
     "pino-http": "^11.0.0",
     "swagger-ui-express": "^4.3.0"
