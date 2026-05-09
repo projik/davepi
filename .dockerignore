@@ -1,0 +1,26 @@
+node_modules
+npm-debug.log*
+.npm
+
+# secrets and local environment
+.env
+.env.*
+!.env.example
+
+# git + workflows
+.git
+.gitignore
+.github
+
+# build artefacts and developer tooling
+swagger
+coverage
+test
+*.md
+!CLAUDE.md
+!README.md
+
+# editor / OS noise
+.vscode
+.idea
+.DS_Store

@@ -1,0 +1,53 @@
+services:
+  mongo:
+    image: mongo:7
+    restart: unless-stopped
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo-data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+
+  api:
+    build:
+      context: .
+      target: dev
+    restart: unless-stopped
+    depends_on:
+      mongo:
+        condition: service_healthy
+    environment:
+      MONGO_URI: mongodb://mongo:27017/davepi
+      TOKEN_KEY: dev-only-not-for-prod-replace-me
+      API_PORT: "4001"
+      PAGE_SIZE: "20"
+      APP_NAME: dAvePi
+      NODE_ENV: development
+      LOG_LEVEL: info
+      CORS_ORIGINS: http://localhost:3000
+      APP_URL: http://localhost:4001
+    ports:
+      - "4001:4001"
+    # Bind-mount the source so nodemon picks up host edits. The
+    # anonymous volume on /app/node_modules prevents the host's
+    # (possibly empty / arch-mismatched) node_modules from shadowing
+    # the image's installed deps.
+    volumes:
+      - ./app.js:/app/app.js
+      - ./index.js:/app/index.js
+      - ./config:/app/config
+      - ./middleware:/app/middleware
+      - ./model:/app/model
+      - ./routes:/app/routes
+      - ./schema:/app/schema
+      - ./utils:/app/utils
+      - /app/node_modules
+    # The `dev` target's CMD already runs nodemon; nothing else needed.
+
+volumes:
+  mongo-data:
