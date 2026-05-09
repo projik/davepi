@@ -104,6 +104,7 @@ const schemaLoader = createSchemaLoader({
   setApolloRouter: (router) => { apolloRouter = router; },
   buildGraphqlContext,
   isProduction,
+  errorHandler,
 });
 
 // Discover and load every schema synchronously at boot. Each loadSchema

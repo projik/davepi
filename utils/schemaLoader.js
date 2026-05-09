@@ -37,9 +37,40 @@ const qs = new MongoQS();
  * and calls the supplied `setApolloRouter` so the indirection middleware
  * mounted in app.js routes new requests through it.
  */
-function createSchemaLoader({ app, apiSpec, setApolloRouter, buildGraphqlContext, isProduction }) {
+function createSchemaLoader({ app, apiSpec, setApolloRouter, buildGraphqlContext, isProduction, errorHandler }) {
   // key = `${version}/${path}`
   const registry = new Map();
+
+  // Serialize loadSchema / unloadSchema / rebuildGraphQL through a
+  // single-flight queue so concurrent filesystem events from the watcher
+  // can't interleave registry mutations with rebuildGraphQL. Without
+  // this, the apolloRouter / swagger state could end up reflecting an
+  // intermediate snapshot of the registry depending on which async
+  // rebuild resolved last.
+  let opChain = Promise.resolve();
+  const enqueue = (fn) => {
+    const next = opChain.then(fn, fn);
+    opChain = next.catch(() => {}); // keep the chain alive on rejection
+    return next;
+  };
+
+  /**
+   * Keep `errorHandler` at the tail of the parent app's middleware
+   * stack. Every loadSchema mounts a per-schema router via
+   * `app.use(router)`, which appends it to the stack. If errorHandler
+   * was already there, it's now no longer last and Express won't route
+   * errors from the new router to it. We splice + re-append on every
+   * mutation to maintain the invariant.
+   */
+  function moveErrorHandlerToEnd() {
+    if (!errorHandler) return;
+    const stack = app._router && app._router.stack;
+    if (!stack) return;
+    for (let i = stack.length - 1; i >= 0; i--) {
+      if (stack[i].handle === errorHandler) stack.splice(i, 1);
+    }
+    app.use(errorHandler);
+  }
 
   function buildSchemaArtifacts(s) {
     const fields = {};
@@ -145,13 +176,17 @@ function createSchemaLoader({ app, apiSpec, setApolloRouter, buildGraphqlContext
     const path = s.path;
     const PAGE_SIZE = process.env.PAGE_SIZE;
 
-    router.get(`/api/${s.version}/${path}-schema`, async (req, res) => {
-      const jsSchema = mongooseSchema.jsonSchema();
-      ['_id', 'createdAt', 'updatedAt', '__v'].forEach((k) => {
-        delete jsSchema.properties[k];
-      });
-      res.status(200).send(jsSchema);
-    });
+    router.get(
+      `/api/${s.version}/${path}-schema`,
+      auth(true),
+      asyncHandler(async (req, res) => {
+        const jsSchema = mongooseSchema.jsonSchema();
+        ['_id', 'createdAt', 'updatedAt', '__v'].forEach((k) => {
+          delete jsSchema.properties[k];
+        });
+        res.status(200).send(jsSchema);
+      })
+    );
 
     router.post(
       `/api/${s.version}/${path}`,
@@ -349,11 +384,11 @@ function createSchemaLoader({ app, apiSpec, setApolloRouter, buildGraphqlContext
     }
   }
 
-  async function loadSchema(s, { deferGraphqlRebuild = false } = {}) {
+  async function loadSchemaImpl(s, { deferGraphqlRebuild = false } = {}) {
     const key = `${s.version}/${s.path}`;
     if (registry.has(key)) {
       // Already loaded — caller probably meant reload.
-      await unloadSchema(key, { skipGraphqlRebuild: true });
+      await unloadSchemaImpl(key, { skipGraphqlRebuild: true });
     }
 
     const { mongooseSchema, references } = buildSchemaArtifacts(s);
@@ -368,6 +403,7 @@ function createSchemaLoader({ app, apiSpec, setApolloRouter, buildGraphqlContext
     const swaggerKeys = buildSwagger(s, model);
     const router = buildRestRouter(s, model, references, mongooseSchema);
     app.use(router);
+    moveErrorHandlerToEnd();
 
     registry.set(key, { schema: s, model, router, swaggerKeys });
 
@@ -378,12 +414,13 @@ function createSchemaLoader({ app, apiSpec, setApolloRouter, buildGraphqlContext
     return key;
   }
 
-  async function unloadSchema(key, { skipGraphqlRebuild = false } = {}) {
+  async function unloadSchemaImpl(key, { skipGraphqlRebuild = false } = {}) {
     const entry = registry.get(key);
     if (!entry) return false;
     registry.delete(key);
 
     spliceRouter(entry.router);
+    moveErrorHandlerToEnd();
 
     delete apiSpec.paths[entry.swaggerKeys.collectionPath];
     delete apiSpec.paths[entry.swaggerKeys.itemPath];
@@ -400,11 +437,24 @@ function createSchemaLoader({ app, apiSpec, setApolloRouter, buildGraphqlContext
     return true;
   }
 
+  // Public API: every entry point goes through the single-flight queue
+  // so the order of events from the watcher (or concurrent programmatic
+  // calls) is preserved and rebuildGraphQL always sees a consistent
+  // registry snapshot.
+  const loadSchema = (s, opts) => enqueue(() => loadSchemaImpl(s, opts));
+  const unloadSchema = (key, opts) => enqueue(() => unloadSchemaImpl(key, opts));
+  const rebuildGraphQLQueued = () => enqueue(() => rebuildGraphQL());
+
   function listSchemas() {
     return Array.from(registry.keys());
   }
 
-  return { loadSchema, unloadSchema, listSchemas, rebuildGraphQL };
+  return {
+    loadSchema,
+    unloadSchema,
+    listSchemas,
+    rebuildGraphQL: rebuildGraphQLQueued,
+  };
 }
 
 module.exports = { createSchemaLoader };
