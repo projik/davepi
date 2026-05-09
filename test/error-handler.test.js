@@ -44,7 +44,7 @@ describe('Centralized error handler', () => {
 
   beforeAll(async () => {
     const res = await register({ email: 'err-suite@test.com' });
-    token = res.body.token;
+    token = res.body.accessToken;
   });
 
   describe('error response shape', () => {
@@ -74,11 +74,13 @@ describe('Centralized error handler', () => {
       expect(res.body.error.code).toBe('CONFLICT');
     });
 
-    test('successful register still returns 201 with token', async () => {
+    test('successful register still returns 201 with an access token', async () => {
       const res = await register({ email: 'fresh@x.com' });
       expect(res.status).toBe(201);
-      expect(res.body.token).toBeDefined();
-      expect(res.body.password).toBeUndefined();
+      expect(res.body.accessToken).toBeDefined();
+      expect(res.body.refreshToken).toBeDefined();
+      expect(res.body.user).toBeDefined();
+      expect(res.body.user.password).toBeUndefined();
     });
   });
 

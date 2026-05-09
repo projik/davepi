@@ -54,7 +54,11 @@ function setupTestApp({ cleanCollections = true } = {}) {
 }
 
 /**
- * Convenience: register a test user and return { _id, token, email, ... }.
+ * Convenience: register a test user and return a flattened
+ * { _id, email, token, accessToken, refreshToken, user } object.
+ *
+ * `token` is an alias for `accessToken` (kept so older test code that
+ * referenced `body.token` keeps working).
  */
 async function registerUser(request, app, overrides = {}) {
   const body = {
@@ -68,7 +72,14 @@ async function registerUser(request, app, overrides = {}) {
   if (res.status !== 201) {
     throw new Error(`registerUser failed: ${res.status} ${JSON.stringify(res.body)}`);
   }
-  return res.body;
+  const { accessToken, refreshToken, user } = res.body;
+  return {
+    ...user,
+    accessToken,
+    refreshToken,
+    token: accessToken,
+    user,
+  };
 }
 
 module.exports = { setupTestApp, registerUser };

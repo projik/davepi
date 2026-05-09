@@ -29,10 +29,13 @@ afterAll(async () => {
   if (mongo) await mongo.stop();
 });
 
-const register = (email) =>
-  request(app)
+const register = async (email) => {
+  const res = await request(app)
     .post('/register')
     .send({ first_name: 'A', last_name: 'B', email, password: 'pw12345!' });
+  const { accessToken, refreshToken, user } = res.body;
+  return { ...user, token: accessToken, accessToken, refreshToken };
+};
 
 const gql = (token, query, variables) => {
   const r = request(app).post('/graphql/').send({ query, variables });
@@ -46,8 +49,8 @@ describe('GraphQL auth and user isolation', () => {
   let aRecordId;
 
   beforeAll(async () => {
-    userA = (await register('a@x.com')).body;
-    userB = (await register('b@x.com')).body;
+    userA = await register('a@x.com');
+    userB = await register('b@x.com');
     expect(userA.token).toBeDefined();
     expect(userB.token).toBeDefined();
   });
