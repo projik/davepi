@@ -11,7 +11,12 @@ const {
   migrateUp,
   migrateDown,
 } = require('../utils/migrations/runner');
-const { acquireLock, releaseLock } = require('../utils/migrations/lock');
+const {
+  acquireLock,
+  releaseLock,
+  renewLock,
+  withHeartbeatedLock,
+} = require('../utils/migrations/lock');
 
 let mongo;
 let client;
@@ -317,6 +322,71 @@ describe('Migration lock contention', () => {
     expect(owner).toBeTruthy();
     expect(owner).not.toBe('ghost');
     await releaseLock(db, owner);
+  });
+
+  test('renewLock refreshes lockedAt while we own the lock; returns false if reaped', async () => {
+    const owner = await acquireLock(db);
+    expect(owner).toBeTruthy();
+    const before = await db.collection('_migrations').findOne({ name: '__lock' });
+    await new Promise((r) => setTimeout(r, 20));
+    const ok = await renewLock(db, owner);
+    expect(ok).toBe(true);
+    const after = await db.collection('_migrations').findOne({ name: '__lock' });
+    expect(after.lockedAt.getTime()).toBeGreaterThan(before.lockedAt.getTime());
+
+    // If a different owner is recorded (simulating a reap), renew
+    // returns false.
+    await db.collection('_migrations').updateOne(
+      { name: '__lock' },
+      { $set: { owner: 'someone-else' } }
+    );
+    const stillMine = await renewLock(db, owner);
+    expect(stillMine).toBe(false);
+    await releaseLock(db, 'someone-else');
+  });
+
+  test('withHeartbeatedLock keeps the lock fresh during a long-running operation', async () => {
+    // Use a short stale window and short heartbeat interval so the
+    // test finishes in milliseconds; the same code path covers
+    // production multi-hour migrations.
+    let lockedAtSamples = [];
+    await withHeartbeatedLock(
+      db,
+      async () => {
+        for (let i = 0; i < 5; i++) {
+          await new Promise((r) => setTimeout(r, 30));
+          const doc = await db.collection('_migrations').findOne({ name: '__lock' });
+          if (doc) lockedAtSamples.push(doc.lockedAt.getTime());
+        }
+      },
+      { staleMs: 100, intervalMs: 25 }
+    );
+    // The heartbeat should have refreshed lockedAt at least once
+    // during the run — we expect at least two distinct values.
+    const distinct = new Set(lockedAtSamples).size;
+    expect(distinct).toBeGreaterThanOrEqual(2);
+    // Lock is released afterwards.
+    const after = await db.collection('_migrations').findOne({ name: '__lock' });
+    expect(after).toBeNull();
+  });
+
+  test('withHeartbeatedLock surfaces "lock was reaped during run" when stolen mid-flight', async () => {
+    let promise;
+    await expect(
+      withHeartbeatedLock(
+        db,
+        async () => {
+          // Simulate a reap: another process clears our owner.
+          await db
+            .collection('_migrations')
+            .updateOne({ name: '__lock' }, { $set: { owner: 'thief' } });
+          await new Promise((r) => setTimeout(r, 60)); // let the heartbeat fail
+        },
+        { staleMs: 100, intervalMs: 20 }
+      )
+    ).rejects.toThrow(/reaped during run/);
+    // Cleanup any stolen lock doc.
+    await db.collection('_migrations').deleteMany({ name: '__lock' });
   });
 
   test('two concurrent migrate runs do not double-apply', async () => {

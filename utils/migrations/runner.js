@@ -1,6 +1,6 @@
 const fs = require('fs');
 const path = require('path');
-const { acquireLock, releaseLock, ensureIndex } = require('./lock');
+const { ensureIndex, withHeartbeatedLock } = require('./lock');
 
 /**
  * Migration runner. Discovers migration files in MIGRATIONS_DIR
@@ -46,11 +46,7 @@ async function status({ db, dir = DEFAULT_DIR } = {}) {
 
 async function migrateUp({ db, dir = DEFAULT_DIR, dry = false, log = console } = {}) {
   await ensureIndex(db);
-  const owner = await acquireLock(db);
-  if (!owner) {
-    throw new Error('Could not acquire migration lock — another runner is in flight.');
-  }
-  try {
+  return withHeartbeatedLock(db, async () => {
     const applied = await loadAppliedNames(db);
     const pending = listMigrationFiles(dir).filter(
       (f) => !applied.has(migrationNameFromFile(f))
@@ -77,18 +73,12 @@ async function migrateUp({ db, dir = DEFAULT_DIR, dry = false, log = console } =
       ran.push({ name, durationMs: Date.now() - t0, dryRun: dry });
     }
     return ran;
-  } finally {
-    await releaseLock(db, owner);
-  }
+  });
 }
 
 async function migrateDown({ db, dir = DEFAULT_DIR, dry = false, log = console } = {}) {
   await ensureIndex(db);
-  const owner = await acquireLock(db);
-  if (!owner) {
-    throw new Error('Could not acquire migration lock — another runner is in flight.');
-  }
-  try {
+  return withHeartbeatedLock(db, async () => {
     const coll = db.collection('_migrations');
     const last = await coll
       .find({ name: { $ne: '__lock' } })
@@ -117,9 +107,7 @@ async function migrateDown({ db, dir = DEFAULT_DIR, dry = false, log = console }
       await coll.deleteOne({ name: target.name });
     }
     return { name: target.name, dryRun: dry };
-  } finally {
-    await releaseLock(db, owner);
-  }
+  });
 }
 
 module.exports = {

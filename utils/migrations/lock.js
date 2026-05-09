@@ -51,9 +51,74 @@ async function releaseLock(db, owner) {
   await coll.deleteOne({ name: '__lock', owner });
 }
 
+/**
+ * Refresh `lockedAt` so a long-running migration doesn't get its
+ * lock reaped under it. Returns true if we still own the lock,
+ * false if someone else has stolen / reaped it (in which case the
+ * caller MUST abort).
+ */
+async function renewLock(db, owner) {
+  const coll = db.collection('_migrations');
+  const result = await coll.findOneAndUpdate(
+    { name: '__lock', owner },
+    { $set: { lockedAt: new Date() } }
+  );
+  return Boolean(result.value);
+}
+
 async function ensureIndex(db) {
   const coll = db.collection('_migrations');
   await coll.createIndex({ name: 1 }, { unique: true });
 }
 
-module.exports = { acquireLock, releaseLock, ensureIndex };
+/**
+ * Run `fn(owner)` while heartbeating the lock. The heartbeat fires
+ * every `intervalMs` (default: 1/3 of the stale window) and aborts
+ * the operation by throwing if our lock has been reaped.
+ *
+ * Returns whatever `fn` returns. Always releases the lock in
+ * `finally`, including on failure to acquire (in which case it
+ * never held it and this is a no-op).
+ */
+async function withHeartbeatedLock(db, fn, {
+  staleMs = DEFAULT_STALE_MS,
+  intervalMs = Math.max(1000, Math.floor(DEFAULT_STALE_MS / 3)),
+} = {}) {
+  const owner = await acquireLock(db, { staleMs });
+  if (!owner) {
+    throw new Error('Could not acquire migration lock — another runner is in flight.');
+  }
+  let stolen = false;
+  const heartbeat = setInterval(async () => {
+    try {
+      const ok = await renewLock(db, owner);
+      if (!ok) stolen = true;
+    } catch (_) {
+      // Transient errors during heartbeat are non-fatal; the next
+      // tick will retry.
+    }
+  }, intervalMs);
+  if (heartbeat.unref) heartbeat.unref();
+  try {
+    const result = await fn(owner);
+    if (stolen) {
+      // The lock was reaped while we ran. Surface this so the
+      // caller can audit / re-run; the data may be inconsistent.
+      throw new Error(
+        'Migration lock was reaped during run — another process may have run migrations concurrently.'
+      );
+    }
+    return result;
+  } finally {
+    clearInterval(heartbeat);
+    await releaseLock(db, owner).catch(() => {});
+  }
+}
+
+module.exports = {
+  acquireLock,
+  releaseLock,
+  renewLock,
+  ensureIndex,
+  withHeartbeatedLock,
+};

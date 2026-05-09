@@ -11,9 +11,29 @@ const {
   migrateUp,
   migrateDown,
 } = require('../utils/migrations/runner');
+const logger = require('../utils/logger');
+
+/**
+ * CLI output policy:
+ *
+ *   - The PROJECT-WIDE rule (CLAUDE.md) is "use utils/logger, never
+ *     console.*". That rule exists to keep request-scoped log lines
+ *     correlatable and redactable. CLIs are different: stdout/stderr
+ *     ARE the user interface, and structured `INFO (1234): foo`
+ *     prefixes read terribly when you're piping output into a shell.
+ *   - So this binary uses `process.stdout` / `process.stderr` for
+ *     human-facing output (results, status), and `logger` for
+ *     unexpected-error diagnostics that an operator might want to
+ *     correlate across runs.
+ *
+ * Treat this file's `process.stdout.write` calls as the documented
+ * exception, not a precedent for app code.
+ */
+const out = (line) => process.stdout.write(line + '\n');
+const err = (line) => process.stderr.write(line + '\n');
 
 function usage() {
-  console.log(`Usage: davepi <command> [args]
+  out(`Usage: davepi <command> [args]
 
 Commands:
   diff <fromVersion> <toVersion>           Print field-level changes
@@ -23,8 +43,7 @@ Commands:
                                             from the schema diff.
   migrate [--dry]                          Apply pending migrations
   migrate:down [--dry]                     Revert the most recently applied
-  migrate:status                           List pending vs applied
-`);
+  migrate:status                           List pending vs applied`);
 }
 
 function flag(args, name) {
@@ -36,7 +55,7 @@ function flag(args, name) {
 async function withDb(run) {
   const uri = process.env.MONGO_URI;
   if (!uri) {
-    console.error('MONGO_URI is required');
+    err('MONGO_URI is required');
     process.exit(1);
   }
   await mongoose.connect(uri);
@@ -57,19 +76,19 @@ async function main() {
   if (cmd === 'diff') {
     const [fromV, toV] = rest;
     if (!fromV || !toV) {
-      console.error('diff requires <fromVersion> <toVersion>');
+      err('diff requires <fromVersion> <toVersion>');
       process.exit(1);
     }
     const root = path.resolve('./schema/versions');
     const diff = diffVersions(path.join(root, fromV), path.join(root, toV));
-    console.log(formatDiff(diff));
+    out(formatDiff(diff));
     return;
   }
 
   if (cmd === 'migration:create') {
     const name = rest.find((a) => !a.startsWith('--'));
     if (!name) {
-      console.error('migration:create requires a <name>');
+      err('migration:create requires a <name>');
       process.exit(1);
     }
     const fromV = flag(rest, '--from');
@@ -79,7 +98,7 @@ async function main() {
       fromVersion: typeof fromV === 'string' ? fromV : null,
       toVersion: typeof toV === 'string' ? toV : null,
     });
-    console.log(`Created ${path.relative(process.cwd(), file)}`);
+    out(`Created ${path.relative(process.cwd(), file)}`);
     return;
   }
 
@@ -88,10 +107,10 @@ async function main() {
     await withDb(async (db) => {
       const ran = await migrateUp({ db, dry });
       if (ran.length === 0) {
-        console.log('No pending migrations.');
+        out('No pending migrations.');
       } else {
         for (const r of ran) {
-          console.log(`${dry ? '[DRY] ' : ''}applied ${r.name} (${r.durationMs}ms)`);
+          out(`${dry ? '[DRY] ' : ''}applied ${r.name} (${r.durationMs}ms)`);
         }
       }
     });
@@ -103,9 +122,9 @@ async function main() {
     await withDb(async (db) => {
       const r = await migrateDown({ db, dry });
       if (!r) {
-        console.log('No applied migrations to revert.');
+        out('No applied migrations to revert.');
       } else {
-        console.log(`${dry ? '[DRY] ' : ''}reverted ${r.name}`);
+        out(`${dry ? '[DRY] ' : ''}reverted ${r.name}`);
       }
     });
     return;
@@ -115,11 +134,11 @@ async function main() {
     await withDb(async (db) => {
       const items = await status({ db });
       if (items.length === 0) {
-        console.log('No migrations on disk.');
+        out('No migrations on disk.');
         return;
       }
       for (const it of items) {
-        console.log(`${it.applied ? '[applied]' : '[pending]'} ${it.name}`);
+        out(`${it.applied ? '[applied]' : '[pending]'} ${it.name}`);
       }
     });
     return;
@@ -129,7 +148,12 @@ async function main() {
   process.exit(1);
 }
 
-main().catch((err) => {
-  console.error(err);
+main().catch((unexpected) => {
+  // Unexpected failures route through the structured logger so an
+  // operator running this from a wrapper script gets a JSON line in
+  // production. The user-facing message also goes to stderr so the
+  // shell sees a clean failure summary.
+  logger.error({ err: unexpected }, 'davepi CLI failed');
+  err(unexpected && unexpected.message ? unexpected.message : String(unexpected));
   process.exit(1);
 });
