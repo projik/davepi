@@ -240,6 +240,43 @@ describe('Roles & field-level ACLs', () => {
     });
   });
 
+  describe('REST: bulk PUT upsert cannot bypass create ACL via query', () => {
+    test('plain user cannot smuggle ACL-restricted fields through ?salary= on upsert', async () => {
+      const user = await registerWithRoles('upsert@x.com');
+      // Bulk PUT with body=name and query=salary attempting upsert.
+      // Without the safeguard, Mongo would seed the new doc with
+      // salary=999999 (predicate equality key) bypassing create ACL.
+      const r = await ctx
+        .request(ctx.app)
+        .put('/api/v1/employee?salary=999999')
+        .set('Authorization', `Bearer ${user.token}`)
+        .send({ name: 'BulkUpsert' });
+      expect(r.status).toBe(200);
+
+      // Privileged read confirms salary was NOT persisted on the new doc.
+      const admin = await registerWithRoles('upsert-admin@x.com', 'admin');
+      const list = await get('/api/v1/employee', admin.token);
+      const created = list.body.results.find((rec) => rec.name === 'BulkUpsert');
+      expect(created).toBeDefined();
+      expect(created.salary).toBeUndefined();
+    });
+
+    test('admin with the create role can still set a salary via the upsert predicate', async () => {
+      const admin = await registerWithRoles('upsert-admin-allowed@x.com', 'admin');
+      const r = await ctx
+        .request(ctx.app)
+        .put(`/api/v1/employee?salary=42000`)
+        .set('Authorization', `Bearer ${admin.token}`)
+        .send({ name: 'AdminUpsert' });
+      expect(r.status).toBe(200);
+
+      const list = await get('/api/v1/employee', admin.token);
+      const created = list.body.results.find((rec) => rec.name === 'AdminUpsert');
+      expect(created).toBeDefined();
+      expect(created.salary).toBe(42000);
+    });
+  });
+
   describe('REST: backwards compatibility for schemas without acl', () => {
     test('the seed account schema (no acl) still works exactly as before', async () => {
       const a = await registerWithRoles('bc-a@x.com');
