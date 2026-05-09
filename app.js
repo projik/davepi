@@ -1,7 +1,7 @@
 require("dotenv").config();
 require("./config/database").connect();
 const express = require("express");
-const cors = require('cors');
+const helmet = require('helmet');
 const bcrypt = require('bcryptjs');
 const jwt = require("jsonwebtoken");
 const mongoose = require("mongoose");
@@ -20,6 +20,8 @@ const dirTree = require("directory-tree");
 const auth = require("./middleware/auth");
 const errorHandler = require("./middleware/errorHandler");
 const httpLogger = require("./middleware/httpLogger");
+const { buildCorsMiddleware } = require("./middleware/corsConfig");
+const { authLimiter, apiLimiter } = require("./middleware/rateLimit");
 const asyncHandler = require("./utils/asyncHandler");
 const logger = require("./utils/logger");
 const {
@@ -44,9 +46,24 @@ require('mongoose-schema-jsonschema')(mongoose);
 
 const schemaComposer = new mongoSc.SchemaComposer();
 
-app.use(cors());
+// Default helmet (CSP enabled) for all routes. Swagger UI and Apollo's
+// GraphQL Playground need inline scripts / remote bundles, so CSP and
+// crossOriginEmbedderPolicy are dropped only for those paths.
+const helmetDefault = helmet();
+const helmetForBrowserTooling = helmet({
+  contentSecurityPolicy: false,
+  crossOriginEmbedderPolicy: false,
+});
+app.use((req, res, next) => {
+  if (req.path.startsWith('/api-docs') || req.path.startsWith('/graphql')) {
+    return helmetForBrowserTooling(req, res, next);
+  }
+  return helmetDefault(req, res, next);
+});
+app.use(buildCorsMiddleware());
 app.use(express.json());
 app.use(httpLogger);
+app.use('/api', apiLimiter);
 
 const qs = new MongoQS();
 
@@ -391,7 +408,7 @@ const User = require("./model/user");
  * @param res - The response object.
  * @returns A new user object with a token
  */
-app.post("/register", asyncHandler(async (req, res) => {
+app.post("/register", authLimiter, asyncHandler(async (req, res) => {
   const { first_name, last_name, email, password } = req.body;
 
   if (!(email && password && first_name && last_name)) {
@@ -426,7 +443,7 @@ app.post("/register", asyncHandler(async (req, res) => {
   res.status(201).json(response);
 }));
 
-app.post("/login", asyncHandler(async (req, res) => {
+app.post("/login", authLimiter, asyncHandler(async (req, res) => {
   const { email, password } = req.body;
 
   if (!(email && password)) {
