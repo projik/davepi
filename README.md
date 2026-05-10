@@ -6,7 +6,7 @@ A dynamic REST and GraphQL API server that automatically generates endpoints, do
 
 🤖 **Building on dAvePi with Claude Code / Cursor / another agent?** Every scaffolded project ships an [`agent.md`](./templates/_shared/agent.md) (mirrored to `.cursorrules`, `AGENTS.md`, and `.claude/skills/davepi/SKILL.md`) that encodes the framework conventions — read it before adding code, or hand it to your agent.
 
-📦 **Versioning**: dAvePi follows [semver](https://semver.org/) from v1.0.0 onward — major = breaking, minor = additive, patch = fix. See [Stability commitments](https://docs.davepi.dev/reference/stability/) for which APIs are covered, the [CHANGELOG](./CHANGELOG.md) for release notes, and [SECURITY.md](./SECURITY.md) for the disclosure process and supported versions.
+📦 **Versioning**: dAvePi follows [semver](https://semver.org/) from v1.0.0 onward — major = breaking, minor = additive, patch = fix. Deprecated APIs surface a warning for at least one full minor release before removal in the next major. See [Stability commitments](https://docs.davepi.dev/reference/stability/) for which APIs are covered, the [CHANGELOG](./CHANGELOG.md) for release notes, and [SECURITY.md](./SECURITY.md) for the disclosure process and supported versions.
 
 ## Features
 
