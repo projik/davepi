@@ -387,7 +387,12 @@ async function scaffold({ name, template, install, davepiVersion, port }) {
   if (install) {
     out('\nInstalling dependencies...');
     const { spawnSync } = require('child_process');
-    const r = spawnSync('npm', ['install'], { cwd: target, stdio: 'inherit' });
+    // npm ships as a .cmd shim on Windows, so the bare `npm`
+    // binary spawn fails with ENOENT there. Use the platform-
+    // specific shim name to keep the auto-install step working
+    // everywhere.
+    const npmCmd = process.platform === 'win32' ? 'npm.cmd' : 'npm';
+    const r = spawnSync(npmCmd, ['install'], { cwd: target, stdio: 'inherit' });
     if (r.status !== 0) {
       err(
         `\nnpm install failed. Re-run manually: cd ${name} && npm install`
