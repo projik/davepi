@@ -43,33 +43,62 @@ const isEnabled = () =>
 
 function initMetrics() {
   if (initialized || !isEnabled()) return;
+
+  // Build everything into locals first, then commit module state in
+  // one step. If any constructor throws (missing prom-client, name
+  // collision against a stale registry, etc.) we reset and rethrow
+  // so the caller returns a 500 instead of leaving `initialized: true`
+  // with null metric objects — that combination would crash the next
+  // request when the `res.on('finish')` handler tries to inc a null
+  // counter, turning a one-off init error into a permanent outage.
+  let _promClient;
+  let _registry;
+  let _httpRequestsTotal;
+  let _httpRequestDuration;
+  try {
+    _promClient = require('prom-client');
+    _registry = new _promClient.Registry();
+    _promClient.collectDefaultMetrics({ register: _registry });
+
+    _httpRequestsTotal = new _promClient.Counter({
+      name: 'http_requests_total',
+      help: 'Total HTTP requests, labelled by method, route, and status.',
+      labelNames: ['method', 'route', 'status_code'],
+      registers: [_registry],
+    });
+
+    _httpRequestDuration = new _promClient.Histogram({
+      name: 'http_request_duration_seconds',
+      help: 'HTTP request latency in seconds, labelled by method, route, and status.',
+      labelNames: ['method', 'route', 'status_code'],
+      // Default Prometheus buckets are tuned for sub-1s web requests.
+      // Keep the bottom granular for fast endpoints (5ms, 10ms, 25ms),
+      // extend the top to 5s for the slow tail (file uploads,
+      // aggregations).
+      buckets: [
+        0.005, 0.01, 0.025, 0.05, 0.075, 0.1, 0.25, 0.5, 0.75, 1, 2.5, 5,
+      ],
+      registers: [_registry],
+    });
+  } catch (err) {
+    // Belt-and-braces — locals would be GC'd anyway, but reset the
+    // module-level state so the next call to initMetrics() tries
+    // again from a clean slate.
+    promClient = null;
+    registry = null;
+    httpRequestsTotal = null;
+    httpRequestDuration = null;
+    initialized = false;
+    throw err;
+  }
+
+  // Commit. After this point the metric objects are guaranteed
+  // non-null whenever `initialized === true`.
+  promClient = _promClient;
+  registry = _registry;
+  httpRequestsTotal = _httpRequestsTotal;
+  httpRequestDuration = _httpRequestDuration;
   initialized = true;
-
-  // Require lazily so the dep cost is only paid when metrics are on.
-  promClient = require('prom-client');
-  registry = new promClient.Registry();
-  promClient.collectDefaultMetrics({ register: registry });
-
-  httpRequestsTotal = new promClient.Counter({
-    name: 'http_requests_total',
-    help: 'Total HTTP requests, labelled by method, route, and status.',
-    labelNames: ['method', 'route', 'status_code'],
-    registers: [registry],
-  });
-
-  httpRequestDuration = new promClient.Histogram({
-    name: 'http_request_duration_seconds',
-    help: 'HTTP request latency in seconds, labelled by method, route, and status.',
-    labelNames: ['method', 'route', 'status_code'],
-    // Default Prometheus buckets are tuned for sub-1s web requests.
-    // Keep the bottom granular for fast endpoints (5ms, 10ms, 25ms),
-    // extend the top to 5s for the slow tail (file uploads,
-    // aggregations).
-    buckets: [
-      0.005, 0.01, 0.025, 0.05, 0.075, 0.1, 0.25, 0.5, 0.75, 1, 2.5, 5,
-    ],
-    registers: [registry],
-  });
 }
 
 /**
@@ -78,10 +107,19 @@ function initMetrics() {
  */
 function metricsMiddleware(req, res, next) {
   if (!isEnabled()) return next();
-  if (!initialized) initMetrics();
+  try {
+    if (!initialized) initMetrics();
+  } catch (err) {
+    return next(err);
+  }
 
   const start = process.hrtime.bigint();
   res.on('finish', () => {
+    // Belt-and-braces — initMetrics guarantees these are non-null
+    // when `initialized === true`, but a race between init and a
+    // late-arriving finish event could in principle find them null.
+    // Skip silently rather than crash the process.
+    if (!httpRequestsTotal || !httpRequestDuration) return;
     // `req.route` is set by Express once a handler matches. For
     // unmatched paths (404s, static files) fall back to a constant
     // so we don't blow up cardinality with arbitrary URLs.

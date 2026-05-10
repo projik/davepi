@@ -93,6 +93,60 @@ describe('Prometheus /_metrics endpoint', () => {
     expect(goodAuth.text).toMatch(/process_cpu_user_seconds_total/);
   });
 
+  test('initMetrics failure resets state so the next call can recover', () => {
+    // Drive initMetrics() into a half-failed state by stubbing
+    // prom-client's Counter constructor to throw on first
+    // instantiation. After the throw, the module must NOT be left
+    // with `initialized=true` and null metric objects — that
+    // combination crashes the next request's `res.on('finish')`
+    // handler and turns a one-off init error into a permanent
+    // outage. The fix resets state in the catch block; this test
+    // proves it.
+    process.env.METRICS_ENABLED = 'true';
+
+    const promClient = require('prom-client');
+    const originalCounter = promClient.Counter;
+    let throwOnce = true;
+    promClient.Counter = function ThrowingCounter(opts) {
+      if (throwOnce) {
+        throwOnce = false;
+        throw new Error('synthetic Counter failure');
+      }
+      return new originalCounter(opts);
+    };
+
+    try {
+      // First call hits the throwing Counter, propagates the error.
+      expect(() => {
+        const { metricsMiddleware } = require('../middleware/metrics');
+        metricsMiddleware({}, { on: () => {} }, (err) => {
+          if (err) throw err;
+        });
+      }).toThrow('synthetic Counter failure');
+
+      // Second call: Counter no longer throws. If state was reset,
+      // init succeeds and the middleware runs cleanly. If the bug
+      // hadn't been fixed, the module would still think it was
+      // initialised but with null metric objects — the next call
+      // would skip init and the registry would be empty, OR (worse)
+      // a partial registry could throw a duplicate-name error.
+      let nextCalled = false;
+      const { metricsMiddleware } = require('../middleware/metrics');
+      metricsMiddleware({}, { on: () => {} }, () => {
+        nextCalled = true;
+      });
+      expect(nextCalled).toBe(true);
+
+      // And /_metrics should now serve real metrics.
+      return ctx.request(ctx.app).get('/_metrics').then((res) => {
+        expect(res.status).toBe(200);
+        expect(res.text).toMatch(/http_request_duration_seconds/);
+      });
+    } finally {
+      promClient.Counter = originalCounter;
+    }
+  });
+
   test('middleware is a no-op when not enabled (no overhead)', async () => {
     // Without METRICS_ENABLED, the middleware short-circuits at the
     // first `if`. A request still completes normally; nothing gets
