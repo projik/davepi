@@ -13,10 +13,11 @@ on:
       - '.github/workflows/docs.yml'
   workflow_dispatch:
 
+# Top-level permissions stay minimal so PR builds (which run npm ci /
+# npm run build over PR-controlled code) can't mint OIDC tokens or
+# write to GitHub Pages. The deploy job opts in to the elevated set.
 permissions:
   contents: read
-  pages: write
-  id-token: write
 
 concurrency:
   group: pages
@@ -27,6 +28,8 @@ jobs:
   # PRs green even before GitHub Pages is enabled on the repo.
   verify:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     defaults:
       run:
         working-directory: docs/site
@@ -47,6 +50,10 @@ jobs:
     if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
     needs: verify
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
     defaults:
       run:
         working-directory: docs/site
