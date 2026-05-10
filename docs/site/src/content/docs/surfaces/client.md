@@ -1,6 +1,13 @@
-# TypeScript client
+---
+title: TypeScript client
+description: davepi gen-client emits a fully-typed TS client per schema — same source of truth as the server.
+---
 
-dAvePi ships a code generator that emits a fully-typed TypeScript client for every loaded schema. Same source of truth (the schema map) drives the server's REST/GraphQL/Swagger surface AND the frontend's compile-time types — so a typo on a field name fails `tsc`, not at 4am in production.
+dAvePi ships a code generator that emits a fully-typed TypeScript
+client for every loaded schema. Same source of truth (the schema
+map) drives the server's REST/GraphQL/Swagger surface AND the
+frontend's compile-time types — so a typo on a field name fails
+`tsc`, not at 4am in production.
 
 ## Generate
 
@@ -16,11 +23,14 @@ The CLI:
 - Writes one `.ts` file at `--out`.
 - Exits.
 
-Output is **deterministic**: schemas in alphabetical order, no timestamps, sorted aggregation params. Re-running with the same registry produces a byte-identical file, so CI diffs stay clean.
+Output is **deterministic**: schemas in alphabetical order, no
+timestamps, sorted aggregation params. Re-running with the same
+registry produces a byte-identical file, so CI diffs stay clean.
 
 ## Wire it up
 
-Drop the generated file into your project alongside the runtime companion:
+Drop the generated file into your project alongside the runtime
+companion:
 
 ```
 src/
@@ -43,7 +53,7 @@ const accounts = await api.account.list({
   filter: { accountName: { $regex: '^Acme' } },
   page: 1,
   perPage: 20,
-  include: ['contacts'],          // ← typed as a literal union
+  include: ['contacts'],          // typed as a literal union
 });
 
 await api.account.create(
@@ -51,10 +61,11 @@ await api.account.create(
   { idempotencyKey: 'op-123' }
 );
 
-await api.quote.transitionStatus(quoteId, 'approved');  // ← `to` typed as state literal
+await api.quote.transitionStatus(quoteId, 'approved');  // `to` typed as state literal
 ```
 
-Every response shape, every method signature, every relation name, every state-machine transition is type-checked at compile time.
+Every response shape, every method signature, every relation name,
+every state-machine transition is type-checked at compile time.
 
 ## What gets generated
 
@@ -89,11 +100,13 @@ export function createDavepiClient(opts: ApiOptions): DavepiClient;
 - `buildHttpClient(opts)` — produces the underlying fetch wrapper.
 - `makeResourceClient(client, config)` — factory the generator calls per schema.
 
-Dependency-light: zero runtime imports beyond global `fetch`. Works in Node ≥18, browsers, Cloudflare Workers, Deno, Bun.
+Dependency-light: zero runtime imports beyond global `fetch`. Works
+in Node ≥18, browsers, Cloudflare Workers, Deno, Bun.
 
 ## Mongo-querystring on the wire
 
-Filters are passed as a `Record<string, unknown>` and serialised onto the URL using mongo-querystring conventions:
+Filters are passed as a `Record<string, unknown>` and serialised
+onto the URL using mongo-querystring conventions:
 
 ```ts
 api.account.list({
@@ -128,7 +141,9 @@ const op = await api.account.create(
 );
 ```
 
-The runtime sets `Idempotency-Key` on the POST. Same key + same body = original record returned with `Idempotency-Replay: true` header (see `docs/idempotency.md`).
+The runtime sets `Idempotency-Key` on the POST. Same key + same
+body = original record returned with `Idempotency-Replay: true`
+header. See [Idempotency keys](/features/idempotency/).
 
 ## Errors
 
@@ -146,10 +161,10 @@ try {
 
 The error carries:
 
-- `status` — HTTP status code
-- `code` — typed code (`VALIDATION` / `NOT_FOUND` / `CONFLICT` / `INVALID_TRANSITION` / `IDEMPOTENCY_CONFLICT` / etc.)
-- `message` — human-readable description
-- `details` — structured payload when the typed error provides one (e.g. INVALID_TRANSITION's current/attempted/allowed)
+- `status` — HTTP status code.
+- `code` — typed code (`VALIDATION` / `NOT_FOUND` / `CONFLICT` / `INVALID_TRANSITION` / `IDEMPOTENCY_CONFLICT` / etc.).
+- `message` — human-readable description.
+- `details` — structured payload when the typed error provides one (e.g. `INVALID_TRANSITION`'s current/attempted/allowed).
 
 ## Regeneration workflow
 
@@ -169,3 +184,9 @@ Pair with a pre-commit hook or a CI step:
 ```
 
 This keeps the committed client in lockstep with the schema map.
+
+## See also
+
+- [Schema-driven generation](/concepts/schema-driven/) — why one source of truth for both server and client.
+- [Errors](/reference/errors/) — every typed error code the runtime might throw.
+- [Idempotency keys](/features/idempotency/) — the `idempotencyKey` opt the runtime turns into a header.

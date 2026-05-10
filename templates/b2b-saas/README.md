@@ -54,4 +54,4 @@ curl http://localhost:5050/api/v1/billingEvent/aggregations/byOrg \
 
 ## Pair with Idempotency-Key
 
-The invite-create endpoint is the obvious place — sending the same key + body twice returns the original invite instead of creating a duplicate. See [docs/idempotency.md](../../docs/idempotency.md).
+The invite-create endpoint is the obvious place — sending the same key + body twice returns the original invite instead of creating a duplicate. See [Idempotency keys](https://docs.davepi.dev/features/idempotency/).

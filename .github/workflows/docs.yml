@@ -1,0 +1,76 @@
+name: Docs
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'docs/site/**'
+      - '.github/workflows/docs.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'docs/site/**'
+      - '.github/workflows/docs.yml'
+  workflow_dispatch:
+
+# Top-level permissions stay minimal so PR builds (which run npm ci /
+# npm run build over PR-controlled code) can't mint OIDC tokens or
+# write to GitHub Pages. The deploy job opts in to the elevated set.
+permissions:
+  contents: read
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  # Verify the site builds on every push and PR. Doesn't upload — keeps
+  # PRs green even before GitHub Pages is enabled on the repo.
+  verify:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: docs/site
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.x
+          cache: npm
+          cache-dependency-path: docs/site/package-lock.json
+      - run: npm ci
+      - run: npm run build
+
+  # Build + upload + deploy. Gated on push-to-main so the upload-pages-artifact
+  # step only runs when we actually want to publish; this avoids needing Pages
+  # to be configured for the verify job to pass on PRs.
+  deploy:
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    needs: verify
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    defaults:
+      run:
+        working-directory: docs/site
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.x
+          cache: npm
+          cache-dependency-path: docs/site/package-lock.json
+      - run: npm ci
+      - run: npm run build
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: docs/site/dist
+      - id: deployment
+        uses: actions/deploy-pages@v4
