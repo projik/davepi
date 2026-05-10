@@ -1,0 +1,36 @@
+{
+  "name": "create-davepi-app",
+  "version": "0.1.0",
+  "description": "Scaffolder for new dAvePi projects. Run: npx create-davepi-app <name> [--template <name>]",
+  "license": "ISC",
+  "author": "David Baxter",
+  "bin": {
+    "create-davepi-app": "bin/index.js"
+  },
+  "files": [
+    "bin/",
+    "templates/",
+    "README.md"
+  ],
+  "scripts": {
+    "prepublishOnly": "node bin/sync-templates.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "keywords": [
+    "davepi",
+    "scaffolder",
+    "create-app",
+    "template",
+    "rest",
+    "graphql",
+    "mcp"
+  ],
+  "homepage": "https://github.com/projik/davepi#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/projik/davepi.git",
+    "directory": "create-davepi-app"
+  }
+}
