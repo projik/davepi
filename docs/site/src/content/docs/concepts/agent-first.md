@@ -82,14 +82,26 @@ red squiggle, not a runtime 500.
 
 [→ TypeScript client](/surfaces/client/)
 
-### 6. A drop-in `agent.md`
+### 6. A drop-in agent guide, mirrored across runtimes
 
-Every scaffolded project ships an `agent.md` file (mirrored to
-`.cursorrules` for Cursor users) that tells the agent the conventions
-of the framework: don't manually wire `userId`, don't use `accountId`
-as a custom FK, prefer computed over client-side derivation, use
-`__include` rather than N+1 calls. Agents that follow it produce
-working code on the first try.
+Every scaffolded project ships a canonical `agent.md` plus three
+mirrors that match each runtime's conventional path:
+
+| File | Picked up by |
+|------|--------------|
+| `agent.md` | Canonical, human-readable; the source of truth. |
+| `.cursorrules` | Cursor. |
+| `AGENTS.md` | OpenAI / Codex / agentic IDEs that read this name. |
+| `.claude/skills/davepi/SKILL.md` | Claude Code skills. Carries YAML frontmatter (`name`, `description`). |
+
+The guide tells the agent the conventions of the framework: don't
+manually wire `userId`, don't use `accountId` as a custom FK, prefer
+computed over client-side derivation, use `__include` rather than
+N+1 calls, read `_describe` before planning a non-trivial change.
+It also includes a schema field reference, a worked CRM example,
+prompt templates for common tasks, and the typed error catalogue.
+
+Agents that follow it produce working code on the first try.
 
 ## What this isn't
 

@@ -239,76 +239,41 @@ async function scaffold({ name, template, install, davepiVersion, port }) {
     },
   });
 
-  // 7. agent.md — drop-in agent instructions. Mirrored to .cursorrules
-  // so Cursor users pick it up.
-  const agentGuide = [
-    '# Agent guide for this dAvePi project',
-    '',
-    'You are working inside a dAvePi project. dAvePi auto-generates REST,',
-    'GraphQL, Swagger, and an MCP server from the schema files in',
-    '`schema/versions/v1/*.js`. Hot-reload is enabled — drop a new schema',
-    "file and the surface updates without restarting.",
-    '',
-    '## To add a resource',
-    '',
-    'Create `schema/versions/v1/<resource>.js` exporting a CommonJS object:',
-    '',
-    '```js',
-    'module.exports = {',
-    "  path: '<resource>',",
-    "  collection: '<resource>',",
-    '  fields: [',
-    "    { name: 'userId', type: String, required: true },     // required on every schema",
-    "    { name: 'title', type: String, required: true, searchable: true },",
-    "    { name: 'priority', type: Number },",
-    '  ],',
-    '  // Optional: relations, computed, state machines, aggregations, file fields, ACL.',
-    '  // See the framework docs and the existing schemas in this folder for examples.',
-    '};',
-    '```',
-    '',
-    '## Conventions',
-    '',
-    '- `userId` is required on every schema; the framework stamps it from the JWT.',
-    '  Never set it manually.',
-    '- `accountId` is also auto-stamped; if your schema needs a foreign key to a',
-    "  parent account, name it `parentAccountId` (or anything other than 'accountId').",
-    '- `type: \'File\'` fields are uploaded via dedicated multipart routes, never via JSON.',
-    '- Computed fields are read-only and run at response time. Prefer them over',
-    '  client-side derivation.',
-    '- State machines reject undeclared transitions with `400 INVALID_TRANSITION`.',
-    '  Use `record.availableTransitions[<field>]` to render the right UI buttons.',
-    '- Aggregations always have `$match: { userId }` prepended automatically.',
-    '',
-    '## Surfaces available without writing handlers',
-    '',
-    '- REST: `GET / POST / PUT / DELETE /api/v1/<path>` plus `/:id`, `/:id/restore`,',
-    '  `/:id/history`, file fields, aggregations.',
-    '- GraphQL: `<path>Many`, `<path>ById`, `<path>CreateOne`, `<path>UpdateById`,',
-    '  `<path>RemoveById`, etc.',
-    '- MCP: `list_<path>`, `get_<path>`, `create_<path>`, `update_<path>`, `delete_<path>`,',
-    '  plus restore/history/search/aggregations/transitions/file uploads as applicable.',
-    `- Swagger: http://localhost:${apiPort}/api-docs`,
-    `- Capability manifest: GET http://localhost:${apiPort}/_describe`,
-    '',
-    '## Common mistakes to avoid',
-    '',
-    '- Manually wiring `userId` in route handlers — the framework stamps it.',
-    '- Using `accountId` as a custom foreign key name — it collides with the',
-    '  framework\'s auto-stamping. Use `parentAccountId` or similar.',
-    '- Forgetting `required: true` on `userId` in new schemas.',
-    "- Writing custom CRUD routes when the auto-generated ones suffice.",
-    '',
-    '## Useful commands',
-    '',
-    '- `npm start` — boot the server.',
-    '- `npx davepi gen-client --out client/davepi.ts` — regenerate the typed TS client.',
-    '- `npx davepi migrate` — apply pending migrations.',
-    '- `npx davepi mcp` — run the MCP server over stdio (used by `.mcp.json`).',
-    '',
-  ].join('\n');
+  // 7. Agent guide. Canonical content lives in `templates/_shared/agent.md`
+  // and is mirrored to four locations so each agent runtime picks it up
+  // from its conventional path:
+  //   agent.md                              ← canonical, human-readable
+  //   .cursorrules                          ← Cursor
+  //   AGENTS.md                             ← OpenAI / Codex / agentic IDEs
+  //   .claude/skills/davepi/SKILL.md        ← Claude Code skill (with frontmatter)
+  // The shared file carries `{{PORT}}` placeholders that we substitute
+  // with the actually-bound API port so commands in the guide work
+  // out of the box.
+  const guideTemplate = fs.readFileSync(
+    path.join(templatesDir(), '_shared', 'agent.md'),
+    'utf8'
+  );
+  const agentGuide = guideTemplate.replace(/\{\{PORT\}\}/g, String(apiPort));
   fs.writeFileSync(path.join(target, 'agent.md'), agentGuide);
   fs.writeFileSync(path.join(target, '.cursorrules'), agentGuide);
+  fs.writeFileSync(path.join(target, 'AGENTS.md'), agentGuide);
+
+  // Claude Code skills require YAML frontmatter naming the skill and
+  // describing when to invoke it. Strip the leading "# Title" line
+  // from the canonical content (frontmatter replaces the H1) and
+  // prepend the metadata block.
+  const skillBody = agentGuide.replace(/^#\s+.+\n+/, '');
+  const skillContent =
+    [
+      '---',
+      'name: davepi',
+      'description: Conventions for adding resources / fields / relations / state machines / aggregations to this dAvePi project. Read before adding code.',
+      '---',
+      '',
+    ].join('\n') + skillBody;
+  const skillDir = path.join(target, '.claude', 'skills', 'davepi');
+  fs.mkdirSync(skillDir, { recursive: true });
+  fs.writeFileSync(path.join(skillDir, 'SKILL.md'), skillContent);
 
   // 8. docker-compose.yml — local Mongo for dev.
   fs.writeFileSync(
@@ -365,10 +330,12 @@ async function scaffold({ name, template, install, davepiVersion, port }) {
       '',
       '## With Claude Code / Cursor',
       '',
-      'The MCP server is pre-configured in `.mcp.json` and the agent guide',
-      'is at `agent.md` (mirrored to `.cursorrules`). Open the project in',
-      "your editor and ask the agent to add a resource — schema files in",
-      '`schema/versions/v1/` hot-reload as you save.',
+      'The MCP server is pre-configured in `.mcp.json`. The agent guide is at',
+      '`agent.md` and mirrored to `.cursorrules`, `AGENTS.md`, and',
+      '`.claude/skills/davepi/SKILL.md` so each runtime picks it up from its',
+      'conventional path. Open the project in your editor and ask the agent',
+      "to add a resource — schema files in `schema/versions/v1/` hot-reload",
+      'as you save.',
       '',
       '## Regenerate the typed client',
       '',
@@ -409,6 +376,7 @@ async function scaffold({ name, template, install, davepiVersion, port }) {
   out(`  npm start              # http://localhost:${apiPort}`);
   out('');
   out(`Try Claude Code: open the project, the MCP server is wired in .mcp.json.`);
+  out(`Agent guide: agent.md (also mirrored to .cursorrules, AGENTS.md, .claude/skills/davepi/SKILL.md)`);
   return target;
 }
 

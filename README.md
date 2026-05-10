@@ -4,6 +4,8 @@ A dynamic REST and GraphQL API server that automatically generates endpoints, do
 
 📚 **Full documentation: <https://docs.davepi.dev>** — concepts, schema reference, per-feature guides, and a flagship "Idea to deployed CRM in 10 minutes" walkthrough. The docs source lives under [`docs/site/`](./docs/site) and ships in lockstep with the framework.
 
+🤖 **Building on dAvePi with Claude Code / Cursor / another agent?** Every scaffolded project ships an [`agent.md`](./templates/_shared/agent.md) (mirrored to `.cursorrules`, `AGENTS.md`, and `.claude/skills/davepi/SKILL.md`) that encodes the framework conventions — read it before adding code, or hand it to your agent.
+
 ## Features
 
 - 🚀 **Auto-Generated APIs** - Define schemas, get REST endpoints and GraphQL resolvers automatically

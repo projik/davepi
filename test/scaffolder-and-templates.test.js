@@ -28,7 +28,9 @@ describe('create-davepi-app: scaffolder', () => {
       const resolved = path.resolve('demo');
       for (const f of [
         'package.json', '.env', '.gitignore', '.mcp.json',
-        'agent.md', '.cursorrules', 'docker-compose.yml',
+        'agent.md', '.cursorrules', 'AGENTS.md',
+        '.claude/skills/davepi/SKILL.md',
+        'docker-compose.yml',
         'index.js', 'README.md', 'TEMPLATE.md', 'seed.js',
         'schema/versions/v1/note.js',
       ]) {
@@ -75,6 +77,50 @@ describe('create-davepi-app: scaffolder', () => {
       } finally {
         cleanup(dirName);
       }
+    }
+  });
+
+  test('agent guide mirrors carry the canonical content + skill frontmatter', async () => {
+    await scaffold({
+      name: 'demo-agent',
+      template: 'blank',
+      install: false,
+      davepiVersion: 'latest',
+      port: 5599,
+    });
+    try {
+      const root = path.resolve('demo-agent');
+      const canonical = fs.readFileSync(path.join(root, 'agent.md'), 'utf8');
+      const cursor = fs.readFileSync(path.join(root, '.cursorrules'), 'utf8');
+      const agents = fs.readFileSync(path.join(root, 'AGENTS.md'), 'utf8');
+      const skill = fs.readFileSync(
+        path.join(root, '.claude', 'skills', 'davepi', 'SKILL.md'),
+        'utf8'
+      );
+
+      // The three plain mirrors carry identical content and the
+      // canonical content covers the major framework concepts agents
+      // need (idempotency, _describe, state machines, ACL).
+      expect(cursor).toBe(canonical);
+      expect(agents).toBe(canonical);
+      expect(canonical).toMatch(/Idempotency-Key/);
+      expect(canonical).toMatch(/_describe/);
+      expect(canonical).toMatch(/stateMachine/);
+      expect(canonical).toMatch(/parentAccountId/);
+      // {{PORT}} placeholder is substituted with the bound port.
+      expect(canonical).not.toMatch(/\{\{PORT\}\}/);
+      expect(canonical).toMatch(/localhost:5599/);
+
+      // The Claude Code skill mirror has the YAML frontmatter the
+      // runtime requires, with no leading H1 (frontmatter replaces it).
+      expect(skill.startsWith('---\nname: davepi\n')).toBe(true);
+      expect(skill).toMatch(/^description:.+/m);
+      expect(skill).not.toMatch(/^# Agent guide/m);
+      // Same body content as the canonical guide.
+      expect(skill).toMatch(/Idempotency-Key/);
+      expect(skill).toMatch(/_describe/);
+    } finally {
+      cleanup('demo-agent');
     }
   });
 
