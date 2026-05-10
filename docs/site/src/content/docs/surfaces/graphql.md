@@ -33,7 +33,7 @@ For schema `path: 'account'`:
 | Remove by id | `accountRemoveById(_id)` |
 | Remove many | `accountRemoveMany(filter)` |
 | Restore | `accountRestore(_id)` (soft-delete-enabled schemas) |
-| _(state-machine transitions)_ | Send the new value through `accountUpdateById(_id, record: { <field>: <to> })`. The framework validates against `transitions[current]`. |
+| Transition | `<path>Transition<Field>(_id, to)` per state-machine field — `to` is typed as the schema's generated enum |
 
 ## Tenant scoping is structural
 
@@ -127,16 +127,15 @@ nested fields:
 ## State machines
 
 State-machine fields surface as a literal `enum` in the GraphQL
-output type. Transitions ride on the standard update resolver — the
-framework validates the new value against `transitions[current]`
-before persisting:
+output type, plus a dedicated transition mutation per field. The
+mutation runs the same validate / persist / audit / event /
+`onEnter` pipeline as the REST PUT path, and `to` is typed as the
+schema's generated enum so a typo on the wire is caught before
+any handler runs:
 
 ```graphql
 mutation {
-  quoteUpdateById(
-    _id: "abc",
-    record: { status: "approved" }
-  ) {
+  quoteTransitionStatus(_id: "abc", to: approved) {
     record {
       _id
       status                       # enum value
@@ -147,6 +146,12 @@ mutation {
   }
 }
 ```
+
+Updating the state-machine field through the standard
+`<path>UpdateById` resolver also validates against the
+state machine — the dedicated transition mutation is the
+preferred call shape, but a regular update can't bypass the
+transition graph.
 
 `INVALID_TRANSITION` errors carry the structured payload in
 `errors[0].extensions` for clients to react to.

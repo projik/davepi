@@ -146,20 +146,20 @@ Try transitioning one:
 DEAL_ID=$(curl -s "http://localhost:5050/api/v1/deal?__sort=createdAt:desc&__perPage=1" \
   -H "Authorization: Bearer $TOKEN" | jq -r '.results[0]._id')
 
-curl -s -X POST "http://localhost:5050/api/v1/deal/$DEAL_ID/transition" \
+curl -s -X PUT "http://localhost:5050/api/v1/deal/$DEAL_ID" \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
-  -d '{"field":"stage","to":"qualifying"}' | jq
+  -d '{"stage":"qualifying"}' | jq
 ```
 
 The response includes `availableTransitions.stage` so you know the
 next step. Try an invalid transition:
 
 ```bash
-curl -s -X POST "http://localhost:5050/api/v1/deal/$DEAL_ID/transition" \
+curl -s -X PUT "http://localhost:5050/api/v1/deal/$DEAL_ID" \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
-  -d '{"field":"stage","to":"won"}' | jq
+  -d '{"stage":"won"}' | jq
 ```
 
 ```json
