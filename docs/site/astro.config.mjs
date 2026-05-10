@@ -56,6 +56,7 @@ export default defineConfig({
             { label: 'Field options', link: '/reference/fields/' },
             { label: 'Conventions', link: '/reference/conventions/' },
             { label: 'Errors', link: '/reference/errors/' },
+            { label: 'Stability commitments', link: '/reference/stability/' },
           ],
         },
         {
