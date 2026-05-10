@@ -8,7 +8,10 @@ from v1.0.0 onward (see [Stability commitments](https://docs.davepi.dev/referenc
 
 ## [Unreleased]
 
-_Nothing yet._
+### Added
+
+- **Prometheus `/_metrics` endpoint.** Opt-in via `METRICS_ENABLED=true`. Exposes default Node.js metrics plus `http_requests_total` (counter) and `http_request_duration_seconds` (histogram), labelled by `method`, `route` (matched Express path template, not raw URL), and `status_code`. Optional Bearer-token gating via `METRICS_TOKEN`. The middleware short-circuits when disabled, so the only cost when off is one env-var check per request. (#67)
+- **Observability docs.** New page at `/operations/observability/` covering OpenTelemetry, Sentry, Datadog APM, and the built-in Prometheus endpoint. Starter Grafana + Datadog dashboards under `docs/site/public/dashboards/`. (#67)
 
 ## [1.0.0] - 2026-05-10
 

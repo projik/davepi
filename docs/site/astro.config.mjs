@@ -79,6 +79,7 @@ export default defineConfig({
             { label: 'Deployment', link: '/operations/deployment/' },
             { label: 'Migrations', link: '/operations/migrations/' },
             { label: 'Backup & retention', link: '/operations/backup/' },
+            { label: 'Observability', link: '/operations/observability/' },
           ],
         },
       ],

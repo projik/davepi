@@ -16,6 +16,7 @@ const crypto = require("crypto");
 
 const errorHandler = require("./middleware/errorHandler");
 const httpLogger = require("./middleware/httpLogger");
+const { metricsMiddleware, metricsHandler } = require("./middleware/metrics");
 const { buildCorsMiddleware } = require("./middleware/corsConfig");
 const { authLimiter, apiLimiter } = require("./middleware/rateLimit");
 const asyncHandler = require("./utils/asyncHandler");
@@ -67,6 +68,7 @@ app.use((req, res, next) => {
 app.use(buildCorsMiddleware());
 app.use(express.json());
 app.use(httpLogger);
+app.use(metricsMiddleware);
 app.use('/api', apiLimiter);
 
 const apiSpec = {
@@ -410,6 +412,11 @@ app.get('/_describe', (req, res, next) => {
     respond();
   });
 });
+
+// Prometheus metrics. Returns 404 when METRICS_ENABLED isn't 'true'
+// so the endpoint behaves like it doesn't exist for projects that
+// don't opt in. When enabled, optionally token-gated via METRICS_TOKEN.
+app.get('/_metrics', asyncHandler(metricsHandler));
 
 // Admin SPA — built artifacts live under admin/dist/. Only mounted
 // when the build exists so a fresh clone without `npm run build:admin`

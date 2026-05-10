@@ -1,0 +1,183 @@
+{
+  "title": "dAvePi (Datadog APM)",
+  "description": "Starter dashboard for a dAvePi service traced via dd-trace. Adjust the `service:davepi` scope to match your DD_SERVICE env var.",
+  "widgets": [
+    {
+      "definition": {
+        "type": "timeseries",
+        "title": "Request rate per route",
+        "show_legend": true,
+        "legend_layout": "auto",
+        "requests": [
+          {
+            "queries": [
+              {
+                "name": "query1",
+                "data_source": "metrics",
+                "query": "sum:trace.express.request.hits{service:davepi} by {resource_name}.as_rate()"
+              }
+            ],
+            "response_format": "timeseries",
+            "display_type": "line",
+            "style": { "palette": "dog_classic", "line_type": "solid", "line_width": "normal" }
+          }
+        ]
+      }
+    },
+    {
+      "definition": {
+        "type": "timeseries",
+        "title": "Latency p95 per route",
+        "show_legend": true,
+        "legend_layout": "auto",
+        "requests": [
+          {
+            "queries": [
+              {
+                "name": "query1",
+                "data_source": "metrics",
+                "query": "p95:trace.express.request{service:davepi} by {resource_name}"
+              }
+            ],
+            "response_format": "timeseries",
+            "display_type": "line"
+          }
+        ],
+        "yaxis": { "scale": "linear", "min": "0", "include_zero": true }
+      }
+    },
+    {
+      "definition": {
+        "type": "timeseries",
+        "title": "Latency p50 / p95 / p99 (aggregate)",
+        "show_legend": true,
+        "legend_layout": "auto",
+        "requests": [
+          {
+            "queries": [
+              {
+                "name": "p50",
+                "data_source": "metrics",
+                "query": "p50:trace.express.request{service:davepi}"
+              }
+            ],
+            "response_format": "timeseries",
+            "display_type": "line"
+          },
+          {
+            "queries": [
+              {
+                "name": "p95",
+                "data_source": "metrics",
+                "query": "p95:trace.express.request{service:davepi}"
+              }
+            ],
+            "response_format": "timeseries",
+            "display_type": "line"
+          },
+          {
+            "queries": [
+              {
+                "name": "p99",
+                "data_source": "metrics",
+                "query": "p99:trace.express.request{service:davepi}"
+              }
+            ],
+            "response_format": "timeseries",
+            "display_type": "line"
+          }
+        ]
+      }
+    },
+    {
+      "definition": {
+        "type": "timeseries",
+        "title": "Error rate (5xx) per route",
+        "show_legend": true,
+        "legend_layout": "auto",
+        "requests": [
+          {
+            "queries": [
+              {
+                "name": "query1",
+                "data_source": "metrics",
+                "query": "sum:trace.express.request.errors{service:davepi} by {resource_name}.as_rate()"
+              }
+            ],
+            "response_format": "timeseries",
+            "display_type": "bars"
+          }
+        ]
+      }
+    },
+    {
+      "definition": {
+        "type": "timeseries",
+        "title": "Mongo query rate by collection",
+        "show_legend": true,
+        "legend_layout": "auto",
+        "requests": [
+          {
+            "queries": [
+              {
+                "name": "query1",
+                "data_source": "metrics",
+                "query": "sum:trace.mongodb.query.hits{service:davepi} by {db.mongodb.collection}.as_rate()"
+              }
+            ],
+            "response_format": "timeseries",
+            "display_type": "line"
+          }
+        ]
+      }
+    },
+    {
+      "definition": {
+        "type": "timeseries",
+        "title": "Node.js heap / RSS",
+        "show_legend": true,
+        "legend_layout": "auto",
+        "requests": [
+          {
+            "queries": [
+              {
+                "name": "heap",
+                "data_source": "metrics",
+                "query": "avg:runtime.node.mem.heap_used{service:davepi}"
+              }
+            ],
+            "response_format": "timeseries",
+            "display_type": "line"
+          },
+          {
+            "queries": [
+              {
+                "name": "rss",
+                "data_source": "metrics",
+                "query": "avg:runtime.node.mem.rss{service:davepi}"
+              }
+            ],
+            "response_format": "timeseries",
+            "display_type": "line"
+          }
+        ]
+      }
+    }
+  ],
+  "template_variables": [
+    {
+      "name": "service",
+      "prefix": "service",
+      "default": "davepi"
+    },
+    {
+      "name": "env",
+      "prefix": "env",
+      "default": "production"
+    }
+  ],
+  "layout_type": "ordered",
+  "is_read_only": false,
+  "notify_list": [],
+  "reflow_type": "auto"
+}
