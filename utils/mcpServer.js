@@ -46,6 +46,7 @@ const { normalizeRelations, parseIncludes, applyIncludes } = require('./relation
 const { matchAccept, decorateFileUrls } = require('./fileFields');
 const { getStorageDriver } = require('./storage');
 const { recordAudit } = require('./audit');
+const idempotency = require('./idempotency');
 const AuditLog = require('../model/auditLog');
 const {
   NotFoundError,
@@ -288,9 +289,16 @@ function registerSchemaTools(server, entry, { schemaLoader, getUser }) {
     `create_${path}`,
     {
       title: `Create ${path}`,
-      description: `Create a new ${path} record. userId is stamped from the authenticated caller.`,
+      description:
+        `Create a new ${path} record. userId is stamped from the authenticated caller. ` +
+        'Pass `idempotencyKey` to make a retry safe — calling this tool twice with the ' +
+        'same key + record returns the original result without creating a duplicate.',
       inputSchema: {
         record: z.record(z.any()).describe(`A ${path} payload (see /api/v1/${path}-schema)`),
+        idempotencyKey: z.string().min(1).optional().describe(
+          'Stable key for safe retry. Reusing the same key with a different ' +
+          'record returns IDEMPOTENCY_CONFLICT.'
+        ),
       },
     },
     handlerOf(async (args) => {
@@ -300,6 +308,31 @@ function registerSchemaTools(server, entry, { schemaLoader, getUser }) {
       // userId / accountId is overridden — never trust the wire for
       // ownership.
       const data = { ...writable, accountId: user.user_id, userId: user.user_id };
+
+      // Idempotency: same surface as the REST Idempotency-Key header,
+      // delivered as a tool argument because JSON-RPC over MCP doesn't
+      // carry headers per-call. Body hash covers the writable shape
+      // post-filter so the same logical request hashes the same way
+      // even if filterWritable strips an ACL'd key.
+      const idempotencyKey = args.idempotencyKey;
+      const route = `mcp:create_${path}`;
+      let bodyHash;
+      if (idempotencyKey) {
+        bodyHash = idempotency.hashBody(data);
+        const lookup = await idempotency.checkIdempotency({
+          key: idempotencyKey,
+          userId: user.user_id,
+          route,
+          bodyHash,
+        });
+        if (lookup.status === 'conflict') throw idempotency.conflictError();
+        if (lookup.status === 'hit') {
+          // Replayed payload travels back with a flag so an agent can
+          // tell the difference from a fresh create.
+          return { ...lookup.record.body, _idempotent_replay: true };
+        }
+      }
+
       const record = await Model.create(data);
       const plain = JSON.parse(JSON.stringify(record));
       if (auditEnabled) {
@@ -312,7 +345,18 @@ function registerSchemaTools(server, entry, { schemaLoader, getUser }) {
           after: plain,
         });
       }
-      return projectByAcl(plain, s, user);
+      const projected = projectByAcl(plain, s, user);
+      if (idempotencyKey) {
+        await idempotency.recordIdempotency({
+          key: idempotencyKey,
+          userId: user.user_id,
+          route,
+          bodyHash,
+          status: 201,
+          body: projected,
+        });
+      }
+      return projected;
     })
   ));
 

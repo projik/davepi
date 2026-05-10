@@ -24,6 +24,11 @@ const {
 } = require('./aggregations');
 const { createAggregationCache } = require('./aggregationCache');
 const aggregationCache = createAggregationCache();
+const { buildIdempotency } = require('../middleware/idempotency');
+// Single middleware instance shared across every auto-generated
+// POST route. Stateless — the middleware reads req.headers /
+// req.user / req.body per call, no closure state to share.
+const idempotencyMiddleware = buildIdempotency();
 const {
   normalizeRelations,
   parseIncludes,
@@ -649,6 +654,7 @@ function createSchemaLoader({ app, apiSpec, setApolloRouter, buildGraphqlContext
     router.post(
       `/api/${s.version}/${path}`,
       auth(true),
+      idempotencyMiddleware,
       asyncHandler(async (req, res) => {
         const writable = filterWritable(req.body, s, req.user, 'create');
         const data = {
