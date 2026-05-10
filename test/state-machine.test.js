@@ -561,6 +561,153 @@ describe('integration', () => {
       await close();
     }
   });
+
+  test('update_<path> on a missing record returns NOT_FOUND, not INVALID_TRANSITION', async () => {
+    const reg = await registerUser(ctx.request, ctx.app);
+    const user = decodedFromRegister(reg);
+    const { client, close } = await connectMcp(user);
+    try {
+      const fakeId = '6a0007000000000000000000';
+      const res = await client.callTool({
+        name: 'update_sm_mcp',
+        arguments: { id: fakeId, record: { status: 'review' } },
+      });
+      expect(res.isError).toBe(true);
+      const body = parseStructured(res);
+      expect(body.error.code).toBe('NOT_FOUND');
+    } finally {
+      await close();
+    }
+  });
+
+  test('update_<path> emits the standard `updated` event alongside `transitioned`', async () => {
+    const reg = await registerUser(ctx.request, ctx.app);
+    const user = decodedFromRegister(reg);
+    const { client, close } = await connectMcp(user);
+    try {
+      const created = parseStructured(await client.callTool({
+        name: 'create_sm_mcp',
+        arguments: { record: { title: 'X' } },
+      }));
+      const events = require('../utils/events');
+      const seen = [];
+      const handler = (e) => {
+        if (e.recordId === String(created._id)) seen.push(e.type);
+      };
+      events.bus.on('record', handler);
+      try {
+        await client.callTool({
+          name: 'update_sm_mcp',
+          arguments: { id: created._id, record: { status: 'review' } },
+        });
+      } finally {
+        events.bus.off('record', handler);
+      }
+      expect(seen).toEqual(expect.arrayContaining(['sm_mcp.transitioned', 'sm_mcp.updated']));
+    } finally {
+      await close();
+    }
+  });
   }); // close MCP describe
+
+  describe('regressions', () => {
+    test('PUT on a missing record returns 404, not 400 INVALID_TRANSITION', async () => {
+      const user = await registerUser(ctx.request, ctx.app);
+      const fakeId = '6a0007000000000000000000';
+      const res = await ctx
+        .request(ctx.app)
+        .put(`/api/v1/sm_doc/${fakeId}`)
+        .set('Authorization', `Bearer ${user.token}`)
+        .send({ status: 'review' });
+      expect(res.status).toBe(404);
+      expect(res.body.error.code).toBe('NOT_FOUND');
+    });
+
+    test('availableTransitions virtual is hidden from callers without read access to the field', async () => {
+      // Schema with the state field locked to admin reads only.
+      await ctx.app.locals.schemaLoader.loadSchema({
+        path: 'sm_acl',
+        collection: 'sm_acl',
+        version: 'v1',
+        fields: [
+          { name: 'userId', type: String, required: true },
+          {
+            name: 'status',
+            type: String,
+            acl: { read: ['admin'] },
+            stateMachine: {
+              initial: 'draft',
+              states: ['draft', 'approved'],
+              transitions: { draft: ['approved'], approved: [] },
+            },
+          },
+        ],
+      });
+      try {
+        const user = await registerUser(ctx.request, ctx.app); // role 'user'
+        const created = await ctx
+          .request(ctx.app)
+          .post('/api/v1/sm_acl')
+          .set('Authorization', `Bearer ${user.token}`)
+          .send({});
+        // The status field is hidden by projectByAcl; the derived
+        // availableTransitions virtual would otherwise leak the
+        // current state ('draft' → ['approved']).
+        expect(created.body.status).toBeUndefined();
+        expect(created.body.statusAvailableTransitions).toBeUndefined();
+      } finally {
+        await ctx.app.locals.schemaLoader.unloadSchema('v1/sm_acl');
+      }
+    });
+
+    test('GraphQL builds enums for state strings with non-identifier characters', async () => {
+      // States like `in-progress` would otherwise crash
+      // composer.createEnumTC because hyphens aren't valid in
+      // GraphQL enum names.
+      await ctx.app.locals.schemaLoader.loadSchema({
+        path: 'sm_kebab',
+        collection: 'sm_kebab',
+        version: 'v1',
+        fields: [
+          { name: 'userId', type: String, required: true },
+          {
+            name: 'status',
+            type: String,
+            stateMachine: {
+              initial: 'in-progress',
+              states: ['in-progress', 'done'],
+              transitions: { 'in-progress': ['done'], done: [] },
+            },
+          },
+        ],
+      });
+      try {
+        const user = await registerUser(ctx.request, ctx.app);
+        const created = await ctx
+          .request(ctx.app)
+          .post('/api/v1/sm_kebab')
+          .set('Authorization', `Bearer ${user.token}`)
+          .send({});
+        expect(created.status).toBe(201);
+        expect(created.body.status).toBe('in-progress');
+        // The mutation accepts the sanitised enum name; payload is
+        // the original string.
+        const res = await ctx
+          .request(ctx.app)
+          .post('/graphql/')
+          .set('Authorization', `Bearer ${user.token}`)
+          .send({
+            query: `mutation Q($id: MongoID!) {
+                     sm_kebabTransitionStatus(_id: $id, to: done) { status }
+                   }`,
+            variables: { id: created.body._id },
+          });
+        expect(res.body.errors).toBeUndefined();
+        expect(res.body.data.sm_kebabTransitionStatus.status).toBe('done');
+      } finally {
+        await ctx.app.locals.schemaLoader.unloadSchema('v1/sm_kebab');
+      }
+    });
+  });
 }); // close integration describe
 }); // close outer stateMachine describe

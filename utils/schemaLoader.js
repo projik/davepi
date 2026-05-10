@@ -794,7 +794,7 @@ function createSchemaLoader({ app, apiSpec, setApolloRouter, buildGraphqlContext
         const plain = JSON.parse(JSON.stringify(record));
         await decorateFileUrls(plain, s, storage);
         await applyComputed([plain], s, buildComputedContextForReq(req));
-        attachAvailableTransitions([plain], s);
+        attachAvailableTransitions([plain], s, req.user);
         await audit({
           req,
           recordId: record._id,
@@ -892,7 +892,7 @@ function createSchemaLoader({ app, apiSpec, setApolloRouter, buildGraphqlContext
         // Runs after relations so a computed function can reference
         // included relation values on `record`.
         await applyComputed(list, s, buildComputedContextForReq(req));
-        attachAvailableTransitions(list, s);
+        attachAvailableTransitions(list, s, req.user);
 
         const totalPages = Math.ceil(count / pageSize);
         const result = {
@@ -973,7 +973,7 @@ function createSchemaLoader({ app, apiSpec, setApolloRouter, buildGraphqlContext
           });
         }
         await applyComputed([copy], s, buildComputedContextForReq(req));
-        attachAvailableTransitions([copy], s);
+        attachAvailableTransitions([copy], s, req.user);
 
         res.status(200).json(projectByAcl(copy, s, req.user));
       })
@@ -1168,6 +1168,14 @@ function createSchemaLoader({ app, apiSpec, setApolloRouter, buildGraphqlContext
         const transitions = hasStateMachine
           ? listTransitionsToValidate(writable, before, s)
           : [];
+        // 404 short-circuit: if the caller is attempting a
+        // state-machine transition on a record that doesn't exist,
+        // surface NOT_FOUND rather than letting validateTransition
+        // misinterpret the absent `current` as
+        // `initial_state_required` (a 400 INVALID_TRANSITION).
+        if (transitions.length && !before) {
+          throw new NotFoundError(path);
+        }
         for (const t of transitions) {
           const v = validateTransition(t.field, t.current, t.next);
           if (!v.valid) {
@@ -1542,9 +1550,29 @@ function createSchemaLoader({ app, apiSpec, setApolloRouter, buildGraphqlContext
       for (const f of stateMachineFieldsOf(s)) {
         const PascalName = f.name.charAt(0).toUpperCase() + f.name.slice(1);
         const enumName = `${PascalName}State_${p}`;
+        // GraphQL enum value NAMES must be valid GraphQL identifiers
+        // ([_A-Za-z][_0-9A-Za-z]*). State strings are
+        // user-controlled schema vocabulary, so a kebab-case
+        // ('in-progress') or whitespace-bearing state would crash
+        // composer.createEnumTC and take the whole rebuild down.
+        // Sanitise the NAME but preserve the original string as the
+        // value so wire/storage semantics are unchanged.
         const enumValues = {};
+        const seenNames = new Map();
         for (const st of f.stateMachine.states) {
-          enumValues[st] = { value: st };
+          let safe = String(st).replace(/[^_A-Za-z0-9]/g, '_');
+          if (!/^[_A-Za-z]/.test(safe)) safe = `_${safe}`;
+          // Disambiguate post-sanitisation collisions
+          // (e.g. `in-progress` and `in_progress` both map to
+          // `in_progress`).
+          if (seenNames.has(safe)) {
+            const n = seenNames.get(safe) + 1;
+            seenNames.set(safe, n);
+            safe = `${safe}_${n}`;
+          } else {
+            seenNames.set(safe, 1);
+          }
+          enumValues[safe] = { value: st };
         }
         if (!composer.has(enumName)) {
           composer.createEnumTC({ name: enumName, values: enumValues });
@@ -1554,6 +1582,9 @@ function createSchemaLoader({ app, apiSpec, setApolloRouter, buildGraphqlContext
           description: `Transition ${p}.${f.name} to a new state.`,
           args: { _id: 'MongoID!', to: `${enumName}!` },
           Model: model,
+          schema: s,
+          kind: 'write',
+          action: 'update',
           runner: async ({ user, before, to }) => {
             const v = validateTransition(f, before[f.name], to);
             if (!v.valid) {

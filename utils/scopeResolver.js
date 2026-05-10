@@ -374,13 +374,36 @@ const wrapComputedField = ({ type, description, projection, field, compute, buil
  * transition-shaped entry point: it enforces auth, fetches the
  * record under the caller's tenant, hands the runner the
  * authenticated user + the record + the requested target state,
- * and returns the wrapper's result as-is.
+ * and returns the result with field-level read ACL applied
+ * (matches the contract every other tenant-scoped wrapper
+ * follows).
+ *
+ * `kind` and `action` are accepted for symmetry with the other
+ * scope-resolver wrappers (`{ schema, kind: 'write', action:
+ * 'update' }` is the natural default for a transition mutation),
+ * even though `wrapStateTransition` enforces ownership directly
+ * via the unique `(key, userId)` query rather than delegating to
+ * the bypass slots — same posture as `wrapByIdMutation`. Passing
+ * the options keeps authorisation auditing consistent across
+ * wrappers.
  *
  * Tenant isolation lives in the ownership query the wrapper
  * itself runs (`{ _id: args._id, userId }`) — the runner gets a
  * record it's already authorised to mutate.
  */
-const wrapStateTransition = ({ type, args, description, Model, runner }) => ({
+const wrapStateTransition = ({
+  type,
+  args,
+  description,
+  Model,
+  runner,
+  schema,
+  // kind/action carried for convention only — see comment above.
+  // eslint-disable-next-line no-unused-vars
+  kind = 'write',
+  // eslint-disable-next-line no-unused-vars
+  action = 'update',
+} = {}) => ({
   type,
   args,
   description,
@@ -391,7 +414,12 @@ const wrapStateTransition = ({ type, args, description, Model, runner }) => ({
     const ownership = { _id: params._id, userId: ctx.user.user_id };
     const before = await Model.findOne(ownership).lean();
     if (!before) throw new ForbiddenError('Record not found');
-    return runner({ user: ctx.user, before, to: params.to });
+    const result = await runner({ user: ctx.user, before, to: params.to });
+    // Apply field-level read ACL on the way out — same contract
+    // wrapFilter / wrapByIdMutation enforce so the Transition
+    // mutation can't be used as a side channel to read fields the
+    // caller would otherwise have stripped from the response.
+    return projectResult(result, schema, ctx.user);
   },
 });
 

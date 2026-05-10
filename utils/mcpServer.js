@@ -46,6 +46,7 @@ const { normalizeRelations, parseIncludes, applyIncludes } = require('./relation
 const { matchAccept, decorateFileUrls } = require('./fileFields');
 const { getStorageDriver } = require('./storage');
 const { recordAudit } = require('./audit');
+const logger = require('./logger');
 const idempotency = require('./idempotency');
 const AuditLog = require('../model/auditLog');
 const {
@@ -262,7 +263,7 @@ function registerSchemaTools(server, entry, { schemaLoader, getUser }) {
         Model.find(filter).countDocuments(),
       ]);
       await populateInto(list, includes, user);
-      attachAvailableTransitions(list, s);
+      attachAvailableTransitions(list, s, user);
       return {
         results: projectListByAcl(list, s, user),
         totalResults: count,
@@ -290,7 +291,7 @@ function registerSchemaTools(server, entry, { schemaLoader, getUser }) {
       if (!record) throw new NotFoundError(path);
       const includes = parseIncludes(args.include && args.include.join(','), normalizedRelations);
       await populateInto([record], includes, user);
-      attachAvailableTransitions([record], s);
+      attachAvailableTransitions([record], s, user);
       return projectByAcl(record, s, user);
     })
   ));
@@ -374,7 +375,7 @@ function registerSchemaTools(server, entry, { schemaLoader, getUser }) {
       // and log them), but we wrap defensively so any future change
       // in their failure semantics doesn't regress this contract.
       const plain = JSON.parse(JSON.stringify(record));
-      attachAvailableTransitions([plain], s);
+      attachAvailableTransitions([plain], s, user);
       const projected = projectByAcl(plain, s, user);
       if (auditEnabled) {
         try {
@@ -435,6 +436,13 @@ function registerSchemaTools(server, entry, { schemaLoader, getUser }) {
       const transitions = hasStateMachine
         ? listTransitionsToValidate(writable, before, s)
         : [];
+      // 404 short-circuit: see schemaLoader's PUT handler — without
+      // this, validateTransition would treat the absent `current`
+      // as `initial_state_required` and surface a 400 instead of
+      // the right NOT_FOUND.
+      if (transitions.length && !before) {
+        throw new NotFoundError(path);
+      }
       for (const t of transitions) {
         const v = validateTransition(t.field, t.current, t.next);
         if (!v.valid) {
@@ -472,6 +480,17 @@ function registerSchemaTools(server, entry, { schemaLoader, getUser }) {
       }
       // Per-transition tail (matches REST PUT). Audit row,
       // dedicated event, optional onEnter — all best-effort.
+      // The `updated` event also fires once for the operation as a
+      // whole (matches both the REST PUT contract and the
+      // standalone GraphQL transition mutation).
+      if (transitions.length) {
+        emitRecordEvent({
+          type: `${path}.updated`,
+          version: s.version,
+          userId: user.user_id,
+          recordId: String(args.id),
+        });
+      }
       for (const t of transitions) {
         if (auditEnabled) {
           try {
@@ -496,11 +515,17 @@ function registerSchemaTools(server, entry, { schemaLoader, getUser }) {
         });
         const hook = (t.field.stateMachine.onEnter || {})[t.next];
         if (typeof hook === 'function') {
-          try { await hook(fresh, { user, from: t.current, to: t.next }); }
-          catch (_) { /* best-effort */ }
+          try {
+            await hook(fresh, { user, from: t.current, to: t.next });
+          } catch (err) {
+            logger.warn(
+              { err, field: t.field.name, to: t.next },
+              'state-machine onEnter hook threw; transition committed anyway'
+            );
+          }
         }
       }
-      attachAvailableTransitions([fresh], s);
+      attachAvailableTransitions([fresh], s, user);
       return projectByAcl(fresh, s, user);
     })
   ));

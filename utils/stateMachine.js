@@ -40,6 +40,8 @@
  * everything is per-field, not per-schema.
  */
 
+const { canReadField } = require('./acl');
+
 const isStateMachineField = (f) =>
   Boolean(
     f &&
@@ -138,13 +140,24 @@ const availableTransitionsKey = (fieldName) =>
 /**
  * Mutate `records` to attach `<field>AvailableTransitions` per
  * state-machine field. No-op when the schema has no state machines.
+ *
+ * The virtual is derived from the underlying state value, so a
+ * caller who can't read the state field shouldn't see it indirectly
+ * via available transitions. When `user` is supplied, fields that
+ * fail `canReadField(field, user)` are skipped — same enforcement
+ * shape as `projectByAcl` for stored fields.
  */
-function attachAvailableTransitions(records, schema) {
+function attachAvailableTransitions(records, schema, user) {
+  if (!Array.isArray(records) || records.length === 0) return records;
   const sms = stateMachineFieldsOf(schema);
-  if (!sms.length || !Array.isArray(records) || records.length === 0) return records;
+  if (!sms.length) return records;
+  const visibleFields = user
+    ? sms.filter((f) => canReadField(f, user))
+    : sms;
+  if (!visibleFields.length) return records;
   for (const r of records) {
     if (!r) continue;
-    for (const f of sms) {
+    for (const f of visibleFields) {
       r[availableTransitionsKey(f.name)] = computeAvailableTransitions(
         f,
         r[f.name]
