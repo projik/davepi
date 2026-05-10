@@ -333,6 +333,61 @@ app.get('/api-docs/swagger.json', (req, res) => {
 });
 app.use('/api-docs', swaggerUI.serve, swaggerUI.setup(apiSpec));
 
+// Model Context Protocol endpoint. Per-request stateless transport:
+// each call builds a fresh McpServer bound to the JWT user and a
+// fresh StreamableHTTPServerTransport. The MCP SDK's transport
+// converts JSON-RPC over POST into tool calls; we don't need session
+// state because every tool resolves entirely from the schema
+// registry + Mongo.
+//
+// Auth: standard Bearer token via the same auth(true) middleware as
+// the rest of the API. The mcpServer's `getUser` callback returns
+// req.user so every tool call sees the authenticated identity.
+const { buildMcpServer } = require('./utils/mcpServer');
+const {
+  StreamableHTTPServerTransport,
+} = require('@modelcontextprotocol/sdk/server/streamableHttp.js');
+const { MethodNotAllowedError } = require('./utils/errors');
+const mcpAuth = require('./middleware/auth')(true);
+app.post('/mcp', mcpAuth, asyncHandler(async (req, res) => {
+  const server = buildMcpServer({
+    schemaLoader,
+    getUser: () => req.user,
+    name: appName,
+  });
+  const transport = new StreamableHTTPServerTransport({
+    sessionIdGenerator: undefined, // stateless
+  });
+  // Best-effort early teardown if the client disconnects mid-request.
+  // The deterministic cleanup in finally below covers the happy path
+  // and keep-alive connections that don't fire 'close' immediately.
+  res.on('close', () => {
+    transport.close().catch(() => {});
+    server.close().catch(() => {});
+  });
+  try {
+    await server.connect(transport);
+    await transport.handleRequest(req, res, req.body);
+  } finally {
+    await transport.close().catch(() => {});
+    await server.close().catch(() => {});
+  }
+}));
+// MCP also uses GET for the SSE notification stream and DELETE for
+// session termination — answer 405 in stateless mode rather than
+// letting the request hang. Auth still applies (custom REST routes
+// must protect their surface). Errors flow through the centralised
+// errorHandler instead of inline res.status().json so the response
+// shape stays consistent with the rest of the API.
+const respondMethodNotAllowed = (msg) => (req, res, next) =>
+  next(new MethodNotAllowedError(msg));
+app.get('/mcp', mcpAuth, respondMethodNotAllowed(
+  'GET /mcp is not supported in stateless mode; use POST.'
+));
+app.delete('/mcp', mcpAuth, respondMethodNotAllowed(
+  'DELETE /mcp is not supported in stateless mode.'
+));
+
 // Compact, machine-readable capability manifest. Intentionally a flat
 // projection of the live schema registry — agents land here first to
 // learn the API surface (every resource's fields, relations,

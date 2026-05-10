@@ -38,6 +38,12 @@ class ForbiddenError extends AppError {
   }
 }
 
+class MethodNotAllowedError extends AppError {
+  constructor(message = 'Method not allowed') {
+    super(message, 405, 'METHOD_NOT_ALLOWED');
+  }
+}
+
 module.exports = {
   AppError,
   NotFoundError,
@@ -45,4 +51,5 @@ module.exports = {
   ConflictError,
   UnauthorizedError,
   ForbiddenError,
+  MethodNotAllowedError,
 };
