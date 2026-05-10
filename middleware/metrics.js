@@ -30,6 +30,8 @@
 
 'use strict';
 
+const { NotFoundError, UnauthorizedError } = require('../utils/errors');
+
 let promClient = null;
 let registry = null;
 let httpRequestsTotal = null;
@@ -97,15 +99,20 @@ function metricsMiddleware(req, res, next) {
 }
 
 /**
- * Handler for `GET /_metrics`. Returns 404 when metrics are disabled;
- * 401 when `METRICS_TOKEN` is set and the caller doesn't supply it.
+ * Handler for `GET /_metrics`. Throws typed errors (NotFoundError,
+ * UnauthorizedError) so responses flow through the centralised
+ * `errorHandler` and match the framework-wide `{ error: { code,
+ * message } }` envelope.
+ *
+ *   - 404 NOT_FOUND when metrics are disabled.
+ *   - 401 UNAUTHORIZED when `METRICS_TOKEN` is set and the caller
+ *     doesn't present a matching Bearer token.
+ *
  * Otherwise responds with the Prometheus text exposition format.
  */
 async function metricsHandler(req, res) {
   if (!isEnabled()) {
-    return res.status(404).json({
-      error: { code: 'NOT_FOUND', message: 'Metrics endpoint not enabled.' },
-    });
+    throw new NotFoundError('Metrics endpoint');
   }
   if (!initialized) initMetrics();
 
@@ -116,9 +123,7 @@ async function metricsHandler(req, res) {
       ? header.slice('Bearer '.length)
       : null;
     if (presented !== expectedToken) {
-      return res.status(401).json({
-        error: { code: 'UNAUTHORIZED', message: 'Invalid or missing metrics token.' },
-      });
+      throw new UnauthorizedError('Invalid or missing metrics token.');
     }
   }
 
