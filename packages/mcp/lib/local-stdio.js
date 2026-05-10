@@ -44,6 +44,17 @@ function runLocalStdio({ schemas } = {}) {
   // DAVEPI_SCHEMAS, propagate it.
   if (schemas) env.DAVEPI_SCHEMAS = schemas;
 
+  // The returned Promise represents the child's lifecycle:
+  //   - rejects on spawn error (ENOENT, EACCES, ...) so the bin's
+  //     `main().catch()` prints + exits 1.
+  //   - resolves when the child exits normally (the bin then exits
+  //     0). On non-zero exit or signal, we mirror that by exiting
+  //     this process directly — bin shouldn't proceed after the
+  //     subprocess has died.
+  // The previous design called `resolve()` immediately, which
+  // meant any spawn error fired AFTER the bin had already
+  // considered the work done — so `npx -y @davepi/mcp` could exit
+  // 0 even when davepi wasn't installed.
   return new Promise((resolve, reject) => {
     const child = spawn(bin, ['mcp'], {
       stdio: 'inherit',
@@ -53,6 +64,18 @@ function runLocalStdio({ schemas } = {}) {
       shell: process.platform === 'win32',
     });
 
+    let settled = false;
+    const settleReject = (err) => {
+      if (settled) return;
+      settled = true;
+      reject(err);
+    };
+    const settleResolve = () => {
+      if (settled) return;
+      settled = true;
+      resolve();
+    };
+
     child.on('error', (err) => {
       if (err.code === 'ENOENT') {
         process.stderr.write(
@@ -60,20 +83,26 @@ function runLocalStdio({ schemas } = {}) {
           'Install dAvePi in this project (`npm install davepi`) ' +
           'and try again, or set DAVEPI_URL to use HTTP-proxy mode.\n'
         );
-        reject(err);
-        return;
       }
-      reject(err);
+      settleReject(err);
     });
 
     child.on('exit', (code, signal) => {
       if (signal) {
+        // Re-raise the signal in this process so a parent
+        // supervisor sees the real cause of death.
         process.kill(process.pid, signal);
         return;
       }
-      // Mirror the child's exit code so CI / supervisors see the
-      // real outcome.
-      process.exit(code ?? 0);
+      if (code === 0) {
+        settleResolve();
+        return;
+      }
+      // Non-zero exit — mirror the code so CI / supervisors see
+      // the real outcome. We exit directly because resolving with
+      // a non-zero code wouldn't propagate; the bin doesn't
+      // distinguish between "child failed" and "wrapper failed".
+      process.exit(code ?? 1);
     });
 
     // Forward signals to the child so Ctrl-C from the agent cleanly
@@ -83,8 +112,6 @@ function runLocalStdio({ schemas } = {}) {
     };
     process.on('SIGINT', forward('SIGINT'));
     process.on('SIGTERM', forward('SIGTERM'));
-
-    resolve();
   });
 }
 

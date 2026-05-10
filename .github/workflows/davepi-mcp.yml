@@ -48,7 +48,18 @@ jobs:
           # bin entry has silently regressed.
           echo "$out" | grep -q "HTTP-proxy mode" || (echo "Missing HTTP-proxy section in --help"; exit 1)
           echo "$out" | grep -q "Local-stdio mode" || (echo "Missing Local-stdio section in --help"; exit 1)
-      - name: npm pack succeeds (proves the published tarball would install)
+      - name: npx smoke test (against packed tarball, simulating the published flow)
         run: |
           set -e
-          npm pack --dry-run --silent
+          # Build the tarball that would actually be published, then
+          # invoke it via `npx -y <tarball>`. This exercises the
+          # `bin` field, the package's `files` whitelist, the shebang,
+          # and the npm cache resolution path — exactly what a user
+          # running `npx -y @davepi/mcp` hits, just without going
+          # through the real registry. If any of those pieces is
+          # broken, --help would never print.
+          tarball=$(npm pack --silent)
+          out=$(npx -y "./$tarball" --help 2>&1)
+          echo "$out"
+          echo "$out" | grep -q "HTTP-proxy mode" || (echo "npx -y did not run the bin's --help"; exit 1)
+          rm -f "$tarball"

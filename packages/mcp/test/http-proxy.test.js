@@ -156,6 +156,41 @@ test('strips trailing slashes from DAVEPI_URL when constructing the /mcp path', 
   }
 });
 
+test('aborts a stalled upstream within DAVEPI_HTTP_TIMEOUT_MS and returns a JSON-RPC error', async () => {
+  // Stub server that accepts the connection but never writes a
+  // response — exactly the failure mode the timeout is there to
+  // guard against.
+  let opened;
+  const { url, server } = await startStubServer((req, res, body) => {
+    // Hold the response open. The proxy's AbortController should
+    // fire and close us out.
+    opened = res;
+  });
+  process.env.DAVEPI_HTTP_TIMEOUT_MS = '150';
+  try {
+    const start = Date.now();
+    const response = await forwardOne(
+      JSON.stringify({ jsonrpc: '2.0', id: 5, method: 'tools/list' }),
+      { url, token: 'tok' }
+    );
+    const elapsed = Date.now() - start;
+    const parsed = JSON.parse(response);
+    assert.equal(parsed.id, 5);
+    assert.equal(parsed.error.code, -32000);
+    assert.match(parsed.error.message, /timed out/);
+    assert.equal(parsed.error.data.timeoutMs, 150);
+    // The whole call must finish within a small window above the
+    // timeout — if it ran to fetch's ~5 minute default, the test
+    // would hang. Generous upper bound to avoid flakes on a busy
+    // CI runner.
+    assert.ok(elapsed < 2000, `expected <2000ms, got ${elapsed}ms`);
+  } finally {
+    delete process.env.DAVEPI_HTTP_TIMEOUT_MS;
+    try { opened?.end(); } catch { /* already closed */ }
+    server.close();
+  }
+});
+
 test('decodes an SSE response from the upstream into the inner JSON-RPC payload', async () => {
   // The MCP SDK on the server side sends Content-Type:
   // text/event-stream and frames responses as `event: message\ndata:
