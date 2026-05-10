@@ -24,14 +24,22 @@ The CLI verifies the token at startup using `TOKEN_KEY` (the same secret that si
 
 ## Tools generated per schema
 
-| Tool | Description |
-|------|-------------|
-| `list_<path>` | Paginated list, with optional `filter` (mongo-style), `sort`, `q` (full-text), `include` (relations), and `includeDeleted`. |
-| `get_<path>` | Fetch one record by `_id`. Accepts the same `include` set as the list tool. |
-| `create_<path>` | Create a record. `userId` and `accountId` are stamped from the JWT — never accepted from the caller. |
-| `update_<path>` | Partial update by `_id`. Field-level ACL filters non-writable fields out of the payload. |
-| `delete_<path>` | Soft-delete (or hard-delete on schemas with `softDelete: false`). |
-| `aggregate_<path>_<name>` | One per declared aggregation. Params surface with their declared types; the framework prepends `$match: { userId }` automatically. |
+| Tool | When | Description |
+|------|------|-------------|
+| `list_<path>` | always | Paginated list, with optional `filter` (mongo-style), `sort`, `q` (full-text), `include` (relations), and `includeDeleted`. |
+| `get_<path>` | always | Fetch one record by `_id`. Accepts the same `include` set as the list tool. |
+| `create_<path>` | always | Create a record. `userId` / `accountId` stamped from the JWT — never accepted from the caller. |
+| `update_<path>` | always | Partial update by `_id`. Field-level ACL filters non-writable fields out of the payload; `userId`/`accountId` are stripped from the wire so a caller can't reassign ownership. |
+| `delete_<path>` | always | Soft-delete (or hard-delete on schemas with `softDelete: false`). |
+| `restore_<path>` | `softDelete` enabled (default) | Clear the `deletedAt` tombstone so the record becomes readable again. |
+| `history_<path>` | `audit` enabled (default) | Returns the audit log for a record — `create` / `update` / `delete` / `restore` actions, newest first. Field-level read-ACL applied to before/after/diff. |
+| `search_<path>` | any field has `searchable: true` | Full-text search across the framework-owned text index. Equivalent to `list_<path>` with `sort=score:desc`. |
+| `list_<path>_<rel>` | per `hasMany` relation | Returns the relation's children for a parent `_id` in a single batched query. |
+| `get_<path>_<rel>` | per `hasOne` / `belongsTo` relation | Returns the populated relation (or null) for a parent `_id`. |
+| `upload_<path>_<field>` | per `type: 'File'` field | Upload a base64-encoded blob. Validates against the field's `maxBytes` and `accept`. |
+| `fetch_<path>_<field>` | per `type: 'File'` field | Returns the public or short-lived signed URL plus the file metadata. |
+| `delete_<path>_<field>` | per `type: 'File'` field | Removes the blob and clears the metadata sub-doc. |
+| `aggregate_<path>_<name>` | per declared aggregation | Params surface with their declared types; the framework prepends `$match: { userId }` automatically. |
 
 Every tool result is JSON: a record (or list response) on success; `{ isError: true, content: [{ type: 'text', text: { error: { code, message } } }] }` on a typed failure (`VALIDATION`, `NOT_FOUND`, `UNAUTHORIZED`, `FORBIDDEN`, `DUPLICATE`, etc.). Unknown errors propagate and the SDK wraps them as internal — same posture as the REST `Internal server error` reduction in production.
 
@@ -95,9 +103,12 @@ node -e '
 
 Treat that token like any other API credential — it grants the full tool surface as that user.
 
-## Hot-reload caveat
+## Hot-reload
 
-The schema watcher refreshes REST and GraphQL on the fly, but the **stdio MCP server snapshots the tool list at boot**. After a schema change, restart the MCP process. The HTTP transport does not have this caveat: each `POST /mcp` request builds a fresh server from the current registry.
+Both transports respond to schema changes live:
+
+- **HTTP**: each `POST /mcp` builds a fresh server from the current registry.
+- **stdio**: subscribes to `schemaLoader.onChange` and rebuilds the tool list on the existing connection. The SDK emits a `notifications/tools/list_changed` notification so the connected client (Claude Desktop, etc.) refreshes its tool registry without reconnecting.
 
 ## Worked example
 

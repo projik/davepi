@@ -167,6 +167,10 @@ async function main() {
       schemaLoader: app.locals.schemaLoader,
       getUser: () => user,
       name: process.env.APP_NAME || 'davepi',
+      // stdio is long-lived — refresh tools when the schema watcher
+      // reloads so connected clients see new resources without
+      // restarting the process.
+      liveReload: true,
     });
     const transport = new StdioServerTransport();
     await server.connect(transport);

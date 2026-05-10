@@ -78,6 +78,17 @@ function createSchemaLoader({ app, apiSpec, setApolloRouter, buildGraphqlContext
   // key = `${version}/${path}`
   const registry = new Map();
 
+  // Long-lived consumers (the stdio MCP server, future inspectors)
+  // subscribe via `onChange` and get notified whenever the registry
+  // changes. The HTTP MCP path doesn't use this — it constructs a
+  // fresh server per request and reads the live registry.
+  const changeListeners = new Set();
+  const notifyChange = () => {
+    for (const fn of changeListeners) {
+      try { fn(); } catch (err) { logger.warn({ err }, 'schema change listener threw'); }
+    }
+  };
+
   /**
    * Resolve a relation target's path back to its `{ schema, model }`
    * pair. Used by the `__include` path in REST handlers and the
@@ -1432,6 +1443,7 @@ function createSchemaLoader({ app, apiSpec, setApolloRouter, buildGraphqlContext
       await rebuildGraphQL();
     }
     logger.info({ schema: key }, 'schema loaded');
+    notifyChange();
     return key;
   }
 
@@ -1461,6 +1473,7 @@ function createSchemaLoader({ app, apiSpec, setApolloRouter, buildGraphqlContext
       await rebuildGraphQL();
     }
     logger.info({ schema: key }, 'schema unloaded');
+    notifyChange();
     return true;
   }
 
@@ -1480,11 +1493,23 @@ function createSchemaLoader({ app, apiSpec, setApolloRouter, buildGraphqlContext
     return registry.get(key) || null;
   }
 
+  /**
+   * Subscribe to registry change notifications. Returns an
+   * unsubscribe function. Used by the long-lived stdio MCP server to
+   * refresh its tool list whenever a schema is loaded or unloaded.
+   */
+  function onChange(fn) {
+    if (typeof fn !== 'function') return () => {};
+    changeListeners.add(fn);
+    return () => changeListeners.delete(fn);
+  }
+
   return {
     loadSchema,
     unloadSchema,
     listSchemas,
     getEntry,
+    onChange,
     rebuildGraphQL: rebuildGraphQLQueued,
     // Expose runAggregation so adjacent surfaces (MCP server, custom
     // routes added after the schemas.forEach loop) can call into the

@@ -347,6 +347,7 @@ const { buildMcpServer } = require('./utils/mcpServer');
 const {
   StreamableHTTPServerTransport,
 } = require('@modelcontextprotocol/sdk/server/streamableHttp.js');
+const { MethodNotAllowedError } = require('./utils/errors');
 const mcpAuth = require('./middleware/auth')(true);
 app.post('/mcp', mcpAuth, asyncHandler(async (req, res) => {
   const server = buildMcpServer({
@@ -357,25 +358,35 @@ app.post('/mcp', mcpAuth, asyncHandler(async (req, res) => {
   const transport = new StreamableHTTPServerTransport({
     sessionIdGenerator: undefined, // stateless
   });
-  // Tear down both ends if the client disconnects mid-request — the
-  // SDK doesn't auto-close the McpServer when the transport closes.
+  // Best-effort early teardown if the client disconnects mid-request.
+  // The deterministic cleanup in finally below covers the happy path
+  // and keep-alive connections that don't fire 'close' immediately.
   res.on('close', () => {
     transport.close().catch(() => {});
     server.close().catch(() => {});
   });
-  await server.connect(transport);
-  await transport.handleRequest(req, res, req.body);
+  try {
+    await server.connect(transport);
+    await transport.handleRequest(req, res, req.body);
+  } finally {
+    await transport.close().catch(() => {});
+    await server.close().catch(() => {});
+  }
 }));
 // MCP also uses GET for the SSE notification stream and DELETE for
-// session termination — answer 405 for stateless deployments rather
-// than letting the request hang. Streamable HTTP clients fall back
-// to plain POST when GET/DELETE aren't supported.
-app.get('/mcp', (req, res) =>
-  res.status(405).json({ error: { code: 'METHOD_NOT_ALLOWED', message: 'GET /mcp is not supported in stateless mode; use POST.' } })
-);
-app.delete('/mcp', (req, res) =>
-  res.status(405).json({ error: { code: 'METHOD_NOT_ALLOWED', message: 'DELETE /mcp is not supported in stateless mode.' } })
-);
+// session termination — answer 405 in stateless mode rather than
+// letting the request hang. Auth still applies (custom REST routes
+// must protect their surface). Errors flow through the centralised
+// errorHandler instead of inline res.status().json so the response
+// shape stays consistent with the rest of the API.
+const respondMethodNotAllowed = (msg) => (req, res, next) =>
+  next(new MethodNotAllowedError(msg));
+app.get('/mcp', mcpAuth, respondMethodNotAllowed(
+  'GET /mcp is not supported in stateless mode; use POST.'
+));
+app.delete('/mcp', mcpAuth, respondMethodNotAllowed(
+  'DELETE /mcp is not supported in stateless mode.'
+));
 
 // Compact, machine-readable capability manifest. Intentionally a flat
 // projection of the live schema registry — agents land here first to
