@@ -166,6 +166,33 @@ describe('describeManifest: pure helpers', () => {
       expect(f.default).toBe('[fn]');
     });
 
+    test('only attaches `file` block when type is "File" (strict, matches framework detection)', () => {
+      const loader = stubLoader({
+        'v1/widget': {
+          schema: {
+            path: 'widget',
+            collection: 'widget',
+            version: 'v1',
+            fields: [
+              { name: 'realFile', type: 'File', file: { access: 'private' } },
+              // A stray `file: {}` block on a non-File field — the
+              // framework ignores it for routing, so the manifest
+              // must too.
+              { name: 'spurious', type: String, file: { access: 'public' } },
+            ],
+          },
+        },
+      });
+      const w = buildManifest({ schemaLoader: loader }).schemas['v1/widget'];
+      const real = w.fields.find((f) => f.name === 'realFile');
+      const spurious = w.fields.find((f) => f.name === 'spurious');
+      expect(real.file).toBeDefined();
+      expect(real.file.access).toBe('private');
+      expect(spurious.file).toBeUndefined();
+      // And the top-level fileFields list also strictly matches.
+      expect(w.fileFields.map((f) => f.name)).toEqual(['realFile']);
+    });
+
     test('drops aggregations without a pipeline array (matches loader mount predicate)', () => {
       const loader = stubLoader({
         'v1/widget': {

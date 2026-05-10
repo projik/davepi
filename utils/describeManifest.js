@@ -81,7 +81,11 @@ function describeFields(schema) {
       if (Array.isArray(f.acl.create)) entry.acl.create = f.acl.create;
       if (Array.isArray(f.acl.update)) entry.acl.update = f.acl.update;
     }
-    if (f.type === 'File' || (f.file && typeof f.file === 'object')) {
+    // File metadata only attaches when the field is actually a file
+    // field — `type: 'File'` is the framework's sole detection
+    // criterion, so the manifest mirrors it strictly. A stray
+    // `file: { ... }` block on a non-file field is ignored here.
+    if (f.type === 'File') {
       entry.file = {};
       const cfg = f.file || {};
       if (cfg.maxBytes != null) entry.file.maxBytes = cfg.maxBytes;
