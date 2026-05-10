@@ -238,10 +238,16 @@ async function scaffold({ name, template, install, davepiVersion, port }) {
     ].join('\n')
   );
 
-  // 5. .gitignore
+  // 5. .gitignore — note `client/davepi.ts` is NOT listed here. The
+  // generated TS client is a committed artifact so the
+  // `client-gen.yml` drift workflow has something to diff against,
+  // and downstream consumers can vendor it as part of the project.
+  // The file doesn't exist until the user runs `npm run gen-client`,
+  // which is fine — `git diff --exit-code` against a non-existent
+  // file fails cleanly.
   fs.writeFileSync(
     path.join(target, '.gitignore'),
-    ['node_modules', '.env', 'uploads', 'client/davepi.ts', ''].join('\n')
+    ['node_modules', '.env', 'uploads', ''].join('\n')
   );
 
   // 6. .mcp.json — Claude Code wiring out of the box.

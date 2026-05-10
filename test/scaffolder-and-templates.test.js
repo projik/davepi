@@ -149,9 +149,20 @@ describe('create-davepi-app: scaffolder', () => {
       expect(test).toMatch(/node-version:\s*\['20\.x',\s*'22\.x'\]/);
       expect(test).toMatch(/mongo:7/);
 
-      // client-gen.yml: runs gen-client AND fails on diff.
+      // client-gen.yml: runs gen-client AND fails on diff. The
+      // `--intent-to-add` step is what makes the drift check work
+      // against an untracked / never-committed file — without it,
+      // a project that hasn't generated the client yet would
+      // silently pass the workflow.
       expect(drift).toMatch(/davepi gen-client/);
+      expect(drift).toMatch(/git add --intent-to-add client\/davepi\.ts/);
       expect(drift).toMatch(/git diff --exit-code/);
+
+      // .gitignore must NOT exclude the generated client — the file
+      // is meant to be committed so the drift workflow has a
+      // baseline to diff against.
+      const gitignore = fs.readFileSync(path.join(root, '.gitignore'), 'utf8');
+      expect(gitignore).not.toMatch(/client\/davepi\.ts/);
 
       // migrate.yml: two-stage with environment gate on `apply`.
       expect(migrate).toMatch(/davepi migrate --dry/);

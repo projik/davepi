@@ -51,9 +51,15 @@ jobs:
       - run: npm ci
       - name: Regenerate the typed client
         run: npx davepi gen-client --out client/davepi.ts
-      - name: Fail if the committed client is stale
+      - name: Fail if the committed client is stale or missing
         run: |
-          if ! git diff --exit-code client/davepi.ts; then
-            echo "::error::client/davepi.ts is out of date. Run \`npm run gen-client\` locally and commit the result."
+          # Mark untracked files as intent-to-add so they show up in
+          # `git diff`. Without this, a never-committed (or
+          # accidentally gitignored) client/davepi.ts would silently
+          # pass the drift check — defeating the whole point of the
+          # workflow.
+          git add --intent-to-add client/davepi.ts 2>/dev/null || true
+          if ! git diff --exit-code -- client/davepi.ts; then
+            echo "::error::client/davepi.ts is out of date or not committed. Run \`npm run gen-client\` locally and commit the result."
             exit 1
           fi
