@@ -333,6 +333,29 @@ app.get('/api-docs/swagger.json', (req, res) => {
 });
 app.use('/api-docs', swaggerUI.serve, swaggerUI.setup(apiSpec));
 
+// Compact, machine-readable capability manifest. Intentionally a flat
+// projection of the live schema registry — agents land here first to
+// learn the API surface (every resource's fields, relations,
+// aggregations, file fields, ACL slots, soft-delete / audit / search
+// flags) without ingesting the much larger swagger.json.
+//
+// Public by default. Set `DESCRIBE_REQUIRES_AUTH=true` to gate the
+// endpoint behind a valid JWT — the manifest only exposes API
+// surface, not data, so the default is permissive.
+const { buildManifest } = require('./utils/describeManifest');
+const describeAuthMiddleware = require('./middleware/auth')(true);
+app.get('/_describe', (req, res, next) => {
+  const requiresAuth =
+    String(process.env.DESCRIBE_REQUIRES_AUTH || '').toLowerCase() === 'true';
+  const respond = () =>
+    res.status(200).json(buildManifest({ schemaLoader, appName }));
+  if (!requiresAuth) return respond();
+  describeAuthMiddleware(req, res, (err) => {
+    if (err) return next(err);
+    respond();
+  });
+});
+
 // Admin SPA — built artifacts live under admin/dist/. Only mounted
 // when the build exists so a fresh clone without `npm run build:admin`
 // boots cleanly and just returns 404 for /admin/*. The SPA uses
