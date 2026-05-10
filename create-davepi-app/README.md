@@ -17,6 +17,7 @@ npx create-davepi-app my-blog --template content
 | `crm` | Accounts / contacts / deals (state machine) / activities. Showcases relations, computed fields, file uploads, aggregations. |
 | `ticketing` | Tickets with two state machines (status + priority) plus comments. Showcases ACL on a comment field. |
 | `content` | Blog / CMS skeleton: articles (editorial workflow), categories, hero image uploads, computed slugs. |
+| `b2b-saas` | Multi-tenant SaaS skeleton: orgs / workspaces / invites (state machine) / billing-event ledger with monthly aggregations. |
 
 ## What's scaffolded
 

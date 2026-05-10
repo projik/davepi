@@ -7,7 +7,7 @@ A help-desk skeleton with **two state machines on one schema** (status + priorit
 | Resource | Purpose |
 |----------|---------|
 | `ticket` | The work item. `status` flows `open → in_progress → resolved → closed` (with reopen). `priority` flows `low ↔ normal ↔ high ↔ urgent` (no skipping levels). |
-| `comment` | Replies on a ticket. `internal: true` carries an ACL so customers don't see staff-only notes. |
+| `comment` | Replies on a ticket. `internal` is a flag gated by field-level ACL (`read: ['staff','admin']`) — non-staff callers don't see the flag. Note: this hides the **flag**, not the comment body. To make staff-only notes truly invisible to customers (no body, no metadata), model them as a separate resource so they never appear in `list` queries. |
 
 ## Aggregations
 

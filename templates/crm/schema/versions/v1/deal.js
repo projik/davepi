@@ -47,8 +47,13 @@ module.exports = {
     {
       name: 'wonByMonth',
       description: 'Sum of won-deal amounts grouped by close month.',
+      // `closedAt` is optional, so $year/$month would throw on rows
+      // where the field is null or missing. The $type filter keeps
+      // only documents whose closedAt is actually a Date — anything
+      // else (null, missing, accidental string) is excluded before
+      // it reaches the date operators.
       pipeline: [
-        { $match: { stage: 'won', closedAt: { $ne: null } } },
+        { $match: { stage: 'won', closedAt: { $type: 'date' } } },
         {
           $group: {
             _id: {
