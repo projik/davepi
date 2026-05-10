@@ -466,6 +466,7 @@ makes the same decisions you would.
 ## Useful commands
 
 - `npm start` — boot the server (dev, hot-reload).
+- `npm test` — run the schema-shape smoke tests under `tests/`. Add your own integration tests alongside.
 - `npm run seed` — register a demo user and POST sample records (template-dependent).
 - `npx davepi gen-client --out client/davepi.ts` — regenerate the typed TS client.
 - `npx davepi migrate up` — apply pending data migrations.

@@ -65,7 +65,8 @@
     "testPathIgnorePatterns": [
       "/node_modules/",
       "/admin/",
-      "/packages/"
+      "/packages/",
+      "/templates/"
     ]
   },
   "repository": {

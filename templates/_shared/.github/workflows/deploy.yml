@@ -1,0 +1,64 @@
+name: Deploy
+
+# Deploys the app on push to main. This template targets Fly.io
+# because it's the simplest "node app with Mongo Atlas" deploy and
+# the `superfly/flyctl-actions` action handles the auth, build, and
+# release in two steps.
+#
+# Pick whichever target matches your hosting and replace this whole
+# file. Starter snippets for the common alternatives are in the
+# `# Alternates:` comment block below.
+#
+# Required setup (Fly.io):
+#   1. fly launch                       — once locally, commits a
+#                                          fly.toml at the repo root.
+#   2. fly secrets set MONGO_URI=... TOKEN_KEY=...
+#   3. Generate an API token:           fly auth token
+#   4. Add it as the FLY_API_TOKEN repo secret.
+#
+# Alternates (delete this comment and replace the job below):
+#
+#   Render
+#     uses: johnbeynon/render-deploy-action@v0.0.8
+#     with:
+#       service-id: ${{ secrets.RENDER_SERVICE_ID }}
+#       api-key:    ${{ secrets.RENDER_API_KEY }}
+#
+#   Railway
+#     run: npx @railway/cli@latest up
+#     env:
+#       RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+#
+#   Docker Hub (build + push, deploy separately)
+#     uses: docker/build-push-action@v6
+#     with:
+#       push: true
+#       tags: yourdockeruser/yourapp:${{ github.sha }}
+#
+# See https://docs.davepi.dev/operations/deployment/ for the full
+# per-target guides.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    # Gate behind a GitHub Environment so a required-reviewers
+    # rule can hold deploys at a manual approval step. Without
+    # this, every push to main goes straight to production.
+    environment: production
+    concurrency:
+      group: deploy-production
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+      - uses: superfly/flyctl-actions/setup-flyctl@master
+      - run: flyctl deploy --remote-only
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}

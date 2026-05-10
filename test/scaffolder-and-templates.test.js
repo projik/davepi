@@ -30,6 +30,11 @@ describe('create-davepi-app: scaffolder', () => {
         'package.json', '.env', '.gitignore', '.mcp.json',
         'agent.md', '.cursorrules', 'AGENTS.md',
         '.claude/skills/davepi/SKILL.md',
+        '.github/workflows/test.yml',
+        '.github/workflows/client-gen.yml',
+        '.github/workflows/migrate.yml',
+        '.github/workflows/deploy.yml',
+        'tests/smoke.test.js',
         'docker-compose.yml',
         'index.js', 'README.md', 'TEMPLATE.md', 'seed.js',
         'schema/versions/v1/note.js',
@@ -121,6 +126,74 @@ describe('create-davepi-app: scaffolder', () => {
       expect(skill).toMatch(/_describe/);
     } finally {
       cleanup('demo-agent');
+    }
+  });
+
+  test('CI workflow templates ship with the right shape', async () => {
+    await scaffold({
+      name: 'demo-ci',
+      template: 'blank',
+      install: false,
+      davepiVersion: 'latest',
+      port: 5599,
+    });
+    try {
+      const root = path.resolve('demo-ci');
+      const test = fs.readFileSync(path.join(root, '.github/workflows/test.yml'), 'utf8');
+      const drift = fs.readFileSync(path.join(root, '.github/workflows/client-gen.yml'), 'utf8');
+      const migrate = fs.readFileSync(path.join(root, '.github/workflows/migrate.yml'), 'utf8');
+      const deploy = fs.readFileSync(path.join(root, '.github/workflows/deploy.yml'), 'utf8');
+
+      // test.yml: matrix over the two supported Node versions and a
+      // Mongo service container.
+      expect(test).toMatch(/node-version:\s*\['20\.x',\s*'22\.x'\]/);
+      expect(test).toMatch(/mongo:7/);
+
+      // client-gen.yml: runs gen-client AND fails on diff.
+      expect(drift).toMatch(/davepi gen-client/);
+      expect(drift).toMatch(/git diff --exit-code/);
+
+      // migrate.yml: two-stage with environment gate on `apply`.
+      expect(migrate).toMatch(/davepi migrate --dry/);
+      expect(migrate).toMatch(/environment:\s*migrate-prod/);
+
+      // deploy.yml: gated behind a `production` environment.
+      expect(deploy).toMatch(/environment:\s*production/);
+    } finally {
+      cleanup('demo-ci');
+    }
+  });
+
+  test('smoke test from _shared/tests runs cleanly on a scaffolded project', async () => {
+    await scaffold({
+      name: 'demo-smoke',
+      template: 'crm',
+      install: false,
+      davepiVersion: 'latest',
+      port: 5598,
+    });
+    try {
+      const root = path.resolve('demo-smoke');
+      const { spawnSync } = require('child_process');
+      const result = spawnSync(
+        process.execPath,
+        ['--test', 'tests/smoke.test.js'],
+        { cwd: root, encoding: 'utf8' }
+      );
+      // Print stderr on failure so a CI run shows the actual node:test
+      // output instead of just the exit code.
+      if (result.status !== 0) {
+        // eslint-disable-next-line no-console
+        console.error('smoke test stderr:', result.stderr);
+        console.error('smoke test stdout:', result.stdout);
+      }
+      expect(result.status).toBe(0);
+      // Sanity: the CRM template has multiple schemas, so we should
+      // see several "ok" assertions for the per-schema checks.
+      const okCount = (result.stdout.match(/^ok /gm) || []).length;
+      expect(okCount).toBeGreaterThan(3);
+    } finally {
+      cleanup('demo-smoke');
     }
   });
 

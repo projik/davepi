@@ -1,0 +1,49 @@
+name: Test
+
+# Runs `npm test` on every push to main and on every pull request.
+# Matrix-tests against the two Node versions dAvePi officially
+# supports: 20.x (current LTS) and 22.x (active LTS).
+#
+# A MongoDB service container is provided because most non-trivial
+# tests boot the framework, which connects to Mongo on startup. If
+# your project's tests don't need Mongo, you can drop the service.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node-version: ['20.x', '22.x']
+    services:
+      mongo:
+        image: mongo:7
+        ports:
+          - 27017:27017
+        options: >-
+          --health-cmd "mongosh --quiet --eval 'db.adminCommand({ ping: 1 }).ok'"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      MONGO_URI: mongodb://127.0.0.1:27017/test
+      TOKEN_KEY: ci-only-not-a-real-secret
+      NODE_ENV: test
+      PAGE_SIZE: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: npm
+      - run: npm ci
+      - run: npm test
