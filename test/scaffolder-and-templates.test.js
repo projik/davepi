@@ -203,12 +203,17 @@ describe('create-davepi-app: scaffolder', () => {
         ['--test', 'tests/smoke.test.js'],
         { cwd: root, encoding: 'utf8' }
       );
-      // Print stderr on failure so a CI run shows the actual node:test
-      // output instead of just the exit code.
       if (result.status !== 0) {
-        // eslint-disable-next-line no-console
-        console.error('smoke test stderr:', result.stderr);
-        console.error('smoke test stdout:', result.stdout);
+        // Throw with stdout / stderr in the message so Jest's
+        // reporter prints the underlying node:test output. Using
+        // `throw` rather than `console.*` matches the project's
+        // "no console" rule (CLAUDE.md) and keeps the diagnostic
+        // attached to the failing assertion, not a stray log line.
+        throw new Error(
+          `smoke test exited with status ${result.status}\n` +
+          `--- stdout ---\n${result.stdout}\n` +
+          `--- stderr ---\n${result.stderr}`
+        );
       }
       expect(result.status).toBe(0);
       // Sanity: the CRM template has multiple schemas, so we should
