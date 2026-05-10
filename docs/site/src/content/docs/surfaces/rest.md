@@ -18,7 +18,6 @@ The shape is identical across resources — once you know it for
 | `PUT` | `/api/v1/<path>/:id` | Partial update. State-machine fields validated against `transitions[current]`. |
 | `DELETE` | `/api/v1/<path>/:id` | Soft-delete (or hard, with `softDelete: false`). |
 | `POST` | `/api/v1/<path>/:id/restore` | Clear `deletedAt`. Soft-delete schemas only. |
-| `POST` | `/api/v1/<path>/:id/transition` | Action route for state-machine transitions: `{ field, to }`. |
 | `GET` | `/api/v1/<path>/:id/history` | Audit log for the record, newest first. Audit-enabled schemas only. |
 | `GET` | `/api/v1/<path>/aggregations/<name>` | Run a declared aggregation. |
 | `POST` | `/api/v1/<path>/:id/<file-field>` | Upload (multipart). |

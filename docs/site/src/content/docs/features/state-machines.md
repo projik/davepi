@@ -75,42 +75,46 @@ everything is per-field, not per-schema.
 Agents that read `details.allowed` can self-correct. The typed
 client's `DavepiError` exposes the same shape.
 
-## REST `transition` action
+## REST
 
-Two ways to drive a transition:
+Drive a transition by sending the new value through the standard
+update route. The framework validates the move before persisting:
 
 ```http
 PUT /api/v1/quote/abc
 { "status": "review" }
 ```
 
-…or the dedicated action route:
-
-```http
-POST /api/v1/quote/abc/transition
-{ "field": "status", "to": "review" }
-```
-
-Both go through the same validator. The action route is friendlier
-for state-aware clients (the admin SPA uses it) — they don't have
-to remember the field name lives at the body root.
+There's no separate action endpoint — transitions go through the same
+PUT that any other field update would use.
 
 ## GraphQL
 
+A dedicated `<path>Transition<Field>(_id, to)` mutation is generated
+per state-machine field. The `to` argument is typed as the schema's
+generated enum, so a typo on the wire is caught at validation time:
+
 ```graphql
 mutation {
-  quoteTransitionStatus(_id: "abc", to: "review") {
+  quoteTransitionStatus(_id: "abc", to: review) {
     record { _id, status, availableTransitions { status } }
   }
 }
 ```
 
+The standard `quoteUpdateById` resolver also validates against the
+state machine when the field is set — the dedicated mutation is
+preferred, but you can't bypass the transition graph through it.
+
 ## MCP
+
+There's no dedicated transition tool. Send the new value through
+`update_<path>` — the framework runs the same validation:
 
 ```json
 {
-  "name": "transition_status_quote",
-  "arguments": { "id": "abc", "to": "review" }
+  "name": "update_quote",
+  "arguments": { "id": "abc", "record": { "status": "review" } }
 }
 ```
 
