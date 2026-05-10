@@ -29,7 +29,25 @@ const IdempotencyKeySchema = new mongoose.Schema(
     userId: { type: String, required: true, index: true },
     route: { type: String, required: true },
     bodyHash: { type: String, required: true },
-    status: { type: Number, required: true },
+    // Claim-execute-complete state machine. The unique index makes
+    // claim atomic — the first concurrent request to insert a row
+    // wins, every later attempt sees the existing row.
+    //
+    //   in_progress → handler is running. A concurrent retry with
+    //                 the same body + key returns IDEMPOTENCY_IN_PROGRESS.
+    //   completed    → handler finished with a 2xx; status / body /
+    //                 headers are populated and replays return them.
+    //
+    // Failed handlers DELETE the row instead of leaving it in
+    // `in_progress`, so the agent can fix its payload and retry
+    // under the same key.
+    state: {
+      type: String,
+      enum: ['in_progress', 'completed'],
+      required: true,
+      default: 'in_progress',
+    },
+    status: { type: Number, required: false },
     body: mongoose.Schema.Types.Mixed,
     headers: mongoose.Schema.Types.Mixed,
     expiresAt: { type: Date, required: true },

@@ -30,13 +30,28 @@ If the same key is used with a different request body, the server rejects with `
 ```json
 {
   "error": {
-    "code": "CONFLICT",
+    "code": "IDEMPOTENCY_CONFLICT",
     "message": "Idempotency-Key was reused with a different request body"
   }
 }
 ```
 
 This is the safe response: the server can't know whether the agent meant "retry the previous call" (in which case the body shouldn't change) or "new operation under a recycled key" (which is an agent bug). Refusing to do anything is correct.
+
+The body hash is computed over the **effective post-filter payload** (after `filterWritable` and after server-side tenant stamping), not over the raw request body. So two retries that the server treats as identical — e.g. one with an ACL-stripped field, one without — still hash the same and replay rather than false-conflict. The hash is also key-order independent: `{a:1,b:2}` and `{b:2,a:1}` match.
+
+## Concurrent retries: claim-execute-complete
+
+The server uses a claim-execute-complete protocol so two concurrent requests with the same `(key, userId, route)` can't both create resource records:
+
+1. **Claim.** An atomic `INSERT` (gated by the unique index) marks the row `in_progress`. Exactly one concurrent caller wins.
+2. **Execute.** The winner runs the handler. The losers see the existing row and:
+   - Same body hash, `in_progress` → `409 IDEMPOTENCY_IN_PROGRESS` ("retry shortly").
+   - Same body hash, `completed` → replay the cached response.
+   - Different body hash → `409 IDEMPOTENCY_CONFLICT`.
+3. **Complete (or abandon).** On a 2xx, the winner promotes the row to `completed` with the response. On a non-2xx (or a thrown error), the winner deletes the row so the agent can fix its payload and retry under the same key.
+
+The unique index on `{ key, userId, route }` is what makes this race-safe — the database, not the application, decides who claims a slot.
 
 ## Scoping rules
 
@@ -123,4 +138,8 @@ Records live in the `idempotency_key` collection:
 }
 ```
 
-The `bodyHash` is SHA-256 over `JSON.stringify(body)` — canonicalised through stringify so two requests with the same logical payload but different key ordering still match.
+The `bodyHash` is SHA-256 over a **stable** stringification of the effective post-filter body — keys sorted recursively, so `{a:1,b:2}` and `{b:2,a:1}` produce the same hash. Arrays preserve their order.
+
+## TTL strictness
+
+`expiresAt` is always queried with an explicit `> now()` filter, so an expired row that the Mongo TTL monitor hasn't swept yet is treated as if it didn't exist (and is opportunistically deleted). The TTL is therefore a hard ceiling, not a "best-effort, with a 60-second tail" window.

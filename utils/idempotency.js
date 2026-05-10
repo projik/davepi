@@ -1,6 +1,9 @@
 const crypto = require('crypto');
 const IdempotencyKey = require('../model/idempotencyKey');
-const { ConflictError } = require('./errors');
+const {
+  IdempotencyConflictError,
+  IdempotencyInProgressError,
+} = require('./errors');
 
 /**
  * Default TTL for idempotency records. 24h matches Stripe's window
@@ -8,97 +11,187 @@ const { ConflictError } = require('./errors');
  * the next morning can still replay safely, short enough that the
  * collection doesn't grow unbounded. Override via
  * `IDEMPOTENCY_TTL_SECONDS`.
+ *
+ * Guarded against non-numeric env values (`Number.isFinite` rejects
+ * `NaN` and `Infinity`) so a typo doesn't poison `expiresAt` and
+ * silently break persistence.
  */
-const defaultTtlSeconds = () =>
-  Math.max(1, parseInt(process.env.IDEMPOTENCY_TTL_SECONDS || '86400', 10));
+const defaultTtlSeconds = () => {
+  const raw = Number(process.env.IDEMPOTENCY_TTL_SECONDS);
+  const ttl = Number.isFinite(raw) ? raw : 86400;
+  return Math.max(1, Math.floor(ttl));
+};
 
 /**
- * Stable hash of a request payload. We canonicalise via JSON
- * stringify rather than just `crypto.createHash().update(buffer)`
- * because two requests with the same logical content but different
- * key ordering should match — agents emit objects, not byte
- * streams.
+ * Recursive stable stringify: sorts object keys at every level so
+ * `{a:1,b:2}` and `{b:2,a:1}` serialise identically. Plain
+ * `JSON.stringify` preserves insertion order, which would make
+ * `hashBody` falsely report two semantically identical payloads as
+ * different — exactly the wrong behaviour for an idempotency key.
+ *
+ * Arrays preserve their order (a[0] vs a[1] is meaningful — these
+ * aren't sets) and primitives go through unchanged.
+ */
+function stableStringify(value) {
+  if (value === null || typeof value !== 'object') {
+    return JSON.stringify(value);
+  }
+  if (Array.isArray(value)) {
+    return '[' + value.map(stableStringify).join(',') + ']';
+  }
+  const keys = Object.keys(value).sort();
+  return (
+    '{' +
+    keys.map((k) => JSON.stringify(k) + ':' + stableStringify(value[k])).join(',') +
+    '}'
+  );
+}
+
+/**
+ * Stable hash of a request payload. Canonicalises via the recursive
+ * stringify above so two requests with the same logical content but
+ * different key ordering produce the same hash.
  */
 function hashBody(body) {
-  const canonical = body == null ? '' : JSON.stringify(body);
+  const canonical = body == null ? '' : stableStringify(body);
   return crypto.createHash('sha256').update(canonical).digest('hex');
 }
 
 /**
- * Look up an existing idempotency record for the (key, user, route)
- * tuple. Returns one of:
+ * Atomically claim an idempotency slot. Three outcomes:
  *
- *   { status: 'miss' }                — no record; caller should run
- *                                       and then `recordIdempotency`
- *   { status: 'hit', record }         — replay the stored response
- *   { status: 'conflict', existing }  — the key was used before with
- *                                       a different body; throw
- *                                       ConflictError on the caller
- */
-async function checkIdempotency({ key, userId, route, bodyHash }) {
-  if (!key || !userId || !route) return { status: 'miss' };
-  const existing = await IdempotencyKey.findOne({ key, userId, route }).lean();
-  if (!existing) return { status: 'miss' };
-  if (existing.bodyHash !== bodyHash) {
-    return { status: 'conflict', existing };
-  }
-  return { status: 'hit', record: existing };
-}
-
-/**
- * Persist an idempotency record. Caller is responsible for only
- * recording successful (2xx) responses — non-2xx is the agent's cue
- * to fix its request and retry, which would be defeated by caching
- * the failure.
+ *   { status: 'claimed' }       — caller may run the handler. The
+ *                                 row is now `in_progress` and a
+ *                                 concurrent request with the same
+ *                                 key+body will see `in_progress`.
+ *   { status: 'hit', record }   — slot already held a completed
+ *                                 response with the same body hash;
+ *                                 caller should replay it.
+ *   { status: 'in_progress' }   — slot is held by another request
+ *                                 still running with the same body
+ *                                 hash; caller should throw
+ *                                 IDEMPOTENCY_IN_PROGRESS.
+ *   { status: 'conflict' }      — slot is held with a different
+ *                                 body hash; caller should throw
+ *                                 IDEMPOTENCY_CONFLICT.
  *
- * Race-safe: if two concurrent requests with the same key both
- * pass `checkIdempotency` and reach `recordIdempotency`, the unique
- * index guarantees one wins and the other gets a duplicate-key
- * error — which we swallow because the cached value is by definition
- * the same body hash.
+ * The atomic step is the unique-indexed insert: if two requests race
+ * the same (key, userId, route), exactly one insert succeeds and the
+ * other gets a duplicate-key error. The loser then reads the winner's
+ * row to decide between hit / in_progress / conflict.
  */
-async function recordIdempotency({
+async function claimIdempotency({
   key,
   userId,
   route,
   bodyHash,
-  status,
-  body,
-  headers,
   ttlSeconds = defaultTtlSeconds(),
 }) {
-  if (!key || !userId || !route) return;
+  if (!key || !userId || !route) return { status: 'claimed' };
   try {
     await IdempotencyKey.create({
       key,
       userId,
       route,
       bodyHash,
-      status,
-      body,
-      headers: headers || null,
+      state: 'in_progress',
       expiresAt: new Date(Date.now() + ttlSeconds * 1000),
     });
+    return { status: 'claimed' };
   } catch (err) {
-    if (err && err.code === 11000) return; // race: another request won
-    throw err;
+    if (!err || err.code !== 11000) throw err;
+    // Re-read with an explicit `expiresAt` floor: Mongo's TTL
+    // monitor sweeps on a ~60s cycle, so without this filter we'd
+    // see a row whose TTL passed but whose deletion hasn't fired
+    // yet — and would treat it as a hit / conflict against an
+    // expired ghost.
+    const now = new Date();
+    const existing = await IdempotencyKey.findOne({
+      key,
+      userId,
+      route,
+      expiresAt: { $gt: now },
+    }).lean();
+    if (!existing) {
+      // Either the row never existed (race window between our
+      // failed insert and the re-read) or it's expired and the
+      // TTL hasn't swept it yet. Opportunistically delete any
+      // stale row so the agent's next retry can claim cleanly.
+      await IdempotencyKey.deleteOne({
+        key,
+        userId,
+        route,
+        expiresAt: { $lte: now },
+      }).catch(() => {});
+      // Try the claim once more now that the slot is clear. If
+      // this still loses (legit concurrent winner), bail and let
+      // the caller try again on the next request.
+      try {
+        await IdempotencyKey.create({
+          key,
+          userId,
+          route,
+          bodyHash,
+          state: 'in_progress',
+          expiresAt: new Date(Date.now() + ttlSeconds * 1000),
+        });
+        return { status: 'claimed' };
+      } catch (retryErr) {
+        if (!retryErr || retryErr.code !== 11000) throw retryErr;
+        return { status: 'in_progress' };
+      }
+    }
+    if (existing.bodyHash !== bodyHash) return { status: 'conflict' };
+    if (existing.state === 'in_progress') return { status: 'in_progress' };
+    return { status: 'hit', record: existing };
   }
 }
 
 /**
- * Convert a `conflict` lookup result into the canonical
- * `ConflictError` so callers don't repeat the message everywhere.
+ * Promote a claimed slot to a completed response. Called by the
+ * caller AFTER the handler finishes with a 2xx.
+ *
+ * Best-effort: a write failure here doesn't break the user-facing
+ * response — the worst outcome is the slot stays `in_progress`, the
+ * TTL eventually sweeps it, and the agent's next retry (after TTL)
+ * starts fresh. We log via the supplied `log` if provided.
  */
-function conflictError() {
-  return new ConflictError(
-    'Idempotency-Key was reused with a different request body'
-  );
+async function completeIdempotency({ key, userId, route, status, body, headers, log }) {
+  if (!key || !userId || !route) return;
+  try {
+    await IdempotencyKey.updateOne(
+      { key, userId, route, state: 'in_progress' },
+      { $set: { state: 'completed', status, body, headers: headers || null } }
+    );
+  } catch (err) {
+    if (log && log.warn) log.warn({ err }, 'idempotency: completeIdempotency failed');
+  }
 }
+
+/**
+ * Tear down a claim that won't complete (handler failed, returned a
+ * non-2xx, or threw). Removes the in-progress row so the agent can
+ * fix its payload and retry under the same key. Without this, a
+ * 400 would lock the (key, body) tuple until TTL.
+ */
+async function abandonIdempotency({ key, userId, route, log }) {
+  if (!key || !userId || !route) return;
+  try {
+    await IdempotencyKey.deleteOne({ key, userId, route, state: 'in_progress' });
+  } catch (err) {
+    if (log && log.warn) log.warn({ err }, 'idempotency: abandonIdempotency failed');
+  }
+}
+
+const conflictError = () => new IdempotencyConflictError();
+const inProgressError = () => new IdempotencyInProgressError();
 
 module.exports = {
   hashBody,
-  checkIdempotency,
-  recordIdempotency,
+  claimIdempotency,
+  completeIdempotency,
+  abandonIdempotency,
   conflictError,
+  inProgressError,
   defaultTtlSeconds,
 };

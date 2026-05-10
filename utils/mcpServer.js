@@ -309,52 +309,79 @@ function registerSchemaTools(server, entry, { schemaLoader, getUser }) {
       // ownership.
       const data = { ...writable, accountId: user.user_id, userId: user.user_id };
 
-      // Idempotency: same surface as the REST Idempotency-Key header,
-      // delivered as a tool argument because JSON-RPC over MCP doesn't
-      // carry headers per-call. Body hash covers the writable shape
-      // post-filter so the same logical request hashes the same way
-      // even if filterWritable strips an ACL'd key.
+      // Idempotency: same claim-execute-complete protocol as the
+      // REST middleware (utils/idempotency.js). Body hash covers
+      // the writable shape post-filter so the same logical request
+      // hashes the same way even if filterWritable strips an ACL'd
+      // key.
       const idempotencyKey = args.idempotencyKey;
       const route = `mcp:create_${path}`;
       let bodyHash;
+      let claimed = false;
       if (idempotencyKey) {
         bodyHash = idempotency.hashBody(data);
-        const lookup = await idempotency.checkIdempotency({
+        const claim = await idempotency.claimIdempotency({
           key: idempotencyKey,
           userId: user.user_id,
           route,
           bodyHash,
         });
-        if (lookup.status === 'conflict') throw idempotency.conflictError();
-        if (lookup.status === 'hit') {
-          // Replayed payload travels back with a flag so an agent can
-          // tell the difference from a fresh create.
-          return { ...lookup.record.body, _idempotent_replay: true };
+        if (claim.status === 'conflict') throw idempotency.conflictError();
+        if (claim.status === 'in_progress') throw idempotency.inProgressError();
+        if (claim.status === 'hit') {
+          return { ...claim.record.body, _idempotent_replay: true };
         }
+        claimed = true;
       }
 
-      const record = await Model.create(data);
-      const plain = JSON.parse(JSON.stringify(record));
-      if (auditEnabled) {
-        await recordAudit({
-          req: { user },
-          resource: s.path,
-          recordId: record._id,
-          action: 'create',
-          before: null,
-          after: plain,
-        });
+      // Phase 1: the create itself. If this throws, the resource
+      // doesn't exist; tear down the idempotency claim so the agent
+      // can fix its payload and retry under the same key.
+      let record;
+      try {
+        record = await Model.create(data);
+      } catch (err) {
+        if (claimed) {
+          await idempotency.abandonIdempotency({
+            key: idempotencyKey,
+            userId: user.user_id,
+            route,
+          });
+        }
+        throw err;
       }
+
+      // Phase 2: post-create bookkeeping. The resource now exists,
+      // so we MUST return the projected record to the caller — a
+      // failure to record an audit entry or persist the idempotency
+      // outcome can't be allowed to mask the success. Both callees
+      // are best-effort by design (they swallow errors internally
+      // and log them), but we wrap defensively so any future change
+      // in their failure semantics doesn't regress this contract.
+      const plain = JSON.parse(JSON.stringify(record));
       const projected = projectByAcl(plain, s, user);
-      if (idempotencyKey) {
-        await idempotency.recordIdempotency({
-          key: idempotencyKey,
-          userId: user.user_id,
-          route,
-          bodyHash,
-          status: 201,
-          body: projected,
-        });
+      if (auditEnabled) {
+        try {
+          await recordAudit({
+            req: { user },
+            resource: s.path,
+            recordId: record._id,
+            action: 'create',
+            before: null,
+            after: plain,
+          });
+        } catch (_) { /* best-effort */ }
+      }
+      if (claimed) {
+        try {
+          await idempotency.completeIdempotency({
+            key: idempotencyKey,
+            userId: user.user_id,
+            route,
+            status: 201,
+            body: projected,
+          });
+        } catch (_) { /* best-effort */ }
       }
       return projected;
     })
