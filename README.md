@@ -1,5 +1,7 @@
 # dAvePi
 
+[![Agent eval](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fprojik%2Fdavepi%2Fmain%2Feval%2Fresults%2Fbadge.json)](https://docs.davepi.dev/concepts/agent-eval/)
+
 A dynamic REST and GraphQL API server that automatically generates endpoints, documentation, and schemas from simple configuration files.
 
 📚 **Full documentation: <https://docs.davepi.dev>** — concepts, schema reference, per-feature guides, and a flagship "Idea to deployed CRM in 10 minutes" walkthrough. The docs source lives under [`docs/site/`](./docs/site) and ships in lockstep with the framework.
