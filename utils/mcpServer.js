@@ -317,8 +317,18 @@ function registerSchemaTools(server, entry, { schemaLoader, getUser }) {
       // ownership of a record it owns.
       for (const f of TENANT_FIELDS) delete writable[f];
       const before = auditEnabled ? await Model.findOne(filter).lean() : null;
-      const result = await Model.updateOne(filter, { $set: writable });
-      if (!result.matchedCount) throw new NotFoundError(path);
+      // Empty $set is a no-op in Mongoose (matchedCount=0 even when
+      // the doc exists), so callers who post only ACL-stripped or
+      // tenant-stripped keys would otherwise see a misleading 404.
+      // Mirror the REST PUT contract: prove the doc exists first,
+      // then short-circuit.
+      if (Object.keys(writable).length === 0) {
+        const exists = await Model.findOne(filter).select('_id').lean();
+        if (!exists) throw new NotFoundError(path);
+      } else {
+        const result = await Model.updateOne(filter, { $set: writable });
+        if (!result.matchedCount) throw new NotFoundError(path);
+      }
       const fresh = await Model.findOne({ _id: args.id }).lean();
       if (auditEnabled && before) {
         await recordAudit({

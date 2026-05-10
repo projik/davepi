@@ -512,6 +512,47 @@ describe('MCP server: restore / history / search / relation / file tools', () =>
     }
   });
 
+  test('update_<path>: empty writable (every field ACL-stripped) does not return a misleading 404', async () => {
+    // Schema where every field is gated to a role the test user
+    // doesn't have on update — so filterWritable returns {} and the
+    // REST contract says "verify the doc still exists, then no-op".
+    await ctx.app.locals.schemaLoader.loadSchema({
+      path: 'mcp_locked',
+      collection: 'mcp_locked',
+      version: 'v1',
+      fields: [
+        { name: 'userId', type: String, required: true },
+        { name: 'note', type: String, acl: { update: ['admin'] } },
+      ],
+    });
+    try {
+      const registered = await registerUser(ctx.request, ctx.app);
+      const user = decodedFromRegister(registered); // 'user' role only
+      const { client, close } = await connectMcp({
+        schemaLoader: ctx.app.locals.schemaLoader,
+        user,
+      });
+      try {
+        const created = parseStructured(await client.callTool({
+          name: 'create_mcp_locked',
+          arguments: { record: { note: 'seeded' } }, // also ACL-stripped, but record is created
+        }));
+        const out = await client.callTool({
+          name: 'update_mcp_locked',
+          arguments: { id: created._id, record: { note: 'attempted' } },
+        });
+        // Should NOT be NOT_FOUND just because the writable shape was empty.
+        expect(out.isError).not.toBe(true);
+        const fresh = parseStructured(out);
+        expect(String(fresh._id)).toBe(String(created._id));
+      } finally {
+        await close();
+      }
+    } finally {
+      await ctx.app.locals.schemaLoader.unloadSchema('v1/mcp_locked');
+    }
+  });
+
   test('update_<path>: client cannot reassign userId/accountId via record payload', async () => {
     const registered = await registerUser(ctx.request, ctx.app);
     const otherReg = await registerUser(ctx.request, ctx.app);
