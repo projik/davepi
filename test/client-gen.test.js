@@ -251,11 +251,13 @@ describe('clientGen: generated TypeScript', () => {
     // entire output into a snapshot.
     const tsc = path.resolve(__dirname, '..', 'node_modules', '.bin', 'tsc');
     if (!fs.existsSync(tsc)) {
-      // tsc isn't a runtime dep of this project; skip when the
-      // dev environment doesn't have it. CI installs it via the
-      // package.json devDependency added in this PR.
-      console.warn('tsc not found; skipping type-compile assertion');
-      return;
+      // typescript is a devDependency of this project, so a normal
+      // `npm ci` always provides it. A missing binary means the
+      // dev environment is broken — fail loudly rather than skip
+      // silently and let a real compile regression sneak through.
+      throw new Error(
+        `tsc not found at ${tsc}. Run \`npm ci\` to install devDependencies.`
+      );
     }
     const tmp = path.resolve(__dirname, '..', '.client-gen-typecheck');
     fs.rmSync(tmp, { recursive: true, force: true });
