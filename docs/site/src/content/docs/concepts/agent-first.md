@@ -28,7 +28,7 @@ representation of relations or state machines.
 
 Agents don't write HTTP requests; they call tools. dAvePi's MCP
 server exposes per-resource tools (`list_account`, `create_deal`,
-`transition_status_quote`, etc.) that agents call as first-class
+`update_quote`, etc.) that agents call as first-class
 operations.
 
 ```json

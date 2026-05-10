@@ -33,7 +33,7 @@ For schema `path: 'account'`:
 | Remove by id | `accountRemoveById(_id)` |
 | Remove many | `accountRemoveMany(filter)` |
 | Restore | `accountRestore(_id)` (soft-delete-enabled schemas) |
-| Transition | `accountTransition<Field>(_id, to)` per state-machine field |
+| _(state-machine transitions)_ | Send the new value through `accountUpdateById(_id, record: { <field>: <to> })`. The framework validates against `transitions[current]`. |
 
 ## Tenant scoping is structural
 
@@ -127,11 +127,16 @@ nested fields:
 ## State machines
 
 State-machine fields surface as a literal `enum` in the GraphQL
-output type, plus a transition mutation per field:
+output type. Transitions ride on the standard update resolver — the
+framework validates the new value against `transitions[current]`
+before persisting:
 
 ```graphql
 mutation {
-  quoteTransitionStatus(_id: "abc", to: "approved") {
+  quoteUpdateById(
+    _id: "abc",
+    record: { status: "approved" }
+  ) {
     record {
       _id
       status                       # enum value

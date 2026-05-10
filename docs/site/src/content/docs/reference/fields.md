@@ -111,12 +111,18 @@ all strip the field server-side. See
 | `transitions` | Map of `current -> allowed nexts`. Any change not listed surfaces as `400 INVALID_TRANSITION` with `current / attempted / allowed` in the body. |
 | `onEnter` | Map of `state -> async function(record, ctx)`. Runs once per arrival; errors are logged but don't fail the mutation. |
 
-The framework also generates:
+Transitions ride on the standard update path — the framework
+validates the move against `transitions[current]` before
+persisting:
 
-- A `transition_<field>_<path>` MCP tool that takes `{ id, to }`.
+- REST: `PUT /api/v1/<path>/:id` with `{ <field>: <to> }`.
+- GraphQL: `<path>UpdateById(_id, record: { <field>: <to> })`.
+- MCP: `update_<path>` with `{ id, record: { <field>: <to> } }`.
+
+Plus, automatically:
+
 - An `availableTransitions[<field>]` virtual on every read.
-- A `<path>Transition<Field>` GraphQL mutation.
-- A `transition<Field>` typed-client method.
+- A `transition<Field>(id, to)` convenience method on the typed client (a typed wrapper around the PUT).
 
 See [State machines](/features/state-machines/).
 

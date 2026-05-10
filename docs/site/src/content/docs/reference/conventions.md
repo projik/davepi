@@ -33,10 +33,10 @@ naturally with a singular base.
 ### State-machine names
 
 The literal values inside `states` are stable contracts — they
-appear in URLs (`POST /:id/transition`), GraphQL enum values, and
-the typed client's literal unions. Pick names you can live with:
-`'won'` not `'WON'`, `'in_progress'` not `'inProgress'` (URL-
-unfriendly).
+appear in PUT bodies, GraphQL enum values, MCP `update_<path>`
+arguments, and the typed client's literal unions. Pick names you
+can live with: `'won'` not `'WON'`, `'in_progress'` not
+`'inProgress'`.
 
 ## Tenant fields
 

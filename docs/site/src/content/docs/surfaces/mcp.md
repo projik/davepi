@@ -58,7 +58,7 @@ invalid or missing token.
 | `fetch_<path>_<field>` | per `type: 'File'` field | Returns the public or short-lived signed URL plus the file metadata. |
 | `delete_<path>_<field>` | per `type: 'File'` field | Removes the blob and clears the metadata sub-doc. |
 | `aggregate_<path>_<name>` | per declared aggregation | Params surface with their declared types; the framework prepends `$match: { userId }` automatically. |
-| `transition_<field>_<path>` | per state-machine field | Validates against `transitions[current]`; rejects with `INVALID_TRANSITION` otherwise. |
+| _(state-machine transitions)_ | per state-machine field | Use `update_<path>` with `{ id, record: { <field>: <to> } }`. The framework validates against `transitions[current]` and rejects undeclared moves with `INVALID_TRANSITION`. |
 
 Every tool result is JSON: a record (or list response) on success,
 or — on a typed failure — an MCP `isError: true` result with a
