@@ -172,6 +172,77 @@ describe('clientGen: generated TypeScript', () => {
     expect(out).toBe(reversed);
   });
 
+  test('Generated output matches the committed snapshot byte-for-byte', () => {
+    expect(out).toMatchSnapshot();
+  });
+
+  test('Schema paths with non-identifier characters get quoted as TS property keys', () => {
+    // mcp-doc, 123resource, anything with hyphens — all need to
+    // appear as string-literal keys, not bare identifiers, in both
+    // the DavepiClient interface and the factory return object.
+    const fix = [
+      {
+        s: {
+          path: 'mcp-doc',
+          collection: 'mcp_doc',
+          version: 'v1',
+          fields: [
+            { name: 'userId', type: String, required: true },
+            { name: 'title', type: String, required: true },
+          ],
+        },
+      },
+    ];
+    const ts = generateClient(fix, { baseUrl: '' });
+    expect(ts).toMatch(/"mcp-doc": McpDocClient;/);
+    expect(ts).toMatch(/"mcp-doc": makeResourceClient<McpDoc/);
+  });
+
+  test('Two versions of the same path generate distinct symbols + keys', () => {
+    const fix = [
+      {
+        s: {
+          path: 'contact',
+          collection: 'contact',
+          version: 'v1',
+          fields: [
+            { name: 'userId', type: String, required: true },
+            { name: 'name', type: String, required: true },
+          ],
+        },
+      },
+      {
+        s: {
+          path: 'contact',
+          collection: 'contact',
+          version: 'v2',
+          fields: [
+            { name: 'userId', type: String, required: true },
+            { name: 'name', type: String, required: true },
+            { name: 'email', type: String },
+          ],
+        },
+      },
+    ];
+    const ts = generateClient(fix, { baseUrl: '' });
+    // Both symbols are present, no duplicates.
+    expect(ts).toMatch(/export interface V1Contact \{/);
+    expect(ts).toMatch(/export interface V2Contact \{/);
+    expect(ts).not.toMatch(/export interface Contact \{/);
+    // Client keys disambiguated with the version prefix and quoted
+    // (slash isn't a valid TS identifier char).
+    expect(ts).toMatch(/"v1\/contact": V1ContactClient;/);
+    expect(ts).toMatch(/"v2\/contact": V2ContactClient;/);
+  });
+
+  test('Single-version schemas keep clean (un-prefixed) names', () => {
+    // The output we already snapshotted has no version-prefixed
+    // symbols — assert that explicitly so future changes can't
+    // accidentally start qualifying single-version schemas.
+    expect(out).toMatch(/export interface Account \{/);
+    expect(out).not.toMatch(/export interface V1Account/);
+  });
+
   test('Generated TypeScript compiles under tsc --noEmit', () => {
     // Spin up a tiny TS project that imports the generated module
     // alongside the runtime, run `tsc --noEmit`, assert no errors.

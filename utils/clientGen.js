@@ -80,7 +80,7 @@ function mapBareType(t) {
  * file metadata, framework fields, and `availableTransitions` for
  * schemas that declare state machines.
  */
-function readShapeBody(s) {
+function readShapeBody(s, symbolName = (x) => toPascalCase(x.path)) {
   const lines = ['  _id: string;', '  userId: string;'];
   const seen = new Set(['_id', 'userId']);
   for (const f of s.fields || []) {
@@ -105,10 +105,12 @@ function readShapeBody(s) {
   }
   // Relations populated via __include show up as optional fields on
   // the read shape — clients that don't pass include get `undefined`.
+  // Target type names go through `symbolName` so cross-version name
+  // collisions resolve to the right disambiguated symbol.
   const rels = normalizeRelations(s);
   for (const [name, def] of Object.entries(rels)) {
     if (def.fromShorthand) continue;
-    const target = toPascalCase(def.target);
+    const target = symbolName({ path: def.target, version: s.version });
     if (def.kind === 'hasMany') {
       lines.push(`  ${name}?: ${target}[];`);
     } else {
@@ -175,8 +177,8 @@ function aggregationParamShape(a) {
  * update, delete, plus restore / history / search / aggregate /
  * file uploads / state-machine transitions where applicable.
  */
-function clientInterfaceBody(s) {
-  const T = toPascalCase(s.path);
+function clientInterfaceBody(s, symbolName = (x) => toPascalCase(x.path)) {
+  const T = symbolName(s);
   const lines = [];
   lines.push(
     `  list(params?: ListParams<${T}Include>): Promise<ListResponse<${T}>>;`
@@ -217,7 +219,7 @@ function clientInterfaceBody(s) {
   const rels = normalizeRelations(s);
   for (const [name, def] of Object.entries(rels)) {
     if (def.fromShorthand) continue;
-    const target = toPascalCase(def.target);
+    const target = symbolName({ path: def.target, version: s.version });
     if (def.kind === 'hasMany') {
       lines.push(`  ${name}(id: string): Promise<${target}[]>;`);
     } else {
@@ -242,10 +244,28 @@ function clientInterfaceBody(s) {
   return lines.join('\n');
 }
 
-function clientFactoryEntries(loaded) {
+/**
+ * Emit a TypeScript object-literal property key. Unquoted when the
+ * path is a valid TS identifier (`account`, `rel_account`); quoted
+ * via JSON.stringify when it isn't (`mcp-doc`, `123resource`,
+ * anything with hyphens / leading digits / unusual characters).
+ * Without this guard, schemas with non-identifier paths would emit
+ * invalid TS.
+ */
+function tsPropertyKey(name) {
+  return /^[A-Za-z_][A-Za-z0-9_]*$/.test(name)
+    ? name
+    : JSON.stringify(name);
+}
+
+function clientFactoryEntries(
+  loaded,
+  symbolName = (x) => toPascalCase(x.path),
+  clientKey = (x) => x.path
+) {
   return loaded
     .map(({ s }) => {
-      const T = toPascalCase(s.path);
+      const T = symbolName(s);
       const stateMachineNames = stateMachineFieldsOf(s).map((f) => f.name);
       const aggNames = renderAggregations(s).map((a) => a.name);
       const fileNames = (s.fields || [])
@@ -263,7 +283,7 @@ function clientFactoryEntries(loaded) {
         stateMachineFields: stateMachineNames,
         fileFields: fileNames,
       };
-      return `  ${s.path}: makeResourceClient<${T}, ${T}Writeable, ${T}Include>(client, ${JSON.stringify(
+      return `  ${tsPropertyKey(clientKey(s))}: makeResourceClient<${T}, ${T}Writeable, ${T}Include>(client, ${JSON.stringify(
         config
       )}) as ${T}Client,`;
     })
@@ -274,9 +294,37 @@ function clientFactoryEntries(loaded) {
  * Build the entire generated file as a single string. `entries` is
  * the schema registry projection used by tests with a stub loader;
  * the CLI builds it from the live loader.
+ *
+ * Naming: schemas are normally keyed by `s.path` alone (one version
+ * per resource is the common case). When two entries collide on
+ * `path` (e.g. `v1/contact` AND `v2/contact` are both loaded), we
+ * disambiguate by stamping the version into the symbol name and the
+ * client key — `Contact` becomes `V1Contact` / `V2Contact`, the
+ * client key `contact` becomes `v1/contact` / `v2/contact`. Without
+ * this, the generated file would carry duplicate `interface Contact`
+ * declarations and one would silently overwrite the other in the
+ * factory return object.
  */
 function generateClient(entries, { baseUrl = '' } = {}) {
-  const sorted = entries.slice().sort((a, b) => a.s.path.localeCompare(b.s.path));
+  const sorted = entries.slice().sort((a, b) => {
+    const byPath = a.s.path.localeCompare(b.s.path);
+    if (byPath !== 0) return byPath;
+    return String(a.s.version || '').localeCompare(String(b.s.version || ''));
+  });
+  // Detect path collisions across versions. Single-version schemas
+  // get the clean names; only the colliding ones carry version
+  // qualifiers.
+  const pathCount = new Map();
+  for (const { s } of sorted) {
+    pathCount.set(s.path, (pathCount.get(s.path) || 0) + 1);
+  }
+  const collides = (path) => (pathCount.get(path) || 0) > 1;
+  const symbolName = (s) =>
+    collides(s.path)
+      ? toPascalCase(`${s.version}_${s.path}`)
+      : toPascalCase(s.path);
+  const clientKey = (s) =>
+    collides(s.path) ? `${s.version}/${s.path}` : s.path;
   const out = [];
   out.push(HEADER);
   out.push(
@@ -296,13 +344,13 @@ function generateClient(entries, { baseUrl = '' } = {}) {
 
   // Per-schema types + interfaces
   for (const { s } of sorted) {
-    const T = toPascalCase(s.path);
+    const T = symbolName(s);
     const includes = renderRelations(s);
     out.push(`// ============================================================`);
-    out.push(`// ${s.path}`);
+    out.push(`// ${clientKey(s)}`);
     out.push(`// ============================================================`);
     out.push(`export interface ${T} {`);
-    out.push(readShapeBody(s));
+    out.push(readShapeBody(s, symbolName));
     out.push(`}`);
     out.push(`export interface ${T}Writeable {`);
     out.push(writeShapeBody(s));
@@ -315,7 +363,7 @@ function generateClient(entries, { baseUrl = '' } = {}) {
       };`
     );
     out.push(`export interface ${T}Client {`);
-    out.push(clientInterfaceBody(s));
+    out.push(clientInterfaceBody(s, symbolName));
     out.push(`}`);
     out.push('');
   }
@@ -323,7 +371,7 @@ function generateClient(entries, { baseUrl = '' } = {}) {
   // Aggregate client type
   out.push('export interface DavepiClient {');
   for (const { s } of sorted) {
-    out.push(`  ${s.path}: ${toPascalCase(s.path)}Client;`);
+    out.push(`  ${tsPropertyKey(clientKey(s))}: ${symbolName(s)}Client;`);
   }
   out.push('}');
   out.push('');
@@ -331,7 +379,7 @@ function generateClient(entries, { baseUrl = '' } = {}) {
   out.push('export function createDavepiClient(opts: ApiOptions = {}): DavepiClient {');
   out.push(`  const client = buildHttpClient({ baseUrl: ${JSON.stringify(baseUrl)}, ...opts });`);
   out.push('  return {');
-  out.push(clientFactoryEntries(sorted));
+  out.push(clientFactoryEntries(sorted, symbolName, clientKey));
   out.push('  };');
   out.push('}');
   out.push('');
