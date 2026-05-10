@@ -133,7 +133,7 @@ describe('clientGen: generated TypeScript', () => {
     // soft-delete enabled → restore
     expect(out).toMatch(/restore\(id: string\): Promise<void>/);
     // audit enabled → history
-    expect(out).toMatch(/history\(id: string, params\?: \{ page\?: number; perPage\?: number \}\): Promise<ListResponse<AuditEntry>>/);
+    expect(out).toMatch(/history\(id: string, params\?: \{ page\?: number \}\): Promise<ListResponse<AuditEntry>>/);
     // searchable field → search
     expect(out).toMatch(/search\(q: string, params\?: ListParams<AccountInclude>\)/);
     // aggregation

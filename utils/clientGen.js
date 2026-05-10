@@ -200,7 +200,7 @@ function clientInterfaceBody(s, symbolName = (x) => toPascalCase(x.path)) {
   }
   if (s.audit !== false) {
     lines.push(
-      `  history(id: string, params?: { page?: number; perPage?: number }): Promise<ListResponse<AuditEntry>>;`
+      `  history(id: string, params?: { page?: number }): Promise<ListResponse<AuditEntry>>;`
     );
   }
   if ((s.fields || []).some((f) => f && f.searchable)) {

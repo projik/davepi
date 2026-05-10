@@ -154,17 +154,37 @@ async function main() {
     // process exits after writing the file.
     require('../config/database').connect();
     const app = require('../app');
-    if (app.locals && app.locals.ready) await app.locals.ready;
-    const { generateClient } = require('../utils/clientGen');
-    const entries = [];
-    for (const key of app.locals.schemaLoader.listSchemas()) {
-      const e = app.locals.schemaLoader.getEntry(key);
-      if (e && e.schema) entries.push({ s: e.schema });
+    let appReady = false;
+    try {
+      if (app.locals && app.locals.ready) await app.locals.ready;
+      appReady = true;
+      const { generateClient } = require('../utils/clientGen');
+      const entries = [];
+      for (const key of app.locals.schemaLoader.listSchemas()) {
+        const e = app.locals.schemaLoader.getEntry(key);
+        if (e && e.schema) entries.push({ s: e.schema });
+      }
+      const ts = generateClient(entries, { baseUrl });
+      require('fs').writeFileSync(path.resolve(outPath), ts);
+      out(
+        `Wrote ${path.relative(process.cwd(), path.resolve(outPath))} (${entries.length} schemas)`
+      );
+    } finally {
+      // Cleanup runs on success AND failure so the process exits
+      // cleanly. The schema watcher (when HOT_RELOAD_SCHEMAS is on)
+      // uses chokidar, which keeps the event loop alive; we have to
+      // stop it explicitly. Mongoose disconnect always runs to drop
+      // the open connection.
+      if (
+        appReady &&
+        app.locals &&
+        app.locals.schemaWatcher &&
+        typeof app.locals.schemaWatcher.stop === 'function'
+      ) {
+        try { await app.locals.schemaWatcher.stop(); } catch (_) {}
+      }
+      try { await require('mongoose').disconnect(); } catch (_) {}
     }
-    const ts = generateClient(entries, { baseUrl });
-    require('fs').writeFileSync(path.resolve(outPath), ts);
-    out(`Wrote ${path.relative(process.cwd(), path.resolve(outPath))} (${entries.length} schemas)`);
-    await require('mongoose').disconnect();
     return;
   }
 

@@ -43,7 +43,10 @@ export interface ApiOptions {
 export interface ListParams<TInclude extends string = never> {
   filter?: Record<string, unknown>;
   page?: number;
-  perPage?: number;
+  // NB: page size is server-controlled (PAGE_SIZE env var). The
+  // server ignores any client-supplied perPage, so we don't pretend
+  // to support one here. Use `ListResponse.perPage` to read the
+  // size the server actually applied.
   sort?: string;
   q?: string;
   include?: TInclude[];
@@ -146,28 +149,49 @@ export function buildHttpClient(opts: ApiOptions): HttpClient {
       body: body == null ? undefined : JSON.stringify(body),
     });
     if (res.status === 204) return undefined as T;
-    const text = await res.text();
-    let parsed: unknown = undefined;
-    if (text) {
-      try { parsed = JSON.parse(text); }
-      catch { parsed = text; }
-    }
-    if (!res.ok) {
-      const err =
-        parsed && typeof parsed === 'object' && 'error' in (parsed as object)
-          ? (parsed as { error: { code?: string; message?: string; details?: unknown } }).error
-          : { code: 'UNKNOWN', message: String(text) };
-      throw new DavepiError(
-        res.status,
-        err?.code || 'UNKNOWN',
-        err?.message || res.statusText,
-        err?.details
-      );
-    }
+    const parsed = await readResponseBody(res);
+    if (!res.ok) throwApiError(res, parsed);
     return parsed as T;
   }
 
   return { request, baseUrl, fetchImpl, getToken, defaultHeaders };
+}
+
+/**
+ * Parse a Response body as JSON when possible, falling back to the
+ * raw text string on parse failure (matches the contract of the
+ * shared `request()` flow). Used by file-upload / file-fetch
+ * helpers so a non-JSON error body doesn't surface as an opaque
+ * SyntaxError.
+ */
+async function readResponseBody(res: Response): Promise<unknown> {
+  const text = await res.text();
+  if (!text) return null;
+  try {
+    return JSON.parse(text);
+  } catch {
+    return text;
+  }
+}
+
+/**
+ * Shape any non-2xx response into a typed `DavepiError`. Reads the
+ * canonical `{ error: { code, message, details } }` body when the
+ * server emits one; falls back to status text and raw body
+ * otherwise. Shared between the standard `request()` flow and the
+ * file helpers below so error shape is identical across surfaces.
+ */
+function throwApiError(res: Response, parsed: unknown): never {
+  const body =
+    parsed && typeof parsed === 'object' && 'error' in (parsed as object)
+      ? (parsed as { error: { code?: string; message?: string; details?: unknown } }).error
+      : { code: 'UNKNOWN', message: typeof parsed === 'string' ? parsed : res.statusText };
+  throw new DavepiError(
+    res.status,
+    body?.code || 'UNKNOWN',
+    body?.message || res.statusText,
+    body?.details
+  );
 }
 
 function buildQuery(q: Record<string, unknown>): string {
@@ -214,7 +238,6 @@ export function makeResourceClient<TRead, TWrite, TInclude extends string>(
     list(params: ListParams<TInclude> = {}) {
       const q: Record<string, unknown> = { ...(params.filter || {}) };
       if (params.page != null) q.__page = params.page;
-      if (params.perPage != null) q.__perPage = params.perPage;
       if (params.sort) q.__sort = params.sort;
       if (params.q) q.__q = params.q;
       if (params.include && params.include.length) q.__include = params.include;
@@ -246,11 +269,12 @@ export function makeResourceClient<TRead, TWrite, TInclude extends string>(
   if (cfg.audit) {
     result.history = (
       id: string,
-      params: { page?: number; perPage?: number } = {}
+      params: { page?: number } = {}
     ) => {
+      // page size is server-controlled (PAGE_SIZE env); same as
+      // list — there's no `perPage` to pass through.
       const q: Record<string, unknown> = {};
       if (params.page != null) q.__page = params.page;
-      if (params.perPage != null) q.__perPage = params.perPage;
       return client.request<ListResponse<AuditEntry>>({
         method: 'GET',
         path: `${base}/${id}/history`,
@@ -301,33 +325,40 @@ export function makeResourceClient<TRead, TWrite, TInclude extends string>(
       if (token) headers.Authorization = `Bearer ${token}`;
       const url = client.baseUrl + `${base}/${id}/${fieldName}`;
       const res = await client.fetchImpl(url, { method: 'POST', headers, body: fd });
-      const text = await res.text();
-      const parsed = text ? JSON.parse(text) : null;
-      if (!res.ok) {
-        throw new DavepiError(
-          res.status,
-          parsed?.error?.code || 'UNKNOWN',
-          parsed?.error?.message || res.statusText,
-          parsed?.error?.details
-        );
-      }
+      const parsed = await readResponseBody(res);
+      if (!res.ok) throwApiError(res, parsed);
       return parsed as FileMeta;
     };
     result[`fetch${verb}Url`] = async (id: string) => {
       const token = await client.getToken();
       const headers: Record<string, string> = { ...client.defaultHeaders };
       if (token) headers.Authorization = `Bearer ${token}`;
-      // The endpoint replies 302 to a public/signed URL. Use the
-      // redirect: 'manual' option so we read the Location instead
-      // of following.
+      // The endpoint replies with a 3xx redirect to a public /
+      // short-lived signed URL. Use `redirect: 'manual'` so we
+      // read the Location header instead of following the redirect
+      // (the storage URL doesn't accept our Bearer token).
       const res = await client.fetchImpl(client.baseUrl + `${base}/${id}/${fieldName}`, {
         method: 'GET',
         headers,
         redirect: 'manual',
       });
-      const loc = res.headers.get('Location');
-      if (!loc) throw new DavepiError(res.status, 'UNKNOWN', 'No Location header on file URL response');
-      return loc;
+      const REDIRECT = new Set([301, 302, 303, 307, 308]);
+      if (REDIRECT.has(res.status)) {
+        const loc = res.headers.get('Location');
+        if (loc) return loc;
+        // Redirect status without a Location is a server bug —
+        // surface it as DavepiError rather than returning null.
+        throw new DavepiError(
+          res.status,
+          'UNKNOWN',
+          'No Location header on file URL response'
+        );
+      }
+      // Non-3xx responses (401 missing auth, 404 missing file, etc.)
+      // carry the canonical { error: { code, message, details } }
+      // body — same shape as every other handler. Parse and throw.
+      const parsed = await readResponseBody(res);
+      throwApiError(res, parsed);
     };
     result[`delete${verb}`] = (id: string) =>
       client.request<void>({ method: 'DELETE', path: `${base}/${id}/${fieldName}` });

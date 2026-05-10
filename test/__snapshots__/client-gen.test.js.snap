@@ -48,7 +48,7 @@ export interface AccountClient {
   update(id: string, record: Partial<AccountWriteable>): Promise<Account>;
   delete(id: string): Promise<DeleteResult>;
   restore(id: string): Promise<void>;
-  history(id: string, params?: { page?: number; perPage?: number }): Promise<ListResponse<AuditEntry>>;
+  history(id: string, params?: { page?: number }): Promise<ListResponse<AuditEntry>>;
   search(q: string, params?: ListParams<AccountInclude>): Promise<ListResponse<Account>>;
   totalsByMonth(args: { from: string; }): Promise<unknown[]>;
   contacts(id: string): Promise<Contact[]>;
@@ -82,7 +82,7 @@ export interface ContactClient {
   update(id: string, record: Partial<ContactWriteable>): Promise<Contact>;
   delete(id: string): Promise<DeleteResult>;
   restore(id: string): Promise<void>;
-  history(id: string, params?: { page?: number; perPage?: number }): Promise<ListResponse<AuditEntry>>;
+  history(id: string, params?: { page?: number }): Promise<ListResponse<AuditEntry>>;
   account(id: string): Promise<Account | null>;
 }
 
