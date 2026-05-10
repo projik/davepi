@@ -166,6 +166,23 @@ async function scaffold({ name, template, install, davepiVersion, port }) {
   // 1. Schemas + template README
   copyTree(path.join(templatesDir(), template), target);
 
+  // 1a. Shared files dropped on top of every scaffolded project:
+  //   .github/workflows/*  — starter CI (test, client-gen drift,
+  //                          migrate-with-approval-gate, deploy).
+  //   tests/smoke.test.js  — schema-shape smoke test, sufficient
+  //                          for `npm test` to be a useful default
+  //                          before the user adds their own.
+  // Anything under _shared/ that isn't a directory the templates
+  // depend on goes in here. agent.md is loaded separately because
+  // it has placeholder substitution.
+  const sharedRoot = path.join(templatesDir(), '_shared');
+  for (const dir of ['.github', 'tests']) {
+    const src = path.join(sharedRoot, dir);
+    if (fs.existsSync(src)) {
+      copyTree(src, path.join(target, dir));
+    }
+  }
+
   // 2. package.json — pin dAvePi as a runtime dep.
   writeJson(path.join(target, 'package.json'), {
     name,
@@ -181,6 +198,10 @@ async function scaffold({ name, template, install, davepiVersion, port }) {
       // and POSTs sample records. Run AFTER `npm start` is up in
       // another terminal.
       seed: 'node seed.js',
+      // Schema-shape smoke test. node --test is built into Node 18+
+      // so this needs no extra dependencies. The shipped CI workflow
+      // runs this script.
+      test: 'node --test tests/*.test.js',
       'gen-client': 'davepi gen-client --out client/davepi.ts',
       'mcp:stdio': 'davepi mcp',
     },
@@ -217,10 +238,16 @@ async function scaffold({ name, template, install, davepiVersion, port }) {
     ].join('\n')
   );
 
-  // 5. .gitignore
+  // 5. .gitignore — note `client/davepi.ts` is NOT listed here. The
+  // generated TS client is a committed artifact so the
+  // `client-gen.yml` drift workflow has something to diff against,
+  // and downstream consumers can vendor it as part of the project.
+  // The file doesn't exist until the user runs `npm run gen-client`,
+  // which is fine — `git diff --exit-code` against a non-existent
+  // file fails cleanly.
   fs.writeFileSync(
     path.join(target, '.gitignore'),
-    ['node_modules', '.env', 'uploads', 'client/davepi.ts', ''].join('\n')
+    ['node_modules', '.env', 'uploads', ''].join('\n')
   );
 
   // 6. .mcp.json — Claude Code wiring out of the box.

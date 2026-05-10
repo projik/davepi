@@ -190,6 +190,40 @@ For changes that need a data backfill:
 This is a standard expand-migrate-contract pattern. See
 [Migrations](/operations/migrations/).
 
+## CI templates
+
+Every project scaffolded with `npx create-davepi-app` ships four
+GitHub Actions workflows under `.github/workflows/`:
+
+| Workflow | Triggers | What it does |
+|----------|----------|--------------|
+| `test.yml` | push to main, PRs | `npm test` against a Mongo service container, matrix over Node 20.x and 22.x. The default test script runs `tests/smoke.test.js`, a schema-shape validator — add your own integration tests alongside it. |
+| `client-gen.yml` | PRs touching `schema/**`, `package*.json` | Regenerates `client/davepi.ts` from the live schema registry; `git diff --exit-code` fails the PR if the committed client is stale. Catches the "I forgot to regenerate the typed client" bug. |
+| `migrate.yml` | manual dispatch, version tags | Two-stage: a `--dry` pass that always runs, then an `apply` job gated behind the `migrate-prod` GitHub Environment. Add required reviewers to that environment so a human approves every production migration. Needs `MONGO_URI` and `TOKEN_KEY` repo secrets. |
+| `deploy.yml` | push to main, manual dispatch | Fly.io target out of the box. Behind the `production` GitHub Environment so a reviewer can hold deploys at a manual approval step. Commented alternatives for Render / Railway / Docker Hub are in the file header — swap whichever block matches your hosting. |
+
+### Required setup
+
+For the workflows to work end-to-end, configure these on the
+project's GitHub repo:
+
+1. **Environments** (Settings → Environments → New environment):
+   - `production` — required reviewer if you want a manual gate on deploys.
+   - `migrate-prod` — required reviewer (recommended; this is a one-way operation).
+2. **Secrets** (Settings → Secrets and variables → Actions):
+   - `MONGO_URI` — production database connection string.
+   - `TOKEN_KEY` — same JWT-signing secret your production server uses.
+   - `FLY_API_TOKEN` — output of `fly auth token` (only if you're using the Fly.io deploy template).
+
+### Customising
+
+The files are starter templates. Trim, replace, or extend as your
+project grows — they live in your repo at this point, not in
+dAvePi. The two patterns worth keeping if you adapt them:
+
+- **Use the `migrate-prod` environment gate.** Auto-applying migrations on a push or tag is the kind of thing that wakes someone up at 4am. A required-reviewer step costs ~30 seconds per deploy and prevents a class of incidents.
+- **Keep the client-gen drift guard.** It's the easiest way to enforce the typed-client + schema invariant.
+
 ## See also
 
 - [Migrations](/operations/migrations/) — the data-migration toolchain.

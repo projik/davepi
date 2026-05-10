@@ -30,6 +30,11 @@ describe('create-davepi-app: scaffolder', () => {
         'package.json', '.env', '.gitignore', '.mcp.json',
         'agent.md', '.cursorrules', 'AGENTS.md',
         '.claude/skills/davepi/SKILL.md',
+        '.github/workflows/test.yml',
+        '.github/workflows/client-gen.yml',
+        '.github/workflows/migrate.yml',
+        '.github/workflows/deploy.yml',
+        'tests/smoke.test.js',
         'docker-compose.yml',
         'index.js', 'README.md', 'TEMPLATE.md', 'seed.js',
         'schema/versions/v1/note.js',
@@ -121,6 +126,102 @@ describe('create-davepi-app: scaffolder', () => {
       expect(skill).toMatch(/_describe/);
     } finally {
       cleanup('demo-agent');
+    }
+  });
+
+  test('CI workflow templates ship with the right shape', async () => {
+    await scaffold({
+      name: 'demo-ci',
+      template: 'blank',
+      install: false,
+      davepiVersion: 'latest',
+      port: 5599,
+    });
+    try {
+      const root = path.resolve('demo-ci');
+      const test = fs.readFileSync(path.join(root, '.github/workflows/test.yml'), 'utf8');
+      const drift = fs.readFileSync(path.join(root, '.github/workflows/client-gen.yml'), 'utf8');
+      const migrate = fs.readFileSync(path.join(root, '.github/workflows/migrate.yml'), 'utf8');
+      const deploy = fs.readFileSync(path.join(root, '.github/workflows/deploy.yml'), 'utf8');
+
+      // test.yml: matrix over the two supported Node versions and a
+      // Mongo service container.
+      expect(test).toMatch(/node-version:\s*\['20\.x',\s*'22\.x'\]/);
+      expect(test).toMatch(/mongo:7/);
+
+      // client-gen.yml: runs gen-client AND fails on diff. The
+      // `--intent-to-add` step is what makes the drift check work
+      // against an untracked / never-committed file — without it,
+      // a project that hasn't generated the client yet would
+      // silently pass the workflow.
+      expect(drift).toMatch(/davepi gen-client/);
+      expect(drift).toMatch(/git add --intent-to-add client\/davepi\.ts/);
+      expect(drift).toMatch(/git diff --exit-code/);
+
+      // .gitignore must NOT exclude the generated client — the file
+      // is meant to be committed so the drift workflow has a
+      // baseline to diff against.
+      const gitignore = fs.readFileSync(path.join(root, '.gitignore'), 'utf8');
+      expect(gitignore).not.toMatch(/client\/davepi\.ts/);
+
+      // migrate.yml: two-stage with environment gate on `apply`.
+      expect(migrate).toMatch(/davepi migrate --dry/);
+      expect(migrate).toMatch(/environment:\s*migrate-prod/);
+
+      // deploy.yml: gated behind a `production` environment.
+      expect(deploy).toMatch(/environment:\s*production/);
+      // Third-party actions referenced via `uses:` are pinned (not
+      // @master / @main) so an upstream re-point can't silently
+      // change deploy behaviour. We look only at `uses:` lines so
+      // a passing mention of `@master` in a comment doesn't false-positive.
+      const usesLines = deploy
+        .split('\n')
+        .filter((l) => /^\s*-?\s*uses:/.test(l));
+      expect(usesLines.length).toBeGreaterThan(0);
+      for (const line of usesLines) {
+        expect(line).not.toMatch(/@master\b/);
+        expect(line).not.toMatch(/@main\b/);
+      }
+    } finally {
+      cleanup('demo-ci');
+    }
+  });
+
+  test('smoke test from _shared/tests runs cleanly on a scaffolded project', async () => {
+    await scaffold({
+      name: 'demo-smoke',
+      template: 'crm',
+      install: false,
+      davepiVersion: 'latest',
+      port: 5598,
+    });
+    try {
+      const root = path.resolve('demo-smoke');
+      const { spawnSync } = require('child_process');
+      const result = spawnSync(
+        process.execPath,
+        ['--test', 'tests/smoke.test.js'],
+        { cwd: root, encoding: 'utf8' }
+      );
+      if (result.status !== 0) {
+        // Throw with stdout / stderr in the message so Jest's
+        // reporter prints the underlying node:test output. Using
+        // `throw` rather than `console.*` matches the project's
+        // "no console" rule (CLAUDE.md) and keeps the diagnostic
+        // attached to the failing assertion, not a stray log line.
+        throw new Error(
+          `smoke test exited with status ${result.status}\n` +
+          `--- stdout ---\n${result.stdout}\n` +
+          `--- stderr ---\n${result.stderr}`
+        );
+      }
+      expect(result.status).toBe(0);
+      // Sanity: the CRM template has multiple schemas, so we should
+      // see several "ok" assertions for the per-schema checks.
+      const okCount = (result.stdout.match(/^ok /gm) || []).length;
+      expect(okCount).toBeGreaterThan(3);
+    } finally {
+      cleanup('demo-smoke');
     }
   });
 
