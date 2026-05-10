@@ -97,6 +97,10 @@ function filterWritable(body, schema, user, action) {
     }
     const f = fieldByName.get(k);
     if (f && f.type === 'File') continue; // framework-owned
+    // Computed / virtual fields are read-only — drop any
+    // client-supplied value silently. The output attribute is
+    // populated at response time by utils/computedFields.js.
+    if (f && typeof f.computed === 'function') continue;
     const allowed = f && f.acl && f.acl[action];
     if (!allowed || !allowed.length || hasOverlap(allowed, roles)) {
       out[k] = v;

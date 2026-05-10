@@ -31,6 +31,60 @@ const {
   applyIncludes,
 } = require('./relations');
 const {
+  isComputedField,
+  computedFieldsOf,
+  buildComputedContext,
+  applyComputed,
+} = require('./computedFields');
+
+/**
+ * Map a schema field's declared `type` onto the GraphQL scalar name
+ * graphql-compose understands. Computed-field outputs are scalars by
+ * design (composite types would require synthesising new TCs per
+ * field, which the contract for v1 doesn't promise). Anything we
+ * don't recognise falls back to `String` so the schema still builds.
+ */
+function computedGraphqlType(type) {
+  if (Array.isArray(type)) return `[${computedGraphqlType(type[0])}]`;
+  if (type === String || type === 'String') return 'String';
+  if (type === Number || type === 'Number') return 'Float';
+  if (type === Boolean || type === 'Boolean') return 'Boolean';
+  if (type === Date || type === 'Date') return 'Date';
+  return 'String';
+}
+
+/**
+ * Map a computed-field's declared `type` into a Swagger 2.0 schema
+ * fragment. Used by buildSwagger to inject computed fields with
+ * `readOnly: true`.
+ */
+function computedSwaggerType(type) {
+  if (Array.isArray(type)) {
+    return { type: 'array', items: computedSwaggerType(type[0]) };
+  }
+  if (type === String || type === 'String') return { type: 'string' };
+  if (type === Number || type === 'Number') return { type: 'number' };
+  if (type === Boolean || type === 'Boolean') return { type: 'boolean' };
+  if (type === Date || type === 'Date') return { type: 'string', format: 'date-time' };
+  return { type: 'string' };
+}
+
+/**
+ * Check field-level read ACL on a computed field. Mirrors the
+ * `acl.read` semantics applied by `projectByAcl` for stored fields,
+ * just enforced inside the resolver because TC-added fields don't
+ * pass through projectByAcl on their way to the wire.
+ */
+function userCanReadComputed(field, user) {
+  if (!field || !field.acl || !Array.isArray(field.acl.read) || !field.acl.read.length) {
+    return true;
+  }
+  const roles = (user && Array.isArray(user.roles) && user.roles.length)
+    ? user.roles
+    : ['user'];
+  return field.acl.read.some((r) => roles.includes(r));
+}
+const {
   projectByAcl,
   projectListByAcl,
   filterWritable,
@@ -153,6 +207,15 @@ function createSchemaLoader({ app, apiSpec, setApolloRouter, buildGraphqlContext
     const references = [];
     const fileFields = [];
     s.fields.forEach((f) => {
+      // Computed / virtual fields are never persisted: they're
+      // derived at response time by utils/computedFields.js, so we
+      // skip them entirely from the Mongoose schema. Mongoose's
+      // `strict: true` would silently drop them anyway, but
+      // skipping is cleaner and lets the post-fetch pass own the
+      // attribute.
+      if (isComputedField(f)) {
+        return;
+      }
       // type: 'File' fields become embedded sub-docs at the Mongoose
       // layer. Clients never POST these directly — uploads go through
       // the dedicated multipart route per file field.
@@ -220,6 +283,20 @@ function createSchemaLoader({ app, apiSpec, setApolloRouter, buildGraphqlContext
     const putSchema = JSON.parse(JSON.stringify(postSchema));
     delete putSchema.required;
     swaggerSchema.type = 'object';
+
+    // Computed / virtual fields aren't in the Mongoose model, so
+    // mongoose-to-swagger can't see them. Inject each one with
+    // `readOnly: true` so generated SDKs and humans both know the
+    // field exists, that it's part of the response shape, and that
+    // it can't be supplied on POST / PUT.
+    for (const f of computedFieldsOf(s)) {
+      const swaggerType = computedSwaggerType(f.type);
+      swaggerSchema.properties[f.name] = {
+        ...swaggerType,
+        readOnly: true,
+        ...(f.description ? { description: f.description } : {}),
+      };
+    }
 
     const tag = path.charAt(0).toUpperCase() + path.slice(1);
     const collectionPath = `/api/${s.version}/${path}`;
@@ -460,6 +537,16 @@ function createSchemaLoader({ app, apiSpec, setApolloRouter, buildGraphqlContext
     // request — handlers don't re-walk the schema each time.
     const normalizedRelations = normalizeRelations(s);
     const relationNames = Object.keys(normalizedRelations);
+    // Computed-field context factory. The handler-level callers
+    // build a fresh ctx per request so `ctx.user` always reflects
+    // the current caller and cross-resource lookups (`ctx.find`,
+    // `ctx.count`) read against the live registry.
+    const buildComputedContextForReq = (req) =>
+      buildComputedContext({
+        user: req.user,
+        req,
+        getResource: (p) => getResource(p, s.version),
+      });
 
     // Per-schema idempotency middleware. The `getBodyForHash` callback
     // mirrors what the create handler will actually persist
@@ -663,6 +750,17 @@ function createSchemaLoader({ app, apiSpec, setApolloRouter, buildGraphqlContext
         ['_id', 'createdAt', 'updatedAt', '__v'].forEach((k) => {
           delete jsSchema.properties[k];
         });
+        // Computed fields aren't in the Mongoose model, so
+        // jsonSchema() omits them. Inject each one as `readOnly:
+        // true` so introspecting clients see the full response
+        // shape.
+        for (const f of computedFieldsOf(s)) {
+          jsSchema.properties[f.name] = {
+            ...computedSwaggerType(f.type),
+            readOnly: true,
+            ...(f.description ? { description: f.description } : {}),
+          };
+        }
         res.status(200).send(jsSchema);
       })
     );
@@ -681,6 +779,7 @@ function createSchemaLoader({ app, apiSpec, setApolloRouter, buildGraphqlContext
         const record = await model.create(data);
         const plain = JSON.parse(JSON.stringify(record));
         await decorateFileUrls(plain, s, storage);
+        await applyComputed([plain], s, buildComputedContextForReq(req));
         await audit({
           req,
           recordId: record._id,
@@ -774,6 +873,10 @@ function createSchemaLoader({ app, apiSpec, setApolloRouter, buildGraphqlContext
             getResource: (p) => getResource(p, s.version),
           });
         }
+        // Computed fields: derived per-record at response time.
+        // Runs after relations so a computed function can reference
+        // included relation values on `record`.
+        await applyComputed(list, s, buildComputedContextForReq(req));
 
         const totalPages = Math.ceil(count / pageSize);
         const result = {
@@ -853,6 +956,7 @@ function createSchemaLoader({ app, apiSpec, setApolloRouter, buildGraphqlContext
             getResource: (p) => getResource(p, s.version),
           });
         }
+        await applyComputed([copy], s, buildComputedContextForReq(req));
 
         res.status(200).json(projectByAcl(copy, s, req.user));
       })
@@ -1199,6 +1303,42 @@ function createSchemaLoader({ app, apiSpec, setApolloRouter, buildGraphqlContext
     for (const entry of registry.values()) {
       const { schema: s, model } = entry;
       const tc = mongoGql.composeWithMongoose(model, { schemaComposer: composer });
+      // Computed / virtual fields aren't in the Mongoose model, so
+      // graphql-compose-mongoose doesn't see them. Wire each one as a
+      // resolver-backed field on the TC. graphql-compose only invokes
+      // the resolve fn when the client asks for the field, which
+      // gives us lazy resolution for free; the `projection` hint
+      // forces the parent finder to fetch the underlying scalar
+      // fields the computed depends on.
+      const computeds = computedFieldsOf(s);
+      if (computeds.length) {
+        const projection = {};
+        for (const ff of s.fields || []) {
+          if (!isComputedField(ff) && ff.type !== 'File') {
+            projection[ff.name] = true;
+          }
+        }
+        for (const f of computeds) {
+          tc.addFields({
+            [f.name]: {
+              type: computedGraphqlType(f.type),
+              description: f.description,
+              projection,
+              resolve: async (source, args, ctx) => {
+                // Hide ACL-restricted computeds at resolve time —
+                // there's no projectByAcl pass on TC-resolved fields
+                // (the SDK serialises whatever the resolver returns).
+                if (!userCanReadComputed(f, ctx && ctx.user)) return null;
+                const computedCtx = buildComputedContext({
+                  user: ctx && ctx.user,
+                  getResource: (p) => getResource(p, s.version),
+                });
+                return f.computed(source, computedCtx);
+              },
+            },
+          });
+        }
+      }
       tcByPath.set(s.path, { tc, schema: s, model });
     }
 
