@@ -6,9 +6,11 @@ name: 'Publish @davepi/mcp'
 # fails fast on mismatch so a stale tag doesn't publish the wrong
 # bits.
 #
-# Required secret:
-#   NPM_TOKEN — an npm automation token with publish rights on the
-#               @davepi scope.
+# Auth: npm Trusted Publishing via OIDC. No long-lived NPM_TOKEN
+# needed — the `id-token: write` permission lets npm exchange this
+# job's OIDC token for a short-lived publish token. Requires the
+# package to have a trusted publisher configured on npmjs.com that
+# matches this repo, workflow filename, and environment name.
 
 on:
   push:
@@ -17,7 +19,7 @@ on:
 
 permissions:
   contents: read
-  id-token: write   # for npm provenance
+  id-token: write   # required for npm Trusted Publishing + provenance
 
 jobs:
   publish:
@@ -50,7 +52,5 @@ jobs:
       - name: Run package tests before publish
         run: npm test
 
-      - name: Publish to npm with provenance
+      - name: Publish to npm via Trusted Publishing
         run: npm publish --access public --provenance
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
