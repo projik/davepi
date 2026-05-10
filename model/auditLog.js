@@ -24,7 +24,7 @@ const AuditLogSchema = new mongoose.Schema(
     recordId: { type: mongoose.Schema.Types.ObjectId, required: true, index: true },
     action: {
       type: String,
-      enum: ['create', 'update', 'delete', 'restore'],
+      enum: ['create', 'update', 'delete', 'restore', 'transition'],
       required: true,
     },
     before: { type: mongoose.Schema.Types.Mixed, default: null },

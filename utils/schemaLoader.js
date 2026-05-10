@@ -11,7 +11,7 @@ const MongoQS = require('mongo-querystring');
 const auth = require('../middleware/auth');
 const asyncHandler = require('./asyncHandler');
 const logger = require('./logger');
-const { NotFoundError, ValidationError } = require('./errors');
+const { NotFoundError, ValidationError, InvalidTransitionError } = require('./errors');
 const { emitRecordEvent } = require('./events');
 const { recordAudit } = require('./audit');
 const AuditLog = require('../model/auditLog');
@@ -36,6 +36,15 @@ const {
   buildComputedContext,
   applyComputed,
 } = require('./computedFields');
+const {
+  isStateMachineField,
+  stateMachineFieldsOf,
+  validateTransition,
+  computeAvailableTransitions,
+  attachAvailableTransitions,
+  stampInitialStates,
+  listTransitionsToValidate,
+} = require('./stateMachine');
 
 /**
  * Map a schema field's declared `type` onto the GraphQL scalar name
@@ -85,6 +94,7 @@ const {
   wrapByIdMutation,
   wrapAggregation,
   wrapComputedField,
+  wrapStateTransition,
 } = require('./scopeResolver');
 const {
   FileMetaSchema,
@@ -774,10 +784,16 @@ function createSchemaLoader({ app, apiSpec, setApolloRouter, buildGraphqlContext
           accountId: req.user.user_id,
           userId: req.user.user_id,
         };
+        // State-machine fields: clients can't pick a non-initial
+        // state on create. Always stamp the declared initial after
+        // filterWritable so a forged `{ status: 'approved' }` doesn't
+        // bypass the transition graph.
+        stampInitialStates(data, s);
         const record = await model.create(data);
         const plain = JSON.parse(JSON.stringify(record));
         await decorateFileUrls(plain, s, storage);
         await applyComputed([plain], s, buildComputedContextForReq(req));
+        attachAvailableTransitions([plain], s, req.user);
         await audit({
           req,
           recordId: record._id,
@@ -875,6 +891,7 @@ function createSchemaLoader({ app, apiSpec, setApolloRouter, buildGraphqlContext
         // Runs after relations so a computed function can reference
         // included relation values on `record`.
         await applyComputed(list, s, buildComputedContextForReq(req));
+        attachAvailableTransitions(list, s, req.user);
 
         const totalPages = Math.ceil(count / pageSize);
         const result = {
@@ -955,6 +972,7 @@ function createSchemaLoader({ app, apiSpec, setApolloRouter, buildGraphqlContext
           });
         }
         await applyComputed([copy], s, buildComputedContextForReq(req));
+        attachAvailableTransitions([copy], s, req.user);
 
         res.status(200).json(projectByAcl(copy, s, req.user));
       })
@@ -1133,9 +1151,43 @@ function createSchemaLoader({ app, apiSpec, setApolloRouter, buildGraphqlContext
           req
         );
         const writable = filterWritable(req.body, s, req.user, 'update');
-        const before = auditEnabled
+        // We need the `before` snapshot whenever audit is on OR
+        // there's a state-machine field whose validation needs the
+        // current value. Fetch once so we don't double-read.
+        const hasStateMachine = stateMachineFieldsOf(s).length > 0;
+        const before = (auditEnabled || hasStateMachine)
           ? await model.findOne(query).lean()
           : null;
+
+        // Validate every state-machine transition the client is
+        // attempting BEFORE we touch the record. An invalid
+        // transition is a structured 400 with current / attempted /
+        // allowed in the body so the client can render actionable
+        // next-steps.
+        const transitions = hasStateMachine
+          ? listTransitionsToValidate(writable, before, s)
+          : [];
+        // 404 short-circuit: if the caller is attempting a
+        // state-machine transition on a record that doesn't exist,
+        // surface NOT_FOUND rather than letting validateTransition
+        // misinterpret the absent `current` as
+        // `initial_state_required` (a 400 INVALID_TRANSITION).
+        if (transitions.length && !before) {
+          throw new NotFoundError(path);
+        }
+        for (const t of transitions) {
+          const v = validateTransition(t.field, t.current, t.next);
+          if (!v.valid) {
+            throw new InvalidTransitionError(v.message, {
+              field: t.field.name,
+              current: v.current,
+              attempted: v.attempted,
+              allowed: v.allowed,
+              reason: v.reason,
+            });
+          }
+        }
+
         let result;
         if (Object.keys(writable).length === 0) {
           // Empty $set is a no-op in Mongoose (matchedCount=0 even
@@ -1166,6 +1218,53 @@ function createSchemaLoader({ app, apiSpec, setApolloRouter, buildGraphqlContext
           userId: req.user.user_id,
           recordId: String(req.params.id),
         });
+
+        // Per-transition tail: audit row, dedicated event, and the
+        // optional onEnter hook. All three are best-effort — a
+        // failed audit / hook / event must not roll back a
+        // successful state change.
+        if (transitions.length) {
+          const fresh = before ? await model.findById(req.params.id).lean() : null;
+          for (const t of transitions) {
+            if (auditEnabled) {
+              await audit({
+                req,
+                recordId: req.params.id,
+                action: 'transition',
+                before: { ...(before || {}), [t.field.name]: t.current },
+                after: { ...(fresh || {}), [t.field.name]: t.next },
+              });
+            }
+            emitRecordEvent({
+              type: `${path}.transitioned`,
+              version: s.version,
+              userId: req.user.user_id,
+              recordId: String(req.params.id),
+              field: t.field.name,
+              from: t.current,
+              to: t.next,
+            });
+            const onEnterHooks =
+              (t.field.stateMachine && t.field.stateMachine.onEnter) || {};
+            const hook = onEnterHooks[t.next];
+            if (typeof hook === 'function') {
+              try {
+                await hook(fresh, {
+                  user: req.user,
+                  req,
+                  from: t.current,
+                  to: t.next,
+                });
+              } catch (err) {
+                (req.log || logger).warn(
+                  { err, field: t.field.name, to: t.next },
+                  'state-machine onEnter hook threw; transition committed anyway'
+                );
+              }
+            }
+          }
+        }
+
         res.status(200).json(result);
       })
     );
@@ -1438,6 +1537,121 @@ function createSchemaLoader({ app, apiSpec, setApolloRouter, buildGraphqlContext
             projection: { _id: true },
           });
         }
+      }
+
+      // Per state-machine field: a top-level mutation
+      // `<path>Transition<FieldName>(_id, to)` that runs the same
+      // validate / persist / audit / event / onEnter pipeline as
+      // the REST PUT path. The `to` arg is constrained to the
+      // declared states via a generated GraphQL enum so a typo on
+      // the wire is caught at validation time before any code
+      // runs.
+      for (const f of stateMachineFieldsOf(s)) {
+        const PascalName = f.name.charAt(0).toUpperCase() + f.name.slice(1);
+        const enumName = `${PascalName}State_${p}`;
+        // GraphQL enum value NAMES must be valid GraphQL identifiers
+        // ([_A-Za-z][_0-9A-Za-z]*). State strings are
+        // user-controlled schema vocabulary, so a kebab-case
+        // ('in-progress') or whitespace-bearing state would crash
+        // composer.createEnumTC and take the whole rebuild down.
+        // Sanitise the NAME but preserve the original string as the
+        // value so wire/storage semantics are unchanged.
+        const enumValues = {};
+        const seenNames = new Map();
+        for (const st of f.stateMachine.states) {
+          let safe = String(st).replace(/[^_A-Za-z0-9]/g, '_');
+          if (!/^[_A-Za-z]/.test(safe)) safe = `_${safe}`;
+          // Disambiguate post-sanitisation collisions
+          // (e.g. `in-progress` and `in_progress` both map to
+          // `in_progress`).
+          if (seenNames.has(safe)) {
+            const n = seenNames.get(safe) + 1;
+            seenNames.set(safe, n);
+            safe = `${safe}_${n}`;
+          } else {
+            seenNames.set(safe, 1);
+          }
+          enumValues[safe] = { value: st };
+        }
+        if (!composer.has(enumName)) {
+          composer.createEnumTC({ name: enumName, values: enumValues });
+        }
+        mutationFields[`${p}Transition${PascalName}`] = wrapStateTransition({
+          type: tc,
+          description: `Transition ${p}.${f.name} to a new state.`,
+          args: { _id: 'MongoID!', to: `${enumName}!` },
+          Model: model,
+          schema: s,
+          kind: 'write',
+          action: 'update',
+          runner: async ({ user, before, to }) => {
+            const v = validateTransition(f, before[f.name], to);
+            if (!v.valid) {
+              // Apollo Server v3 wraps unknown errors as
+              // INTERNAL_SERVER_ERROR. ApolloError(message, code,
+              // properties) puts the literal code on
+              // `extensions.code` (UserInputError hardcodes
+              // BAD_USER_INPUT and would lose our typed code).
+              throw new apollo.ApolloError(v.message, 'INVALID_TRANSITION', {
+                details: {
+                  field: f.name,
+                  current: v.current,
+                  attempted: v.attempted,
+                  allowed: v.allowed,
+                  reason: v.reason,
+                },
+              });
+            }
+            if (!v.transition) return before; // no-op: same state
+            await model.updateOne(
+              { _id: before._id, userId: user.user_id },
+              { $set: { [f.name]: to } }
+            );
+            const after = await model.findById(before._id).lean();
+            const auditOn = s.audit !== false;
+            if (auditOn) {
+              try {
+                await recordAudit({
+                  req: { user },
+                  resource: s.path,
+                  recordId: before._id,
+                  action: 'transition',
+                  before: { ...before, [f.name]: v.current },
+                  after,
+                });
+              } catch (_) { /* best-effort */ }
+            }
+            emitRecordEvent({
+              type: `${p}.transitioned`,
+              version: s.version,
+              userId: user.user_id,
+              recordId: String(before._id),
+              field: f.name,
+              from: v.current,
+              to,
+            });
+            // Also emit the standard updated event so existing
+            // webhook subscribers see the change.
+            emitRecordEvent({
+              type: `${p}.updated`,
+              version: s.version,
+              userId: user.user_id,
+              recordId: String(before._id),
+            });
+            const hook = (f.stateMachine.onEnter || {})[to];
+            if (typeof hook === 'function') {
+              try {
+                await hook(after, { user, from: v.current, to });
+              } catch (err) {
+                logger.warn(
+                  { err, field: f.name, to },
+                  'state-machine onEnter hook threw; transition committed anyway'
+                );
+              }
+            }
+            return after;
+          },
+        });
       }
 
       // Per-aggregation top-level GraphQL queries. Query name is
