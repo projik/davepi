@@ -275,7 +275,9 @@ function createSchemaLoader({ app, apiSpec, setApolloRouter, buildGraphqlContext
     // `readOnly: true` so generated SDKs and humans both know the
     // field exists, that it's part of the response shape, and that
     // it can't be supplied on POST / PUT.
+    const computedFieldNames = new Set();
     for (const f of computedFieldsOf(s)) {
+      computedFieldNames.add(f.name);
       const swaggerType = computedSwaggerType(f.type);
       swaggerSchema.properties[f.name] = {
         ...swaggerType,
@@ -302,12 +304,22 @@ function createSchemaLoader({ app, apiSpec, setApolloRouter, buildGraphqlContext
         consumes: ['application/json'],
         produces: ['application/json'],
         parameters: [
-          ...Object.keys(swaggerSchema.properties).map((sc) => ({
-            name: sc,
-            in: 'query',
-            type: 'string',
-            description: 'mongo-querystring formatted query parameters',
-          })),
+          // Filterable query params come from persisted fields only.
+          // Computed/virtual fields are part of the response schema
+          // (with readOnly: true) but advertising them here would be
+          // misleading — they're derived at response time and Mongo
+          // can't filter on a value that doesn't exist in the
+          // collection. Same logic for File-field metadata sub-docs:
+          // mongo-querystring on `attachment.size` etc. doesn't fit
+          // the JSON-string filter contract these params describe.
+          ...Object.keys(swaggerSchema.properties)
+            .filter((sc) => !computedFieldNames.has(sc))
+            .map((sc) => ({
+              name: sc,
+              in: 'query',
+              type: 'string',
+              description: 'mongo-querystring formatted query parameters',
+            })),
           ...((s.fields || []).some((f) => f && f.searchable)
             ? [
                 {

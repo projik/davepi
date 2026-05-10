@@ -246,6 +246,22 @@ describe('computed fields: REST integration', () => {
     expect(def.properties.fullName.description).toMatch(/Concatenated/);
   });
 
+  test('GET list query parameters do NOT include computed fields (you can\'t filter Mongo by a derived value)', async () => {
+    const swagger = await ctx
+      .request(ctx.app)
+      .get('/api-docs/swagger.json');
+    const params = swagger.body.paths['/api/v1/cf_person'].get.parameters;
+    const names = params.map((p) => p.name);
+    // Computed names are advertised in the response definition but
+    // must NOT appear in the GET filter param list.
+    expect(names).not.toContain('fullName');
+    expect(names).not.toContain('shoutName');
+    expect(names).not.toContain('secretComputed');
+    // Persisted fields should still be there.
+    expect(names).toContain('firstName');
+    expect(names).toContain('lastName');
+  });
+
   test('GET /api/v1/cf_person-schema lists computed fields with readOnly: true', async () => {
     const user = await registerUser(ctx.request, ctx.app);
     const r = await ctx
