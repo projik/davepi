@@ -3,7 +3,10 @@ module.exports = {
   collection: 'category',
   fields: [
     { name: 'userId', type: String, required: true },
-    { name: 'name', type: String, required: true, searchable: true, unique: true },
+    // Per-tenant unique (see compositeIndex below) — NOT globally
+    // unique. Two different users can each have a "Engineering"
+    // category without colliding.
+    { name: 'name', type: String, required: true, searchable: true },
     {
       name: 'slug',
       type: String,
@@ -16,6 +19,11 @@ module.exports = {
     },
     { name: 'description', type: String, searchable: true },
   ],
+  // Tenant-scoped uniqueness on `name`. dAvePi scopes every read /
+  // write by userId, so this index enforces "no duplicate name
+  // within one user's categories" without blocking other users
+  // from using the same string.
+  compositeIndex: [{ userId: 1, name: 1 }],
   relations: {
     articles: { hasMany: 'article', foreignKey: 'categoryId' },
   },

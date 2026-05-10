@@ -348,6 +348,34 @@ describe('templates: each one boots and exercises its surface', () => {
     expect(bad.body.error.code).toBe('INVALID_TRANSITION');
   });
 
+  test('content: category.name is unique per-tenant, not globally', async () => {
+    // Two different users can each have a category called
+    // "Engineering" — the compositeIndex on {userId, name}
+    // guarantees per-tenant uniqueness without leaking the value
+    // across tenants.
+    const a = await registerUser(ctx.request, ctx.app);
+    const b = await registerUser(ctx.request, ctx.app);
+    const aRes = await ctx.request(ctx.app)
+      .post('/api/v1/category')
+      .set('Authorization', `Bearer ${a.token}`)
+      .send({ name: 'Engineering' });
+    expect(aRes.status).toBe(201);
+    const bRes = await ctx.request(ctx.app)
+      .post('/api/v1/category')
+      .set('Authorization', `Bearer ${b.token}`)
+      .send({ name: 'Engineering' });
+    expect(bRes.status).toBe(201);
+    expect(bRes.body._id).not.toBe(aRes.body._id);
+
+    // But the SAME user can't reuse the name within their own tenant.
+    const dup = await ctx.request(ctx.app)
+      .post('/api/v1/category')
+      .set('Authorization', `Bearer ${a.token}`)
+      .send({ name: 'Engineering' });
+    expect(dup.status).toBe(409);
+    expect(dup.body.error.code).toBe('DUPLICATE');
+  });
+
   test('content: article slug is computed from title; state machine governs status', async () => {
     const user = await registerUser(ctx.request, ctx.app);
     const a = await ctx.request(ctx.app)
