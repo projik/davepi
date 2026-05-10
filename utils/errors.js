@@ -47,7 +47,7 @@ class MethodNotAllowedError extends AppError {
 /**
  * Idempotency-Key was reused with a different request body. The
  * caller is asking the server to do two different things under the
- * same retry key, which we refuse — see docs/idempotency.md.
+ * same retry key, which we refuse — see https://docs.davepi.dev/features/idempotency/.
  */
 class IdempotencyConflictError extends AppError {
   constructor(message = 'Idempotency-Key was reused with a different request body') {

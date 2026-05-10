@@ -1,0 +1,82 @@
+---
+title: dAvePi
+description: The schema-driven backend AI agents build on. REST + GraphQL + MCP from one schema file.
+template: splash
+hero:
+  tagline: |
+    The schema-driven backend AI agents build on. Drop one schema file
+    and get REST, GraphQL, Swagger, an MCP server, an admin SPA, and a
+    typed TypeScript client — all kept in lockstep automatically.
+  actions:
+    - text: Quickstart
+      link: /quickstart/
+      icon: right-arrow
+      variant: primary
+    - text: View on GitHub
+      link: https://github.com/projik/davepi
+      icon: external
+---
+
+import { Card, CardGrid } from '@astrojs/starlight/components';
+
+## What you get from one schema file
+
+<CardGrid>
+  <Card title="REST" icon="rocket">
+    `POST /api/v1/<resource>`, `GET`, `PUT`, `DELETE`, `:id/restore`,
+    `:id/history`, file uploads, aggregations — all generated.
+  </Card>
+  <Card title="GraphQL" icon="graphql">
+    Apollo Server v3 with auto-generated types, queries, and
+    mutations via `graphql-compose-mongoose`. Relations as graph
+    edges.
+  </Card>
+  <Card title="MCP server" icon="setting">
+    Tools per resource so Claude Code / Cursor / Claude Desktop call
+    the API natively. HTTP and stdio transports.
+  </Card>
+  <Card title="Admin SPA" icon="laptop">
+    Refine + ant-design. Auto-generates a working admin UI from your
+    schema map.
+  </Card>
+  <Card title="Typed client" icon="seti:typescript">
+    `npx davepi gen-client` emits a fully-typed TS client with
+    method signatures per resource.
+  </Card>
+  <Card title="Capability manifest" icon="document">
+    `GET /_describe` returns a compact JSON manifest of the live
+    surface so agents can plan before they code.
+  </Card>
+</CardGrid>
+
+## One command to a running app
+
+```bash
+npx create-davepi-app my-app --template crm
+cd my-app
+docker compose up -d
+npm install && npm start
+```
+
+Templates: `blank`, `crm`, `ticketing`, `content`, `b2b-saas`. See
+[Quickstart](/quickstart/) for the walkthrough.
+
+## What dAvePi gives you that handcrafted backends don't
+
+- **Schemas are the source of truth.** Add a field, every surface
+  reflects it without code changes.
+- **Hot reload during dev.** Schema changes land without restarting
+  the server.
+- **Tenant isolation is non-bypassable.** Every read scopes by the
+  authenticated user; every relation re-applies it.
+- **Agent-first design.** The MCP server, the `_describe` manifest,
+  and the `agent.md` guide make Claude Code / Cursor first-class
+  callers, not an afterthought.
+
+## What dAvePi is *not*
+
+- Not a database — it sits on top of MongoDB.
+- Not for use cases where SQL joins or strict normalisation matter
+  more than schema flexibility.
+- Not a replacement for handcrafted business logic — it generates
+  the boring 80%, you write the rest.
