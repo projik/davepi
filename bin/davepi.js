@@ -44,6 +44,12 @@ Commands:
   migrate [--dry]                          Apply pending migrations
   migrate:down [--dry]                     Revert the most recently applied
   migrate:status                           List pending vs applied
+  gen-client --out <file> [--base-url <url>]
+                                            Emit a TypeScript client for
+                                            every loaded schema. Pairs with
+                                            client/davepi-runtime.ts. Output
+                                            is deterministic so CI diffs
+                                            stay clean.
   mcp                                      Run an MCP server over stdio.
                                             Requires DAVEPI_TOKEN (a JWT
                                             issued by the same TOKEN_KEY) so
@@ -131,6 +137,34 @@ async function main() {
         out(`${dry ? '[DRY] ' : ''}reverted ${r.name}`);
       }
     });
+    return;
+  }
+
+  if (cmd === 'gen-client') {
+    const outPath = flag(rest, '--out');
+    if (!outPath || outPath === true) {
+      err('gen-client requires --out <file>');
+      process.exit(1);
+    }
+    const baseUrlFlag = flag(rest, '--base-url');
+    const baseUrl = typeof baseUrlFlag === 'string' ? baseUrlFlag : '';
+    // Boot the regular app so schemas / models / the loader come up
+    // exactly as they would for the HTTP server, then read the
+    // registry to drive generation. We never call app.listen — the
+    // process exits after writing the file.
+    require('../config/database').connect();
+    const app = require('../app');
+    if (app.locals && app.locals.ready) await app.locals.ready;
+    const { generateClient } = require('../utils/clientGen');
+    const entries = [];
+    for (const key of app.locals.schemaLoader.listSchemas()) {
+      const e = app.locals.schemaLoader.getEntry(key);
+      if (e && e.schema) entries.push({ s: e.schema });
+    }
+    const ts = generateClient(entries, { baseUrl });
+    require('fs').writeFileSync(path.resolve(outPath), ts);
+    out(`Wrote ${path.relative(process.cwd(), path.resolve(outPath))} (${entries.length} schemas)`);
+    await require('mongoose').disconnect();
     return;
   }
 
