@@ -45,5 +45,13 @@ module.exports = (err, req, res, next) => {
     log.error({ err, code }, message);
   }
 
-  res.status(status).json({ error: { code, message } });
+  // Typed errors can attach a `details` payload for codes whose
+  // contract benefits from structured context (e.g. INVALID_TRANSITION
+  // surfaces current / attempted / allowed). Plain errors just get
+  // { code, message }.
+  const body = { error: { code, message } };
+  if (err && err.details && typeof err.details === 'object') {
+    body.error.details = err.details;
+  }
+  res.status(status).json(body);
 };

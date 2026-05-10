@@ -364,6 +364,37 @@ const wrapComputedField = ({ type, description, projection, field, compute, buil
   },
 });
 
+/**
+ * Wrap a state-machine transition into a graphql-compose mutation
+ * field config.
+ *
+ * Transitions don't fit graphql-compose-mongoose's `updateById`
+ * shape (the args are `{ _id, to }`, not `{ _id, record }`), so
+ * they don't go through `wrapByIdMutation`. This is the
+ * transition-shaped entry point: it enforces auth, fetches the
+ * record under the caller's tenant, hands the runner the
+ * authenticated user + the record + the requested target state,
+ * and returns the wrapper's result as-is.
+ *
+ * Tenant isolation lives in the ownership query the wrapper
+ * itself runs (`{ _id: args._id, userId }`) — the runner gets a
+ * record it's already authorised to mutate.
+ */
+const wrapStateTransition = ({ type, args, description, Model, runner }) => ({
+  type,
+  args,
+  description,
+  resolve: async (_root, params, ctx) => {
+    if (!ctx || !ctx.user || !ctx.user.user_id) {
+      throw new AuthenticationError('Authentication required');
+    }
+    const ownership = { _id: params._id, userId: ctx.user.user_id };
+    const before = await Model.findOne(ownership).lean();
+    if (!before) throw new ForbiddenError('Record not found');
+    return runner({ user: ctx.user, before, to: params.to });
+  },
+});
+
 module.exports = {
   wrapFilter,
   wrapCreateOne,
@@ -373,4 +404,5 @@ module.exports = {
   wrapByIdMutation,
   wrapAggregation,
   wrapComputedField,
+  wrapStateTransition,
 };

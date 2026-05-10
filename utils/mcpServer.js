@@ -52,7 +52,16 @@ const {
   NotFoundError,
   ValidationError,
   UnauthorizedError,
+  InvalidTransitionError,
 } = require('./errors');
+const {
+  stateMachineFieldsOf,
+  validateTransition,
+  attachAvailableTransitions,
+  stampInitialStates,
+  listTransitionsToValidate,
+} = require('./stateMachine');
+const { emitRecordEvent } = require('./events');
 
 /**
  * Map a thrown error onto the canonical `{ code, message, ... }`
@@ -253,6 +262,7 @@ function registerSchemaTools(server, entry, { schemaLoader, getUser }) {
         Model.find(filter).countDocuments(),
       ]);
       await populateInto(list, includes, user);
+      attachAvailableTransitions(list, s);
       return {
         results: projectListByAcl(list, s, user),
         totalResults: count,
@@ -280,6 +290,7 @@ function registerSchemaTools(server, entry, { schemaLoader, getUser }) {
       if (!record) throw new NotFoundError(path);
       const includes = parseIncludes(args.include && args.include.join(','), normalizedRelations);
       await populateInto([record], includes, user);
+      attachAvailableTransitions([record], s);
       return projectByAcl(record, s, user);
     })
   ));
@@ -308,6 +319,10 @@ function registerSchemaTools(server, entry, { schemaLoader, getUser }) {
       // userId / accountId is overridden — never trust the wire for
       // ownership.
       const data = { ...writable, accountId: user.user_id, userId: user.user_id };
+      // State-machine fields: stamp initial state. Same contract as
+      // the REST POST handler — clients can't enter a record at any
+      // state but the declared initial.
+      stampInitialStates(data, s);
 
       // Idempotency: same claim-execute-complete protocol as the
       // REST middleware (utils/idempotency.js). Body hash covers
@@ -359,6 +374,7 @@ function registerSchemaTools(server, entry, { schemaLoader, getUser }) {
       // and log them), but we wrap defensively so any future change
       // in their failure semantics doesn't regress this contract.
       const plain = JSON.parse(JSON.stringify(record));
+      attachAvailableTransitions([plain], s);
       const projected = projectByAcl(plain, s, user);
       if (auditEnabled) {
         try {
@@ -409,7 +425,28 @@ function registerSchemaTools(server, entry, { schemaLoader, getUser }) {
       // client-supplied values so a tool call can't reassign
       // ownership of a record it owns.
       for (const f of TENANT_FIELDS) delete writable[f];
-      const before = auditEnabled ? await Model.findOne(filter).lean() : null;
+      // State-machine fields: same validation contract as REST PUT.
+      // Need `before` for current-state lookup whenever audit is on
+      // OR there's a state machine in play, so fetch once.
+      const hasStateMachine = stateMachineFieldsOf(s).length > 0;
+      const before = (auditEnabled || hasStateMachine)
+        ? await Model.findOne(filter).lean()
+        : null;
+      const transitions = hasStateMachine
+        ? listTransitionsToValidate(writable, before, s)
+        : [];
+      for (const t of transitions) {
+        const v = validateTransition(t.field, t.current, t.next);
+        if (!v.valid) {
+          throw new InvalidTransitionError(v.message, {
+            field: t.field.name,
+            current: v.current,
+            attempted: v.attempted,
+            allowed: v.allowed,
+            reason: v.reason,
+          });
+        }
+      }
       // Empty $set is a no-op in Mongoose (matchedCount=0 even when
       // the doc exists), so callers who post only ACL-stripped or
       // tenant-stripped keys would otherwise see a misleading 404.
@@ -433,6 +470,37 @@ function registerSchemaTools(server, entry, { schemaLoader, getUser }) {
           after: fresh,
         });
       }
+      // Per-transition tail (matches REST PUT). Audit row,
+      // dedicated event, optional onEnter — all best-effort.
+      for (const t of transitions) {
+        if (auditEnabled) {
+          try {
+            await recordAudit({
+              req: { user },
+              resource: s.path,
+              recordId: args.id,
+              action: 'transition',
+              before: { ...(before || {}), [t.field.name]: t.current },
+              after: { ...(fresh || {}), [t.field.name]: t.next },
+            });
+          } catch (_) { /* best-effort */ }
+        }
+        emitRecordEvent({
+          type: `${path}.transitioned`,
+          version: s.version,
+          userId: user.user_id,
+          recordId: String(args.id),
+          field: t.field.name,
+          from: t.current,
+          to: t.next,
+        });
+        const hook = (t.field.stateMachine.onEnter || {})[t.next];
+        if (typeof hook === 'function') {
+          try { await hook(fresh, { user, from: t.current, to: t.next }); }
+          catch (_) { /* best-effort */ }
+        }
+      }
+      attachAvailableTransitions([fresh], s);
       return projectByAcl(fresh, s, user);
     })
   ));

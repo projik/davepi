@@ -68,6 +68,19 @@ class IdempotencyInProgressError extends AppError {
   }
 }
 
+/**
+ * A state-machine-controlled field was set to a value that's not
+ * a declared transition from its current value. Carries
+ * `current` / `attempted` / `allowed` in `details` so a client can
+ * render actionable next-steps without re-parsing the schema.
+ */
+class InvalidTransitionError extends AppError {
+  constructor(message = 'Invalid state transition', details = {}) {
+    super(message, 400, 'INVALID_TRANSITION');
+    this.details = details;
+  }
+}
+
 module.exports = {
   AppError,
   NotFoundError,
@@ -78,4 +91,5 @@ module.exports = {
   MethodNotAllowedError,
   IdempotencyConflictError,
   IdempotencyInProgressError,
+  InvalidTransitionError,
 };
