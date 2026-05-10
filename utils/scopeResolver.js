@@ -4,6 +4,7 @@ const {
   filterWritable,
   bypassUserScopeForList,
   bypassUserScopeForDelete,
+  canReadField,
 } = require('./acl');
 const { emitRecordEvent } = require('./events');
 
@@ -316,6 +317,53 @@ const wrapAggregation = ({ type, args, description, runner }) => ({
   },
 });
 
+/**
+ * Wrap a computed-field resolver into a graphql-compose field config.
+ *
+ * Computed fields are TC-added (not graphql-compose-mongoose
+ * resolvers), so they don't fit `wrapFilter` / `wrapFindById` / etc.
+ * But CLAUDE.md still requires every tenant-scoped GraphQL resolver
+ * to go through this module — `wrapComputedField` is the
+ * computed-shaped entry point. It:
+ *
+ *   - Threads `field` (for ACL semantics + projection hints) and
+ *     `type` (the GraphQL scalar string) into the field config.
+ *   - Calls `canReadField` on every resolve so a caller without the
+ *     declared `acl.read` role gets `null` instead of the value.
+ *     There's no projectByAcl pass on TC-resolved fields, so the
+ *     resolver is the enforcement site.
+ *   - Catches throws from `compute(source, ctx)` and returns `null`,
+ *     mirroring REST's `applyComputed` resilience contract — one
+ *     bad computed shouldn't fail the whole GraphQL response.
+ *   - Hands the computed function the request user (from ctx) so
+ *     ctx.find / ctx.count stay tenant-scoped.
+ *
+ * `compute` is the schema-declared `(record, computedCtx) => value`
+ * function. `buildContext({ user })` is a callback the loader
+ * supplies that constructs the per-call computed-context (including
+ * cross-resource helpers).
+ */
+const wrapComputedField = ({ type, description, projection, field, compute, buildContext, log }) => ({
+  type,
+  description,
+  projection,
+  resolve: async (source, _args, ctx) => {
+    const user = ctx && ctx.user;
+    if (!canReadField(field, user)) return null;
+    try {
+      return await compute(source, buildContext({ user }));
+    } catch (err) {
+      if (log && log.warn) {
+        log.warn(
+          { err, field: field && field.name },
+          'computed field threw; returning null'
+        );
+      }
+      return null;
+    }
+  },
+});
+
 module.exports = {
   wrapFilter,
   wrapCreateOne,
@@ -324,4 +372,5 @@ module.exports = {
   wrapFindByIds,
   wrapByIdMutation,
   wrapAggregation,
+  wrapComputedField,
 };

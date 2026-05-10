@@ -97,6 +97,10 @@ function filterWritable(body, schema, user, action) {
     }
     const f = fieldByName.get(k);
     if (f && f.type === 'File') continue; // framework-owned
+    // Computed / virtual fields are read-only — drop any
+    // client-supplied value silently. The output attribute is
+    // populated at response time by utils/computedFields.js.
+    if (f && typeof f.computed === 'function') continue;
     const allowed = f && f.acl && f.acl[action];
     if (!allowed || !allowed.length || hasOverlap(allowed, roles)) {
       out[k] = v;
@@ -125,6 +129,20 @@ function bypassUserScopeForDelete(schema, user) {
   return hasOverlap(allowed, userRoles(user));
 }
 
+/**
+ * Check field-level read ACL on a single field. The standard
+ * projection path (`projectByAcl`) is the preferred enforcement
+ * site for stored fields, but TC-added GraphQL fields and computed
+ * fields don't pass through it on the way to the wire — those
+ * resolvers call this helper at resolve time instead.
+ */
+function canReadField(field, user) {
+  if (!field || !field.acl || !Array.isArray(field.acl.read) || !field.acl.read.length) {
+    return true;
+  }
+  return hasOverlap(field.acl.read, userRoles(user));
+}
+
 module.exports = {
   projectByAcl,
   projectListByAcl,
@@ -133,4 +151,5 @@ module.exports = {
   bypassUserScopeForDelete,
   userRoles,
   hasOverlap,
+  canReadField,
 };
