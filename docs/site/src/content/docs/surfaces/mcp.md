@@ -81,45 +81,27 @@ The error payload carries:
 Unknown errors propagate and the SDK wraps them as internal — same
 posture as the REST `Internal server error` reduction in production.
 
-## Wiring to Claude Desktop
+## Wiring an agent: `@davepi/mcp`
 
-Add an MCP server entry to `~/Library/Application Support/Claude/claude_desktop_config.json`
-(macOS) or the Windows equivalent:
+The published `@davepi/mcp` package collapses agent wiring to a
+single `npx -y` line. It runs in either of the two modes above
+depending on environment:
 
-```json
-{
-  "mcpServers": {
-    "davepi": {
-      "command": "node",
-      "args": ["/absolute/path/to/davepi/bin/davepi.js", "mcp"],
-      "env": {
-        "MONGO_URI": "mongodb://localhost:27017/davepi",
-        "TOKEN_KEY": "your-token-key",
-        "DAVEPI_TOKEN": "<long-lived-jwt>",
-        "NODE_ENV": "development"
-      }
-    }
-  }
-}
-```
+- `DAVEPI_URL` set → HTTP-proxy mode, talks to the remote `/mcp`
+  endpoint.
+- `DAVEPI_URL` unset → local-stdio mode, spawns `davepi mcp` from
+  the project's local install.
 
-Claude Desktop spawns this process on startup, the stdio transport
-carries JSON-RPC messages, and every dAvePi tool appears in the
-model's tool list.
-
-## Wiring to Claude Code
-
-Drop a `.mcp.json` file at your project root:
+### Claude Code (`.mcp.json` at project root)
 
 ```json
 {
   "mcpServers": {
     "davepi": {
-      "command": "node",
-      "args": ["./node_modules/.bin/davepi", "mcp"],
+      "command": "npx",
+      "args": ["-y", "@davepi/mcp"],
       "env": {
-        "MONGO_URI": "mongodb://localhost:27017/davepi",
-        "TOKEN_KEY": "your-token-key",
+        "DAVEPI_URL": "http://localhost:5050",
         "DAVEPI_TOKEN": "<long-lived-jwt>"
       }
     }
@@ -127,13 +109,33 @@ Drop a `.mcp.json` file at your project root:
 }
 ```
 
-Or, if you'd rather hit the running HTTP server, use the `mcp` HTTP
-transport pointed at `http://localhost:5050/mcp` with a Bearer
-token.
+### Claude Desktop (`claude_desktop_config.json`)
+
+macOS path: `~/Library/Application Support/Claude/claude_desktop_config.json`.
+
+```json
+{
+  "mcpServers": {
+    "davepi": {
+      "command": "npx",
+      "args": ["-y", "@davepi/mcp"],
+      "env": {
+        "DAVEPI_URL": "https://api.example.com",
+        "DAVEPI_TOKEN": "<long-lived-jwt>"
+      }
+    }
+  }
+}
+```
+
+### Cursor
+
+Same config shape under `.cursor/mcp.json` or Cursor's MCP settings.
 
 The `npx create-davepi-app` scaffolder drops a working `.mcp.json`
-in every generated project — the easiest path to a working setup
-is to scaffold a template and open it in Claude Code.
+pre-wired with `@davepi/mcp` in every generated project — the
+easiest path to a working setup is to scaffold a template and open
+it in Claude Code.
 
 ## Issuing a long-lived token for stdio
 

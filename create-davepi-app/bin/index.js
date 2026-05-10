@@ -224,14 +224,18 @@ async function scaffold({ name, template, install, davepiVersion, port }) {
   );
 
   // 6. .mcp.json — Claude Code wiring out of the box.
+  // Uses @davepi/mcp in HTTP-proxy mode pointed at the local server,
+  // so the agent talks to the SAME server the developer is already
+  // running (`npm start`). No duplicate process, and the wrapper
+  // installs on demand via `npx -y` — the user doesn't need to
+  // manage the binary path manually.
   writeJson(path.join(target, '.mcp.json'), {
     mcpServers: {
       davepi: {
         command: 'npx',
-        args: ['davepi', 'mcp'],
+        args: ['-y', '@davepi/mcp'],
         env: {
-          MONGO_URI: 'mongodb://127.0.0.1:27017/' + name.replace(/[^A-Za-z0-9_-]/g, '_'),
-          TOKEN_KEY: '<paste-the-TOKEN_KEY-from-.env-here>',
+          DAVEPI_URL: `http://127.0.0.1:${apiPort}`,
           DAVEPI_TOKEN:
             '<run `npm start`, register a user, then paste the accessToken here>',
         },

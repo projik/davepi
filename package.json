@@ -64,7 +64,8 @@
   "jest": {
     "testPathIgnorePatterns": [
       "/node_modules/",
-      "/admin/"
+      "/admin/",
+      "/packages/"
     ]
   },
   "repository": {

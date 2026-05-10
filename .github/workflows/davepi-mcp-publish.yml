@@ -1,0 +1,56 @@
+name: 'Publish @davepi/mcp'
+
+# Publishes the @davepi/mcp package to npm when a tag matching
+# `@davepi/mcp@<version>` is pushed. The tag's <version> must equal
+# the package.json's `version` field — the workflow checks this and
+# fails fast on mismatch so a stale tag doesn't publish the wrong
+# bits.
+#
+# Auth: npm Trusted Publishing via OIDC. No long-lived NPM_TOKEN
+# needed — the `id-token: write` permission lets npm exchange this
+# job's OIDC token for a short-lived publish token. Requires the
+# package to have a trusted publisher configured on npmjs.com that
+# matches this repo, workflow filename, and environment name.
+
+on:
+  push:
+    tags:
+      - '@davepi/mcp@*'
+
+permissions:
+  contents: read
+  id-token: write   # required for npm Trusted Publishing + provenance
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    environment: npm-publish
+    defaults:
+      run:
+        working-directory: packages/mcp
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20.x
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Verify tag matches package.json version
+        env:
+          GITHUB_REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -e
+          # Tag format: @davepi/mcp@<version>
+          tag_version="${GITHUB_REF_NAME##*@}"
+          pkg_version=$(node -p "require('./package.json').version")
+          if [ "$tag_version" != "$pkg_version" ]; then
+            echo "::error::tag version ($tag_version) does not match package.json version ($pkg_version)"
+            exit 1
+          fi
+          echo "Publishing @davepi/mcp@$pkg_version"
+
+      - name: Run package tests before publish
+        run: npm test
+
+      - name: Publish to npm via Trusted Publishing
+        run: npm publish --access public --provenance
