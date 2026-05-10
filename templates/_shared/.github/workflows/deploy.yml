@@ -58,7 +58,13 @@ jobs:
       cancel-in-progress: false
     steps:
       - uses: actions/checkout@v4
-      - uses: superfly/flyctl-actions/setup-flyctl@master
+      # Pinned to the action's stable major-version tag rather than
+      # `@master` so a breaking upstream change can't silently land
+      # in your deploy pipeline. For strict supply-chain setups,
+      # swap this for a full commit SHA (looks like `@<40-char-sha>`)
+      # — that's fully immutable and protects against tag re-points
+      # by a compromised upstream.
+      - uses: superfly/flyctl-actions/setup-flyctl@1.5
       - run: flyctl deploy --remote-only
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}

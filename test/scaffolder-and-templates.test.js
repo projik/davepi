@@ -170,6 +170,18 @@ describe('create-davepi-app: scaffolder', () => {
 
       // deploy.yml: gated behind a `production` environment.
       expect(deploy).toMatch(/environment:\s*production/);
+      // Third-party actions referenced via `uses:` are pinned (not
+      // @master / @main) so an upstream re-point can't silently
+      // change deploy behaviour. We look only at `uses:` lines so
+      // a passing mention of `@master` in a comment doesn't false-positive.
+      const usesLines = deploy
+        .split('\n')
+        .filter((l) => /^\s*-?\s*uses:/.test(l));
+      expect(usesLines.length).toBeGreaterThan(0);
+      for (const line of usesLines) {
+        expect(line).not.toMatch(/@master\b/);
+        expect(line).not.toMatch(/@main\b/);
+      }
     } finally {
       cleanup('demo-ci');
     }
