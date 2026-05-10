@@ -1,0 +1,34 @@
+{
+  "name": "@davepi/mcp",
+  "version": "1.0.0",
+  "description": "One-line MCP wiring for dAvePi. Connects Claude Desktop / Cursor / Claude Code to a dAvePi instance — either a remote HTTP /mcp endpoint or a local stdio session.",
+  "license": "ISC",
+  "homepage": "https://docs.davepi.dev/surfaces/mcp/",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/projik/davepi.git",
+    "directory": "packages/mcp"
+  },
+  "keywords": [
+    "davepi",
+    "mcp",
+    "model-context-protocol",
+    "claude",
+    "cursor",
+    "agent"
+  ],
+  "bin": {
+    "davepi-mcp": "bin/davepi-mcp.js"
+  },
+  "files": [
+    "bin",
+    "lib",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.js"
+  }
+}

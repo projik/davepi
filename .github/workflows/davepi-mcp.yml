@@ -1,0 +1,54 @@
+name: '@davepi/mcp'
+
+# Smoke-tests on every PR that touches packages/mcp/. The
+# end-to-end coverage against the live /mcp endpoint runs in the
+# main test workflow (test/davepi-mcp-package.test.js); this
+# workflow exists to catch packaging regressions: the bin still
+# boots, `npm test` passes against node:test, and the published
+# tarball would be installable.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'packages/mcp/**'
+      - '.github/workflows/davepi-mcp.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'packages/mcp/**'
+      - '.github/workflows/davepi-mcp.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: packages/mcp
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20.x
+      # No npm install — @davepi/mcp has no runtime deps. node:test
+      # is a built-in.
+      - name: Run package tests
+        run: npm test
+      - name: Bin boots and prints help
+        run: |
+          set -e
+          out=$(node bin/davepi-mcp.js --help 2>&1)
+          # Confirm the help text mentions both modes, otherwise the
+          # bin entry has silently regressed.
+          echo "$out" | grep -q "HTTP-proxy mode" || (echo "Missing HTTP-proxy section in --help"; exit 1)
+          echo "$out" | grep -q "Local-stdio mode" || (echo "Missing Local-stdio section in --help"; exit 1)
+      - name: npm pack succeeds (proves the published tarball would install)
+        run: |
+          set -e
+          npm pack --dry-run --silent
