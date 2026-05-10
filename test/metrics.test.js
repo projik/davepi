@@ -91,6 +91,19 @@ describe('Prometheus /_metrics endpoint', () => {
       .set('Authorization', 'Bearer secret-scraper-token');
     expect(goodAuth.status).toBe(200);
     expect(goodAuth.text).toMatch(/process_cpu_user_seconds_total/);
+
+    // Bearer parsing is case-insensitive (matches the rest of the
+    // framework). Scrapers / proxies that normalise the scheme name
+    // to lowercase or add extra whitespace must still be accepted.
+    const lowerCase = await ctx.request(ctx.app)
+      .get('/_metrics')
+      .set('Authorization', 'bearer secret-scraper-token');
+    expect(lowerCase.status).toBe(200);
+
+    const extraSpaces = await ctx.request(ctx.app)
+      .get('/_metrics')
+      .set('Authorization', '  Bearer   secret-scraper-token  ');
+    expect(extraSpaces.status).toBe(200);
   });
 
   test('initMetrics failure resets state so the next call can recover', () => {

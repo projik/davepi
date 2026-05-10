@@ -156,10 +156,14 @@ async function metricsHandler(req, res) {
 
   const expectedToken = process.env.METRICS_TOKEN;
   if (expectedToken) {
+    // Case-insensitive Bearer parsing matches the convention in the
+    // rest of the framework (`middleware/auth.js`, `/mcp` route in
+    // app.js). Some scrapers and proxies normalise the scheme name to
+    // lowercase or add extra whitespace; rejecting them would surface
+    // as confusing 401s.
     const header = req.headers.authorization || '';
-    const presented = header.startsWith('Bearer ')
-      ? header.slice('Bearer '.length)
-      : null;
+    const m = header.match(/^\s*bearer\s+(.+)$/i);
+    const presented = m ? m[1].trim() : null;
     if (presented !== expectedToken) {
       throw new UnauthorizedError('Invalid or missing metrics token.');
     }
