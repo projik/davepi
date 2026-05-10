@@ -41,7 +41,6 @@ const {
   stateMachineFieldsOf,
   validateTransition,
   computeAvailableTransitions,
-  availableTransitionsKey,
   attachAvailableTransitions,
   stampInitialStates,
   listTransitionsToValidate,

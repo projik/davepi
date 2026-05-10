@@ -127,18 +127,22 @@ function computeAvailableTransitions(field, current) {
 }
 
 /**
- * Convention for the virtual key emitted onto records:
- *   status            → statusAvailableTransitions
- *   paymentStatus     → paymentStatusAvailableTransitions
+ * Single canonical key for the per-record virtual that carries
+ * each state-machine field's available next states. We expose ONE
+ * object keyed by field name (`{ status: [...], paymentStatus:
+ * [...] }`) rather than N separate `<field>AvailableTransitions`
+ * keys, so:
  *
- * Multi-state-machine schemas don't collide because the virtual is
- * keyed off the field name, not a generic 'availableTransitions'.
+ *   - schemas with a single state machine get the obvious shape;
+ *   - multi-machine schemas get a flat lookup without polluting
+ *     the top-level record;
+ *   - clients can iterate `record.availableTransitions` in one
+ *     pass instead of guessing field names.
  */
-const availableTransitionsKey = (fieldName) =>
-  `${fieldName}AvailableTransitions`;
+const AVAILABLE_TRANSITIONS_KEY = 'availableTransitions';
 
 /**
- * Mutate `records` to attach `<field>AvailableTransitions` per
+ * Mutate `records` to attach `availableTransitions` keyed per
  * state-machine field. No-op when the schema has no state machines.
  *
  * The virtual is derived from the underlying state value, so a
@@ -157,12 +161,11 @@ function attachAvailableTransitions(records, schema, user) {
   if (!visibleFields.length) return records;
   for (const r of records) {
     if (!r) continue;
+    const out = {};
     for (const f of visibleFields) {
-      r[availableTransitionsKey(f.name)] = computeAvailableTransitions(
-        f,
-        r[f.name]
-      );
+      out[f.name] = computeAvailableTransitions(f, r[f.name]);
     }
+    r[AVAILABLE_TRANSITIONS_KEY] = out;
   }
   return records;
 }
@@ -203,7 +206,7 @@ module.exports = {
   stateMachineFieldsOf,
   validateTransition,
   computeAvailableTransitions,
-  availableTransitionsKey,
+  AVAILABLE_TRANSITIONS_KEY,
   attachAvailableTransitions,
   stampInitialStates,
   listTransitionsToValidate,

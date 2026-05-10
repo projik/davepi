@@ -121,7 +121,7 @@ describe('pure helpers', () => {
     expect(out[0].next).toBe('review');
   });
 
-  test('attachAvailableTransitions stamps the per-field virtual', () => {
+  test('attachAvailableTransitions emits a single availableTransitions object keyed by field', () => {
     const schema = {
       fields: [
         { name: 'status', type: String, stateMachine: sm },
@@ -130,8 +130,10 @@ describe('pure helpers', () => {
     };
     const records = [{ status: 'review', paymentStatus: 'draft' }];
     attachAvailableTransitions(records, schema);
-    expect(records[0].statusAvailableTransitions).toEqual(['approved', 'rejected']);
-    expect(records[0].paymentStatusAvailableTransitions).toEqual(['review', 'archived']);
+    expect(records[0].availableTransitions).toEqual({
+      status: ['approved', 'rejected'],
+      paymentStatus: ['review', 'archived'],
+    });
   });
 });
 
@@ -214,8 +216,10 @@ describe('integration', () => {
       .post('/api/v1/sm_doc')
       .set('Authorization', `Bearer ${user.token}`)
       .send({ title: 'X' });
-    expect(res.body.statusAvailableTransitions).toEqual(['review', 'archived']);
-    expect(res.body.paymentStatusAvailableTransitions).toEqual(['paid']);
+    expect(res.body.availableTransitions).toEqual({
+      status: ['review', 'archived'],
+      paymentStatus: ['paid'],
+    });
   });
 
   test('PUT with a valid transition succeeds', async () => {
@@ -236,7 +240,10 @@ describe('integration', () => {
       .get(`/api/v1/sm_doc/${created.body._id}`)
       .set('Authorization', `Bearer ${user.token}`);
     expect(fetched.body.status).toBe('review');
-    expect(fetched.body.statusAvailableTransitions).toEqual(['approved', 'rejected']);
+    expect(fetched.body.availableTransitions).toEqual({
+      status: ['approved', 'rejected'],
+      paymentStatus: ['paid'],
+    });
   });
 
   test('PUT with an invalid transition returns 400 INVALID_TRANSITION + structured details', async () => {
@@ -505,7 +512,7 @@ describe('integration', () => {
         arguments: { record: { title: 'X', status: 'approved' } },
       }));
       expect(created.status).toBe('draft');
-      expect(created.statusAvailableTransitions).toEqual(['review']);
+      expect(created.availableTransitions).toEqual({ status: ['review'] });
     } finally {
       await close();
     }
@@ -552,7 +559,7 @@ describe('integration', () => {
           arguments: { id: created._id, record: { status: 'review' } },
         }));
         expect(ok.status).toBe('review');
-        expect(ok.statusAvailableTransitions).toEqual(['approved']);
+        expect(ok.availableTransitions).toEqual({ status: ['approved'] });
       } finally {
         events.bus.off('record', handler);
       }
@@ -652,9 +659,11 @@ describe('integration', () => {
           .send({});
         // The status field is hidden by projectByAcl; the derived
         // availableTransitions virtual would otherwise leak the
-        // current state ('draft' → ['approved']).
+        // current state ('draft' → ['approved']). With status the
+        // schema's only state-machine field, the entire virtual is
+        // omitted.
         expect(created.body.status).toBeUndefined();
-        expect(created.body.statusAvailableTransitions).toBeUndefined();
+        expect(created.body.availableTransitions).toBeUndefined();
       } finally {
         await ctx.app.locals.schemaLoader.unloadSchema('v1/sm_acl');
       }
