@@ -231,7 +231,7 @@ describe('MCP server: tool calls', () => {
     }
   });
 
-  test('unauthenticated server (getUser returns null) rejects every tool with UNAUTHORIZED', async () => {
+  test('unauthenticated server (getUser returns null) flags the error with auth: true', async () => {
     const { client, close } = await connectMcp({
       schemaLoader: ctx.app.locals.schemaLoader,
       user: null, // simulate "no Bearer token"
@@ -241,6 +241,35 @@ describe('MCP server: tool calls', () => {
       expect(res.isError).toBe(true);
       const body = parseStructured(res);
       expect(body.error.code).toBe('UNAUTHORIZED');
+      // Auth annotation lets clients dispatch credential refresh /
+      // re-prompting without parsing free-text codes.
+      expect(body.error.auth).toBe(true);
+      // UNAUTHORIZED is not retry-recoverable — the call shape isn't
+      // the problem.
+      expect(body.error.recoverable).toBeUndefined();
+    } finally {
+      await close();
+    }
+  });
+
+  test('VALIDATION errors are flagged recoverable so agents can retry with corrected args', async () => {
+    const registered = await registerUser(ctx.request, ctx.app);
+    const user = decodedFromRegister(registered);
+    const { client, close } = await connectMcp({
+      schemaLoader: ctx.app.locals.schemaLoader,
+      user,
+    });
+    try {
+      // accountName is required — this triggers a Mongoose
+      // ValidationError that the handler maps to VALIDATION.
+      const bad = await client.callTool({
+        name: 'create_account',
+        arguments: { record: {} },
+      });
+      expect(bad.isError).toBe(true);
+      const body = parseStructured(bad);
+      expect(body.error.code).toBe('VALIDATION');
+      expect(body.error.recoverable).toBe(true);
     } finally {
       await close();
     }

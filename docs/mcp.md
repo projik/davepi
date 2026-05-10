@@ -41,7 +41,23 @@ The CLI verifies the token at startup using `TOKEN_KEY` (the same secret that si
 | `delete_<path>_<field>` | per `type: 'File'` field | Removes the blob and clears the metadata sub-doc. |
 | `aggregate_<path>_<name>` | per declared aggregation | Params surface with their declared types; the framework prepends `$match: { userId }` automatically. |
 
-Every tool result is JSON: a record (or list response) on success; `{ isError: true, content: [{ type: 'text', text: { error: { code, message } } }] }` on a typed failure (`VALIDATION`, `NOT_FOUND`, `UNAUTHORIZED`, `FORBIDDEN`, `DUPLICATE`, etc.). Unknown errors propagate and the SDK wraps them as internal — same posture as the REST `Internal server error` reduction in production.
+Every tool result is JSON: a record (or list response) on success, or — on a typed failure — an MCP `isError: true` result with a structured payload:
+
+```json
+{
+  "isError": true,
+  "content": [{ "type": "text", "text": "{ \"error\": { \"code\": \"VALIDATION\", \"message\": \"...\", \"recoverable\": true } }" }]
+}
+```
+
+The error payload carries:
+
+- `code` — `VALIDATION`, `NOT_FOUND`, `UNAUTHORIZED`, `FORBIDDEN`, `DUPLICATE`, `INVALID_ID`, etc.
+- `message` — human-readable description
+- `recoverable: true` on errors an agent can fix by adjusting its arguments (`VALIDATION`, `INVALID_ID`). Distinguishes "fix the call and retry" from "this won't ever work".
+- `auth: true` on `UNAUTHORIZED` so clients can dispatch credential refresh / re-prompting without parsing free-text codes.
+
+Unknown errors propagate and the SDK wraps them as internal — same posture as the REST `Internal server error` reduction in production.
 
 ## Wiring to Claude Desktop
 

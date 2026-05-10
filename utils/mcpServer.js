@@ -54,20 +54,37 @@ const {
 } = require('./errors');
 
 /**
- * Map a thrown error onto the canonical `{ code, message }` shape
- * the rest of the API exposes. Mirrors `middleware/errorHandler.js`
- * for Mongoose-specific cases so an MCP caller sees the same
- * VALIDATION / INVALID_ID / DUPLICATE codes a REST caller would.
+ * Map a thrown error onto the canonical `{ code, message, ... }`
+ * shape the rest of the API exposes. Mirrors
+ * `middleware/errorHandler.js` for Mongoose cases so an MCP caller
+ * sees the same VALIDATION / INVALID_ID / DUPLICATE codes a REST
+ * caller would, plus two MCP-specific annotations:
+ *
+ *   - `recoverable: true` on errors a well-behaved agent can fix by
+ *     adjusting its arguments — VALIDATION (bad input) and
+ *     INVALID_ID (malformed id). NOT_FOUND, DUPLICATE, FORBIDDEN are
+ *     not retry-recoverable: the resource state is the problem, not
+ *     the call shape. Lets MCP clients distinguish "fix the call and
+ *     retry" from "this won't ever work."
+ *
+ *   - `auth: true` on UNAUTHORIZED so clients that handle credential
+ *     refresh / re-prompting separately can detect an auth-level
+ *     failure without parsing free-text. The SDK delivers all
+ *     handler-thrown errors as tool-result `isError`, so we can't
+ *     hand UNAUTHORIZED back as a transport-level JSON-RPC error
+ *     — the structured payload is the carrier.
  */
+const RECOVERABLE_CODES = new Set(['VALIDATION', 'INVALID_ID']);
+
 const formatError = (err) => {
   if (err instanceof mongoose.Error.ValidationError) {
     const message = Object.values(err.errors)
       .map((e) => e.message)
       .join('; ');
-    return { code: 'VALIDATION', message };
+    return { code: 'VALIDATION', message, recoverable: true };
   }
   if (err instanceof mongoose.Error.CastError) {
-    return { code: 'INVALID_ID', message: `Invalid ${err.path}` };
+    return { code: 'INVALID_ID', message: `Invalid ${err.path}`, recoverable: true };
   }
   if (err && err.code === 11000) {
     const fields = Object.keys(err.keyValue || {});
@@ -79,16 +96,21 @@ const formatError = (err) => {
     };
   }
   if (err && err.isOperational) {
-    return { code: err.code || 'ERROR', message: err.message };
+    const code = err.code || 'ERROR';
+    const out = { code, message: err.message };
+    if (RECOVERABLE_CODES.has(code)) out.recoverable = true;
+    if (code === 'UNAUTHORIZED') out.auth = true;
+    return out;
   }
   return null;
 };
 
 /**
  * Wrap an async handler and surface dAvePi's typed errors as MCP
- * `isError: true` results. Anything else propagates and the SDK
- * converts it to an internal error — matching the REST contract
- * where unknown errors reduce to "Internal server error".
+ * `isError: true` tool results carrying a canonical
+ * `{ code, message, recoverable?, auth? }` payload. Anything
+ * unrecognised propagates and the SDK reduces it to an internal
+ * error — same posture as the REST `errorHandler` in production.
  *
  * `structuredContent` is only set when the result is a plain object
  * — the MCP spec requires that field to be a record, so array
