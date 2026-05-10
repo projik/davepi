@@ -108,6 +108,16 @@ Invalid transitions reject with `400 INVALID_TRANSITION` carrying
 self-correct. Every read includes `availableTransitions[<field>]` so
 clients render the right buttons without re-parsing the schema.
 
+To transition a record, send the new value as a normal field update —
+there's no separate transition endpoint:
+
+| Surface | Call |
+|---------|------|
+| REST | `PUT /api/v1/<path>/:id` with `{ <field>: '<to>' }`. |
+| MCP | `update_<path>` with `{ id, record: { <field>: '<to>' } }`. |
+| GraphQL | `<path>UpdateById(_id, record: { <field>: '<to>' })`. |
+| Typed client | `api.<path>.transition<Field>(id, to)` (convenience wrapper around PUT). |
+
 ### File fields
 
 ```js
@@ -218,7 +228,7 @@ The MCP server exposes one tool set per schema. For schema `path: 'task'`:
 | `list_task_<rel>` | per `hasMany` | Children of a parent `_id`. |
 | `get_task_<rel>` | per `hasOne` / `belongsTo` | Populated relation. |
 | `aggregate_task_<name>` | per declared aggregation | Run the named pipeline. |
-| `transition_<field>_task` | per state-machine field | `{ id, to }`. |
+| _(state-machine transitions)_ | per state-machine field | Use `update_<path>` with `{ id, record: { <field>: <to> } }`. The framework validates against `transitions[current]` and rejects undeclared moves with `INVALID_TRANSITION`. |
 | `upload_task_<file>` / `fetch_task_<file>` / `delete_task_<file>` | per file field | Blob lifecycle. |
 
 ## Capability discovery: read `_describe` first
@@ -408,9 +418,9 @@ module.exports = {
 
 That's the whole CRM. Save the files; the framework mounts:
 
-- REST routes for each resource plus `/api/v1/deal/aggregations/pipelineByStage` and `/api/v1/deal/:id/transition`.
-- GraphQL types and resolvers (`accountMany`, `dealTransitionStage`, etc.).
-- MCP tools (`create_account`, `transition_stage_deal`, `list_account_contacts`, `aggregate_deal_pipelineByStage`, ...).
+- REST routes for each resource plus `/api/v1/deal/aggregations/pipelineByStage`. Stage transitions go through the standard `PUT /api/v1/deal/:id` with `{ stage: 'qualified' }` — the framework validates against `transitions[current]`.
+- GraphQL types and resolvers (`accountMany`, `dealUpdateById`, etc.).
+- MCP tools (`create_account`, `update_deal`, `list_account_contacts`, `aggregate_deal_pipelineByStage`, ...). Transitions ride on `update_deal` with `{ id, record: { stage: '<to>' } }`.
 - Swagger docs.
 - A `_describe` manifest entry for each.
 
