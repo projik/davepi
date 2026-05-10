@@ -69,21 +69,6 @@ function computedSwaggerType(type) {
   return { type: 'string' };
 }
 
-/**
- * Check field-level read ACL on a computed field. Mirrors the
- * `acl.read` semantics applied by `projectByAcl` for stored fields,
- * just enforced inside the resolver because TC-added fields don't
- * pass through projectByAcl on their way to the wire.
- */
-function userCanReadComputed(field, user) {
-  if (!field || !field.acl || !Array.isArray(field.acl.read) || !field.acl.read.length) {
-    return true;
-  }
-  const roles = (user && Array.isArray(user.roles) && user.roles.length)
-    ? user.roles
-    : ['user'];
-  return field.acl.read.some((r) => roles.includes(r));
-}
 const {
   projectByAcl,
   projectListByAcl,
@@ -99,6 +84,7 @@ const {
   wrapFindByIds,
   wrapByIdMutation,
   wrapAggregation,
+  wrapComputedField,
 } = require('./scopeResolver');
 const {
   FileMetaSchema,
@@ -1320,22 +1306,23 @@ function createSchemaLoader({ app, apiSpec, setApolloRouter, buildGraphqlContext
         }
         for (const f of computeds) {
           tc.addFields({
-            [f.name]: {
+            [f.name]: wrapComputedField({
               type: computedGraphqlType(f.type),
               description: f.description,
               projection,
-              resolve: async (source, args, ctx) => {
-                // Hide ACL-restricted computeds at resolve time —
-                // there's no projectByAcl pass on TC-resolved fields
-                // (the SDK serialises whatever the resolver returns).
-                if (!userCanReadComputed(f, ctx && ctx.user)) return null;
-                const computedCtx = buildComputedContext({
-                  user: ctx && ctx.user,
+              field: f,
+              compute: f.computed,
+              // The wrapper hands us the per-call user; we hand it
+              // back as the computed-context (with cross-resource
+              // helpers) the schema-declared `computed(record, ctx)`
+              // function expects.
+              buildContext: ({ user }) =>
+                buildComputedContext({
+                  user,
                   getResource: (p) => getResource(p, s.version),
-                });
-                return f.computed(source, computedCtx);
-              },
-            },
+                }),
+              log: logger,
+            }),
           });
         }
       }

@@ -394,4 +394,44 @@ describe('computed fields: GraphQL', () => {
       expect(row.secretComputed).toBeNull();
     }
   });
+
+  test('a throwing computed returns null on the GraphQL surface (matches REST)', async () => {
+    await ctx.app.locals.schemaLoader.loadSchema({
+      path: 'cf_throws',
+      collection: 'cf_throws',
+      version: 'v1',
+      fields: [
+        { name: 'userId', type: String, required: true },
+        { name: 'name', type: String, required: true },
+        {
+          name: 'good',
+          type: String,
+          computed: () => 'OK',
+        },
+        {
+          name: 'bad',
+          type: String,
+          computed: () => { throw new Error('boom'); },
+        },
+      ],
+    });
+    try {
+      const user = await registerUser(ctx.request, ctx.app);
+      await ctx
+        .request(ctx.app)
+        .post('/api/v1/cf_throws')
+        .set('Authorization', `Bearer ${user.token}`)
+        .send({ name: 'X' });
+      const res = await gql(user.token, 'query { cf_throwsMany { name good bad } }');
+      // The throwing field returns null for that field only — the
+      // sibling `good` and the rest of the response survive.
+      expect(res.body.errors).toBeUndefined();
+      const row = res.body.data.cf_throwsMany[0];
+      expect(row.name).toBe('X');
+      expect(row.good).toBe('OK');
+      expect(row.bad).toBeNull();
+    } finally {
+      await ctx.app.locals.schemaLoader.unloadSchema('v1/cf_throws');
+    }
+  });
 });

@@ -129,6 +129,20 @@ function bypassUserScopeForDelete(schema, user) {
   return hasOverlap(allowed, userRoles(user));
 }
 
+/**
+ * Check field-level read ACL on a single field. The standard
+ * projection path (`projectByAcl`) is the preferred enforcement
+ * site for stored fields, but TC-added GraphQL fields and computed
+ * fields don't pass through it on the way to the wire — those
+ * resolvers call this helper at resolve time instead.
+ */
+function canReadField(field, user) {
+  if (!field || !field.acl || !Array.isArray(field.acl.read) || !field.acl.read.length) {
+    return true;
+  }
+  return hasOverlap(field.acl.read, userRoles(user));
+}
+
 module.exports = {
   projectByAcl,
   projectListByAcl,
@@ -137,4 +151,5 @@ module.exports = {
   bypassUserScopeForDelete,
   userRoles,
   hasOverlap,
+  canReadField,
 };
