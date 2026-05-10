@@ -46,6 +46,7 @@ const { normalizeRelations, parseIncludes, applyIncludes } = require('./relation
 const { matchAccept, decorateFileUrls } = require('./fileFields');
 const { getStorageDriver } = require('./storage');
 const { recordAudit } = require('./audit');
+const idempotency = require('./idempotency');
 const AuditLog = require('../model/auditLog');
 const {
   NotFoundError,
@@ -288,9 +289,16 @@ function registerSchemaTools(server, entry, { schemaLoader, getUser }) {
     `create_${path}`,
     {
       title: `Create ${path}`,
-      description: `Create a new ${path} record. userId is stamped from the authenticated caller.`,
+      description:
+        `Create a new ${path} record. userId is stamped from the authenticated caller. ` +
+        'Pass `idempotencyKey` to make a retry safe — calling this tool twice with the ' +
+        'same key + record returns the original result without creating a duplicate.',
       inputSchema: {
         record: z.record(z.any()).describe(`A ${path} payload (see /api/v1/${path}-schema)`),
+        idempotencyKey: z.string().min(1).optional().describe(
+          'Stable key for safe retry. Reusing the same key with a different ' +
+          'record returns IDEMPOTENCY_CONFLICT.'
+        ),
       },
     },
     handlerOf(async (args) => {
@@ -300,19 +308,82 @@ function registerSchemaTools(server, entry, { schemaLoader, getUser }) {
       // userId / accountId is overridden — never trust the wire for
       // ownership.
       const data = { ...writable, accountId: user.user_id, userId: user.user_id };
-      const record = await Model.create(data);
-      const plain = JSON.parse(JSON.stringify(record));
-      if (auditEnabled) {
-        await recordAudit({
-          req: { user },
-          resource: s.path,
-          recordId: record._id,
-          action: 'create',
-          before: null,
-          after: plain,
+
+      // Idempotency: same claim-execute-complete protocol as the
+      // REST middleware (utils/idempotency.js). Body hash covers
+      // the writable shape post-filter so the same logical request
+      // hashes the same way even if filterWritable strips an ACL'd
+      // key.
+      const idempotencyKey = args.idempotencyKey;
+      const route = `mcp:create_${path}`;
+      let bodyHash;
+      let claimed = false;
+      if (idempotencyKey) {
+        bodyHash = idempotency.hashBody(data);
+        const claim = await idempotency.claimIdempotency({
+          key: idempotencyKey,
+          userId: user.user_id,
+          route,
+          bodyHash,
         });
+        if (claim.status === 'conflict') throw idempotency.conflictError();
+        if (claim.status === 'in_progress') throw idempotency.inProgressError();
+        if (claim.status === 'hit') {
+          return { ...claim.record.body, _idempotent_replay: true };
+        }
+        claimed = true;
       }
-      return projectByAcl(plain, s, user);
+
+      // Phase 1: the create itself. If this throws, the resource
+      // doesn't exist; tear down the idempotency claim so the agent
+      // can fix its payload and retry under the same key.
+      let record;
+      try {
+        record = await Model.create(data);
+      } catch (err) {
+        if (claimed) {
+          await idempotency.abandonIdempotency({
+            key: idempotencyKey,
+            userId: user.user_id,
+            route,
+          });
+        }
+        throw err;
+      }
+
+      // Phase 2: post-create bookkeeping. The resource now exists,
+      // so we MUST return the projected record to the caller — a
+      // failure to record an audit entry or persist the idempotency
+      // outcome can't be allowed to mask the success. Both callees
+      // are best-effort by design (they swallow errors internally
+      // and log them), but we wrap defensively so any future change
+      // in their failure semantics doesn't regress this contract.
+      const plain = JSON.parse(JSON.stringify(record));
+      const projected = projectByAcl(plain, s, user);
+      if (auditEnabled) {
+        try {
+          await recordAudit({
+            req: { user },
+            resource: s.path,
+            recordId: record._id,
+            action: 'create',
+            before: null,
+            after: plain,
+          });
+        } catch (_) { /* best-effort */ }
+      }
+      if (claimed) {
+        try {
+          await idempotency.completeIdempotency({
+            key: idempotencyKey,
+            userId: user.user_id,
+            route,
+            status: 201,
+            body: projected,
+          });
+        } catch (_) { /* best-effort */ }
+      }
+      return projected;
     })
   ));
 

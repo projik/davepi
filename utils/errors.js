@@ -44,6 +44,30 @@ class MethodNotAllowedError extends AppError {
   }
 }
 
+/**
+ * Idempotency-Key was reused with a different request body. The
+ * caller is asking the server to do two different things under the
+ * same retry key, which we refuse — see docs/idempotency.md.
+ */
+class IdempotencyConflictError extends AppError {
+  constructor(message = 'Idempotency-Key was reused with a different request body') {
+    super(message, 409, 'IDEMPOTENCY_CONFLICT');
+  }
+}
+
+/**
+ * A previous request with the same Idempotency-Key is still
+ * executing. Returned when two concurrent calls race the same key
+ * and the second one arrives before the first has finished. The
+ * caller should retry shortly — by then the first call's response
+ * will be cached and replayed.
+ */
+class IdempotencyInProgressError extends AppError {
+  constructor(message = 'A request with this Idempotency-Key is still in progress; retry shortly') {
+    super(message, 409, 'IDEMPOTENCY_IN_PROGRESS');
+  }
+}
+
 module.exports = {
   AppError,
   NotFoundError,
@@ -52,4 +76,6 @@ module.exports = {
   UnauthorizedError,
   ForbiddenError,
   MethodNotAllowedError,
+  IdempotencyConflictError,
+  IdempotencyInProgressError,
 };

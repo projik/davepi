@@ -24,6 +24,7 @@ const {
 } = require('./aggregations');
 const { createAggregationCache } = require('./aggregationCache');
 const aggregationCache = createAggregationCache();
+const { buildIdempotency } = require('../middleware/idempotency');
 const {
   normalizeRelations,
   parseIncludes,
@@ -459,6 +460,26 @@ function createSchemaLoader({ app, apiSpec, setApolloRouter, buildGraphqlContext
     // request — handlers don't re-walk the schema each time.
     const normalizedRelations = normalizeRelations(s);
     const relationNames = Object.keys(normalizedRelations);
+
+    // Per-schema idempotency middleware. The `getBodyForHash` callback
+    // mirrors what the create handler will actually persist
+    // (filterWritable + tenant stamping) so two retries that produce
+    // the same database write hash the same way — without this, an
+    // ACL-stripped or unknown-field difference between retries would
+    // fire a false IDEMPOTENCY_CONFLICT. Wrapped in asyncHandler so
+    // any rejection routes through the centralised errorHandler.
+    const idempotencyMiddleware = asyncHandler(
+      buildIdempotency({
+        getBodyForHash: (req) => {
+          const writable = filterWritable(req.body, s, req.user, 'create');
+          return {
+            ...writable,
+            accountId: req.user && req.user.user_id,
+            userId: req.user && req.user.user_id,
+          };
+        },
+      })
+    );
     /**
      * Given the standard ownership query, layer in deletedAt
      * filtering. By default reads exclude tombstoned docs; the
@@ -649,6 +670,7 @@ function createSchemaLoader({ app, apiSpec, setApolloRouter, buildGraphqlContext
     router.post(
       `/api/${s.version}/${path}`,
       auth(true),
+      idempotencyMiddleware,
       asyncHandler(async (req, res) => {
         const writable = filterWritable(req.body, s, req.user, 'create');
         const data = {
