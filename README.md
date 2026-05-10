@@ -15,9 +15,21 @@ A dynamic REST and GraphQL API server that automatically generates endpoints, do
 
 ## Quick Start
 
+### Scaffold a new project (recommended)
+
+```bash
+npx create-davepi-app my-app --template crm
+cd my-app
+docker compose up -d        # local Mongo
+npm install
+npm start                   # http://localhost:5050
+```
+
+Templates: `blank` (minimal), `crm` (accounts/contacts/deals with state machine + aggregations), `ticketing` (two state machines + ACL'd comments), `content` (editorial workflow + file uploads). See [`create-davepi-app`](./create-davepi-app/README.md) for the full flag set; each template has its own README walkthrough under [`templates/`](./templates).
+
 ### Prerequisites
 
-- Node.js 14+
+- Node.js 18+
 - MongoDB Atlas account or local MongoDB instance
 - npm or yarn
 
