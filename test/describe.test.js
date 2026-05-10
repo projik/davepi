@@ -78,7 +78,7 @@ describe('describeManifest: pure helpers', () => {
         },
       });
       const m = buildManifest({ schemaLoader: loader });
-      const w = m.schemas.widget;
+      const w = m.schemas['v1/widget'];
       expect(w.path).toBe('/api/v1/widget');
       expect(w.description).toBe('A test widget');
 
@@ -139,7 +139,7 @@ describe('describeManifest: pure helpers', () => {
         },
       });
       const m = buildManifest({ schemaLoader: loader });
-      const min = m.schemas.minimal;
+      const min = m.schemas['v1/minimal'];
       expect(min.endpoints.restore).toBeUndefined();
       expect(min.endpoints.history).toBeUndefined();
       expect(min.endpoints.files).toBeUndefined();
@@ -162,8 +162,69 @@ describe('describeManifest: pure helpers', () => {
         },
       });
       const m = buildManifest({ schemaLoader: loader });
-      const f = m.schemas.widget.fields.find((x) => x.name === 'createdAt');
+      const f = m.schemas['v1/widget'].fields.find((x) => x.name === 'createdAt');
       expect(f.default).toBe('[fn]');
+    });
+
+    test('drops aggregations without a pipeline array (matches loader mount predicate)', () => {
+      const loader = stubLoader({
+        'v1/widget': {
+          schema: {
+            path: 'widget',
+            collection: 'widget',
+            version: 'v1',
+            fields: [{ name: 'userId', type: String }],
+            aggregations: [
+              { name: 'good', pipeline: [{ $count: 'n' }] },
+              { name: 'missingPipeline' }, // loader would skip this
+              { pipeline: [{ $count: 'n' }] }, // missing name
+            ],
+          },
+        },
+      });
+      const w = buildManifest({ schemaLoader: loader }).schemas['v1/widget'];
+      // `aggregations` block: only the live one survives.
+      expect(w.aggregations.map((a) => a.name)).toEqual(['good']);
+      // Endpoint list: same.
+      expect(w.endpoints.aggregations).toEqual([
+        expect.stringMatching(/aggregations\/good$/),
+      ]);
+      // GraphQL queries: only widgetGood, not widgetMissingPipeline.
+      expect(w.graphql.queries).toContain('widgetGood');
+      expect(w.graphql.queries).not.toContain('widgetMissingPipeline');
+    });
+
+    test('keys are composite (version/path) so two versions of the same resource do not collide', () => {
+      const loader = stubLoader({
+        'v1/account': {
+          schema: {
+            path: 'account',
+            collection: 'account',
+            version: 'v1',
+            fields: [{ name: 'name', type: String }],
+          },
+        },
+        'v2/account': {
+          schema: {
+            path: 'account',
+            collection: 'account',
+            version: 'v2',
+            fields: [
+              { name: 'name', type: String },
+              { name: 'tier', type: String },
+            ],
+          },
+        },
+      });
+      const m = buildManifest({ schemaLoader: loader });
+      // Both entries survive the build — neither overwrites the other.
+      expect(m.schemas['v1/account']).toBeDefined();
+      expect(m.schemas['v2/account']).toBeDefined();
+      // And each carries its own version + field set.
+      expect(m.schemas['v1/account'].version).toBe('v1');
+      expect(m.schemas['v2/account'].version).toBe('v2');
+      expect(m.schemas['v2/account'].fields.map((f) => f.name)).toContain('tier');
+      expect(m.schemas['v1/account'].fields.map((f) => f.name)).not.toContain('tier');
     });
   });
 });
@@ -186,13 +247,13 @@ describe('GET /_describe endpoint', () => {
     expect(res.status).toBe(200);
     // Seed schemas (account, contact, product, project, quote, category)
     // all live under v1/.
-    expect(res.body.schemas.account).toBeDefined();
-    expect(res.body.schemas.account.path).toBe('/api/v1/account');
-    expect(res.body.schemas.account.endpoints.list).toMatch(/\/api\/v1\/account$/);
-    expect(res.body.schemas.account.graphql.queries).toContain('accountMany');
+    expect(res.body.schemas['v1/account']).toBeDefined();
+    expect(res.body.schemas['v1/account'].path).toBe('/api/v1/account');
+    expect(res.body.schemas['v1/account'].endpoints.list).toMatch(/\/api\/v1\/account$/);
+    expect(res.body.schemas['v1/account'].graphql.queries).toContain('accountMany');
     // Quote ships with an aggregation declared.
-    expect(res.body.schemas.quote.aggregations).toBeDefined();
-    expect(res.body.schemas.quote.aggregations[0].name).toBe('countByAccount');
+    expect(res.body.schemas['v1/quote'].aggregations).toBeDefined();
+    expect(res.body.schemas['v1/quote'].aggregations[0].name).toBe('countByAccount');
     expect(res.body.conventions.include).toMatch(/__include/);
     expect(res.body.auth.login).toBe('POST /login');
   });
@@ -200,7 +261,7 @@ describe('GET /_describe endpoint', () => {
   test('hot-reload: a newly-loaded schema appears on the next request', async () => {
     delete process.env.DESCRIBE_REQUIRES_AUTH;
     const before = await ctx.request(ctx.app).get('/_describe');
-    expect(before.body.schemas.dyn_describe).toBeUndefined();
+    expect(before.body.schemas['v1/dyn_describe']).toBeUndefined();
 
     await ctx.app.locals.schemaLoader.loadSchema({
       path: 'dyn_describe',
@@ -214,8 +275,8 @@ describe('GET /_describe endpoint', () => {
     });
 
     const after = await ctx.request(ctx.app).get('/_describe');
-    expect(after.body.schemas.dyn_describe).toBeDefined();
-    expect(after.body.schemas.dyn_describe.relations.author).toMatchObject({
+    expect(after.body.schemas['v1/dyn_describe']).toBeDefined();
+    expect(after.body.schemas['v1/dyn_describe'].relations.author).toMatchObject({
       kind: 'belongsTo',
       target: 'account',
     });
@@ -223,7 +284,7 @@ describe('GET /_describe endpoint', () => {
     // Cleanup so this test doesn't bleed into siblings.
     await ctx.app.locals.schemaLoader.unloadSchema('v1/dyn_describe');
     const reverted = await ctx.request(ctx.app).get('/_describe');
-    expect(reverted.body.schemas.dyn_describe).toBeUndefined();
+    expect(reverted.body.schemas['v1/dyn_describe']).toBeUndefined();
   });
 
   test('DESCRIBE_REQUIRES_AUTH=true gates the endpoint', async () => {
@@ -238,7 +299,7 @@ describe('GET /_describe endpoint', () => {
         .get('/_describe')
         .set('Authorization', `Bearer ${user.token}`);
       expect(allowed.status).toBe(200);
-      expect(allowed.body.schemas.account).toBeDefined();
+      expect(allowed.body.schemas['v1/account']).toBeDefined();
     } finally {
       delete process.env.DESCRIBE_REQUIRES_AUTH;
     }

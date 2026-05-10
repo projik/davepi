@@ -116,11 +116,19 @@ function describeRelations(schema) {
   return Object.keys(out).length ? out : undefined;
 }
 
+// Match the loader's mount predicate exactly: an aggregation only
+// produces live REST/GraphQL surface when it has a name AND a
+// pipeline array. Filtering manifest output by the same rule keeps
+// `_describe` honest — agents never see endpoint paths the server
+// won't answer.
+const isCallableAggregation = (a) =>
+  a && typeof a.name === 'string' && Array.isArray(a.pipeline);
+
 function describeAggregations(schema) {
   const aggs = schema.aggregations;
   if (!Array.isArray(aggs) || !aggs.length) return undefined;
   return aggs
-    .filter((a) => a && typeof a.name === 'string')
+    .filter(isCallableAggregation)
     .map((a) => {
       const out = { name: a.name };
       if (a.description) out.description = a.description;
@@ -221,7 +229,7 @@ function describeEndpoints(schema) {
 
   const aggs = Array.isArray(schema.aggregations)
     ? schema.aggregations
-        .filter((a) => a && typeof a.name === 'string')
+        .filter(isCallableAggregation)
         .map((a) => `GET    ${base}/aggregations/${a.name}`)
     : [];
   if (aggs.length) out.aggregations = aggs;
@@ -250,10 +258,12 @@ function describeGraphql(schema) {
     `${p}RemoveMany`,
   ];
   // Per-aggregation top-level queries follow the same naming rule the
-  // GraphQL builder uses: `${path}${PascalCaseName}`.
+  // GraphQL builder uses: `${path}${PascalCaseName}`. Filter on the
+  // same predicate the runtime uses so agents only see queries the
+  // server will actually expose.
   if (Array.isArray(schema.aggregations)) {
     for (const a of schema.aggregations) {
-      if (a && typeof a.name === 'string') {
+      if (isCallableAggregation(a)) {
         queries.push(p + a.name.charAt(0).toUpperCase() + a.name.slice(1));
       }
     }
@@ -300,6 +310,11 @@ function describeSchemaEntry(entry) {
 /**
  * Build the full manifest. `schemaLoader` is required; `appName` and
  * `version` are optional (they default to environment / package.json).
+ *
+ * Manifest schema keys mirror the loader's registry key shape
+ * (`${version}/${path}`) so two versions of the same resource don't
+ * collide. Each entry still carries `version` and `path` separately
+ * for callers that prefer to look them up that way.
  */
 function buildManifest({ schemaLoader, appName, version } = {}) {
   if (!schemaLoader) throw new Error('schemaLoader required');
@@ -307,7 +322,7 @@ function buildManifest({ schemaLoader, appName, version } = {}) {
   for (const key of schemaLoader.listSchemas()) {
     const entry = schemaLoader.getEntry(key);
     if (!entry || !entry.schema) continue;
-    schemas[entry.schema.path] = describeSchemaEntry(entry);
+    schemas[`${entry.schema.version}/${entry.schema.path}`] = describeSchemaEntry(entry);
   }
   return {
     service: {
