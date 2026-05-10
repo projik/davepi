@@ -20,6 +20,7 @@
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1045.0",
     "@aws-sdk/s3-request-presigner": "^3.1045.0",
+    "@modelcontextprotocol/sdk": "^1.29.0",
     "apollo-server-express": "^3.6.3",
     "async": "^3.2.3",
     "bcryptjs": "^2.4.3",

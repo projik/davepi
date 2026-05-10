@@ -43,7 +43,11 @@ Commands:
                                             from the schema diff.
   migrate [--dry]                          Apply pending migrations
   migrate:down [--dry]                     Revert the most recently applied
-  migrate:status                           List pending vs applied`);
+  migrate:status                           List pending vs applied
+  mcp                                      Run an MCP server over stdio.
+                                            Requires DAVEPI_TOKEN (a JWT
+                                            issued by the same TOKEN_KEY) so
+                                            tools execute as a real user.`);
 }
 
 function flag(args, name) {
@@ -128,6 +132,46 @@ async function main() {
       }
     });
     return;
+  }
+
+  if (cmd === 'mcp') {
+    // stdio MCP server bound to a long-lived JWT. We boot the regular
+    // app (so schemas, models, and the loader are wired exactly the
+    // same way as the HTTP path) but never call app.listen — the
+    // process's I/O is the MCP transport, not HTTP.
+    const jwt = require('jsonwebtoken');
+    const token = process.env.DAVEPI_TOKEN;
+    if (!token) {
+      err('mcp: DAVEPI_TOKEN env var is required');
+      process.exit(1);
+    }
+    if (!process.env.TOKEN_KEY) {
+      err('mcp: TOKEN_KEY env var is required to verify DAVEPI_TOKEN');
+      process.exit(1);
+    }
+    let user;
+    try {
+      user = jwt.verify(token, process.env.TOKEN_KEY);
+    } catch (verifyErr) {
+      err(`mcp: DAVEPI_TOKEN is invalid (${verifyErr.message})`);
+      process.exit(1);
+    }
+    require('../config/database').connect();
+    const app = require('../app');
+    if (app.locals && app.locals.ready) await app.locals.ready;
+    const { buildMcpServer } = require('../utils/mcpServer');
+    const {
+      StdioServerTransport,
+    } = require('@modelcontextprotocol/sdk/server/stdio.js');
+    const server = buildMcpServer({
+      schemaLoader: app.locals.schemaLoader,
+      getUser: () => user,
+      name: process.env.APP_NAME || 'davepi',
+    });
+    const transport = new StdioServerTransport();
+    await server.connect(transport);
+    // Park indefinitely — the SDK keeps the process alive via stdin.
+    return new Promise(() => {});
   }
 
   if (cmd === 'migrate:status') {

@@ -1486,6 +1486,10 @@ function createSchemaLoader({ app, apiSpec, setApolloRouter, buildGraphqlContext
     listSchemas,
     getEntry,
     rebuildGraphQL: rebuildGraphQLQueued,
+    // Expose runAggregation so adjacent surfaces (MCP server, custom
+    // routes added after the schemas.forEach loop) can call into the
+    // same safety/cache/tenant code path that REST and GraphQL use.
+    runAggregation,
   };
 }
 
