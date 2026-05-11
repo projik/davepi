@@ -1,0 +1,18 @@
+{
+  "name": "@davepi/eval",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Eval suite that drives Claude through prompts of escalating complexity against a scratch dAvePi project, scores each prompt with a programmatic pass/fail check, and publishes the results.",
+  "license": "ISC",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "eval": "node bin/run-eval.js",
+    "eval:stub": "EVAL_AGENT=stub node bin/run-eval.js",
+    "test": "node --test test/*.test.js"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.69.0"
+  }
+}

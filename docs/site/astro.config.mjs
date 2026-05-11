@@ -47,6 +47,7 @@ export default defineConfig({
             { label: 'Tenant isolation', link: '/concepts/tenancy/' },
             { label: 'Hot reload', link: '/concepts/hot-reload/' },
             { label: 'Why agents come first', link: '/concepts/agent-first/' },
+            { label: 'Agent eval suite', link: '/concepts/agent-eval/' },
           ],
         },
         {
@@ -76,10 +77,56 @@ export default defineConfig({
         {
           label: 'Operations',
           items: [
-            { label: 'Deployment', link: '/operations/deployment/' },
+            {
+              label: 'Deployment',
+              items: [
+                { label: 'Overview', link: '/operations/deployment/' },
+                { label: 'Self-host (Docker)', link: '/operations/deployment/self-host/' },
+                { label: 'Railway', link: '/operations/deployment/railway/' },
+                { label: 'Render', link: '/operations/deployment/render/' },
+                { label: 'Fly.io', link: '/operations/deployment/fly/' },
+                { label: 'AWS (ECS + DocumentDB)', link: '/operations/deployment/aws/' },
+                { label: 'GCP (Cloud Run + Atlas)', link: '/operations/deployment/gcp/' },
+                { label: 'Azure (Container Apps + Cosmos)', link: '/operations/deployment/azure/' },
+              ],
+            },
             { label: 'Migrations', link: '/operations/migrations/' },
-            { label: 'Backup & retention', link: '/operations/backup/' },
+            {
+              label: 'Backup & retention',
+              items: [
+                { label: 'Overview', link: '/operations/backup/' },
+                { label: 'Self-host', link: '/operations/backup/self-host/' },
+                { label: 'MongoDB Atlas', link: '/operations/backup/atlas/' },
+                { label: 'AWS DocumentDB', link: '/operations/backup/documentdb/' },
+                { label: 'Azure Cosmos DB', link: '/operations/backup/cosmos/' },
+                { label: 'File storage', link: '/operations/backup/file-storage/' },
+                { label: 'Restore drill', link: '/operations/backup/restore-drill/' },
+              ],
+            },
             { label: 'Observability', link: '/operations/observability/' },
+          ],
+        },
+        {
+          label: 'Compared to',
+          items: [
+            { label: 'Overview', link: '/compared-to/' },
+            { label: 'Supabase', link: '/compared-to/supabase/' },
+            { label: 'Hasura', link: '/compared-to/hasura/' },
+            { label: 'PocketBase', link: '/compared-to/pocketbase/' },
+            { label: 'Strapi', link: '/compared-to/strapi/' },
+            { label: 'Directus', link: '/compared-to/directus/' },
+            { label: 'Refine', link: '/compared-to/refine/' },
+          ],
+        },
+        {
+          label: 'Migrate from',
+          items: [
+            { label: 'Overview', link: '/migrate-from/' },
+            { label: 'Supabase', link: '/migrate-from/supabase/' },
+            { label: 'Hasura', link: '/migrate-from/hasura/' },
+            { label: 'PocketBase', link: '/migrate-from/pocketbase/' },
+            { label: 'Strapi', link: '/migrate-from/strapi/' },
+            { label: 'Directus', link: '/migrate-from/directus/' },
           ],
         },
       ],

@@ -134,7 +134,7 @@ See [State machines](/features/state-machines/).
   file: {
     maxBytes: 5 * 1024 * 1024,    // 5MB
     accept:   ['image/png', 'image/jpeg'],
-    storage:  'local',            // or 's3' / 'gcs'
+    storage:  'local',            // or 's3'
     visibility: 'private',        // 'public' for direct CDN URLs
   },
 },
@@ -146,7 +146,7 @@ See [State machines](/features/state-machines/).
 |----------------------|-------------|
 | `maxBytes` | Hard upload limit. Defaults to 10MB. |
 | `accept` | Array of allowed MIME types. Server validates the wire-level type against this list before storage. |
-| `storage` | `'local'` (default — disk under `STORAGE_LOCAL_DIR`), `'s3'`, or `'gcs'`. |
+| `storage` | `'local'` (default — disk under `UPLOADS_DIR`) or `'s3'`. GCS support is on the roadmap but not yet implemented. |
 | `visibility` | `'public'` for stable URLs, `'private'` (default) for short-lived signed URLs on read. |
 
 The framework generates one upload route, one fetch route, one

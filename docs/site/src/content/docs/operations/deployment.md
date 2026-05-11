@@ -1,12 +1,35 @@
 ---
 title: Deployment
-description: Production posture — env vars, process supervision, MongoDB, file storage, and the things to disable in production.
+description: Production posture — env vars, process supervision, MongoDB, file storage, and the things to disable in production. Plus per-platform deploy guides.
 ---
 
 dAvePi is a stock Node.js Express server. Anything you can run a
 Node app on (Render, Fly, Railway, ECS, GKE, a bare VM) will host
 it. There's no special build step — `node index.js` boots the
 server.
+
+## Per-platform guides
+
+Step-by-step deploys against the common targets. Each guide
+assumes you've read the env-var + posture sections below.
+
+| Target | Cost (small) | Managed Mongo | One-click |
+|--------|--------------|---------------|-----------|
+| [Self-host (Docker)](/operations/deployment/self-host/) | $5+/mo VPS | DIY container | — |
+| [Railway](/operations/deployment/railway/) | $5+/mo | Add-on | Template |
+| [Render](/operations/deployment/render/) | $7+/mo | External (Atlas) | Blueprint |
+| [Fly.io](/operations/deployment/fly/) | $0-5/mo idle | External (Atlas) | `fly launch` |
+| [AWS (ECS Fargate + DocumentDB)](/operations/deployment/aws/) | $50+/mo | DocumentDB | — |
+| [GCP (Cloud Run + Atlas)](/operations/deployment/gcp/) | $0-10/mo | Atlas | — |
+| [Azure (Container Apps + Cosmos)](/operations/deployment/azure/) | $30+/mo | Cosmos (Mongo API) | — |
+
+Costs are rough order of magnitude for a small production app
+(few requests/sec, single-replica, small DB) — your bill depends
+on traffic, retention, and the Mongo tier. The PaaS targets (top
+half of the table) are cheaper to get started and have less
+operational surface. The cloud targets (bottom half) are the
+right shape for larger / regulated deploys with VPC isolation,
+IAM, and audit-log integrations.
 
 ## Environment
 
@@ -38,7 +61,7 @@ CORS_ORIGINS=https://app.example.com,https://admin.example.com
 IDEMPOTENCY_TTL_SECONDS=86400       # 24h, matches Stripe
 
 # Storage (pick one)
-STORAGE_BACKEND=s3                  # 'local' | 's3' | 'gcs'
+STORAGE_DRIVER=s3                  # 'local' | 's3'
 STORAGE_S3_BUCKET=acme-davepi-uploads
 STORAGE_S3_REGION=us-east-1
 
@@ -127,7 +150,6 @@ Three options, pick one per file field:
 |---------|-------------------|
 | `local` | Small / single-host setups. Files vanish if the host's disk does — pair with regular backups. |
 | `s3` | Default for most production deploys. Public files use direct CDN URLs; private files use signed URLs with ~5min TTL. |
-| `gcs` | Same posture as `s3`, on Google Cloud. |
 
 Per-field config means you can mix — sensitive uploads to `local`
 on an encrypted volume, public assets to `s3` behind CloudFront.
@@ -189,6 +211,40 @@ For changes that need a data backfill:
 
 This is a standard expand-migrate-contract pattern. See
 [Migrations](/operations/migrations/).
+
+## CI templates
+
+Every project scaffolded with `npx create-davepi-app` ships four
+GitHub Actions workflows under `.github/workflows/`:
+
+| Workflow | Triggers | What it does |
+|----------|----------|--------------|
+| `test.yml` | push to main, PRs | `npm test` against a Mongo service container, matrix over Node 20.x and 22.x. The default test script runs `tests/smoke.test.js`, a schema-shape validator — add your own integration tests alongside it. |
+| `client-gen.yml` | PRs touching `schema/**`, `package*.json` | Regenerates `client/davepi.ts` from the live schema registry; `git diff --exit-code` fails the PR if the committed client is stale. Catches the "I forgot to regenerate the typed client" bug. |
+| `migrate.yml` | manual dispatch, version tags | Two-stage: a `--dry` pass that always runs, then an `apply` job gated behind the `migrate-prod` GitHub Environment. Add required reviewers to that environment so a human approves every production migration. Needs `MONGO_URI` and `TOKEN_KEY` repo secrets. |
+| `deploy.yml` | push to main, manual dispatch | Fly.io target out of the box. Behind the `production` GitHub Environment so a reviewer can hold deploys at a manual approval step. Commented alternatives for Render / Railway / Docker Hub are in the file header — swap whichever block matches your hosting. |
+
+### Required setup
+
+For the workflows to work end-to-end, configure these on the
+project's GitHub repo:
+
+1. **Environments** (Settings → Environments → New environment):
+   - `production` — required reviewer if you want a manual gate on deploys.
+   - `migrate-prod` — required reviewer (recommended; this is a one-way operation).
+2. **Secrets** (Settings → Secrets and variables → Actions):
+   - `MONGO_URI` — production database connection string.
+   - `TOKEN_KEY` — same JWT-signing secret your production server uses.
+   - `FLY_API_TOKEN` — output of `fly auth token` (only if you're using the Fly.io deploy template).
+
+### Customising
+
+The files are starter templates. Trim, replace, or extend as your
+project grows — they live in your repo at this point, not in
+dAvePi. The two patterns worth keeping if you adapt them:
+
+- **Use the `migrate-prod` environment gate.** Auto-applying migrations on a push or tag is the kind of thing that wakes someone up at 4am. A required-reviewer step costs ~30 seconds per deploy and prevents a class of incidents.
+- **Keep the client-gen drift guard.** It's the easiest way to enforce the typed-client + schema invariant.
 
 ## See also
 

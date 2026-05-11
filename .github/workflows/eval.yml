@@ -1,0 +1,73 @@
+name: Agent eval
+
+# Runs the agent eval suite nightly and commits the results back so
+# the README badge and the docs-site page reflect the latest
+# pass-rate. Manual `workflow_dispatch` is also wired so a
+# maintainer can trigger an ad-hoc run after a meaningful change
+# (new feature in the framework, agent guide tweak, etc.) without
+# waiting for the cron.
+#
+# Requires an `ANTHROPIC_API_KEY` repo secret. Without it, the run
+# fails fast with a clear message — preferable to silently using
+# the stub-agent path (which would publish a perfect score that
+# isn't real).
+
+on:
+  schedule:
+    # Nightly at 06:00 UTC — quiet hours for most US/EU
+    # contributors, plenty of headroom before the next workday.
+    - cron: '0 6 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write   # for the badge / results commit on the main branch
+
+concurrency:
+  group: agent-eval
+  cancel-in-progress: false
+
+jobs:
+  eval:
+    runs-on: ubuntu-latest
+    if: github.repository == 'projik/davepi'   # don't burn API credits on forks
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Need write access to the working tree so we can commit
+          # results back. Default GITHUB_TOKEN with `contents: write`
+          # works here.
+          token: ${{ secrets.GITHUB_TOKEN }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20.x
+      - name: Install eval deps
+        working-directory: eval
+        run: npm install --no-audit --no-fund
+      - name: Run the eval
+        working-directory: eval
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          set +e
+          node bin/run-eval.js
+          # Capture the exit code but don't fail the workflow on it.
+          # A partial pass is still useful data — we want the results
+          # committed regardless so the badge updates.
+          echo "EVAL_EXIT=$?" >> "$GITHUB_ENV"
+      - name: Commit results back to main
+        run: |
+          set -e
+          git config user.name "davepi-eval-bot"
+          git config user.email "noreply@davepi.dev"
+          git add eval/results/latest.json eval/results/badge.json
+          if git diff --cached --quiet; then
+            echo "No result changes — eval output is identical to last run."
+          else
+            git commit -m "Update agent eval results ($(date -u +%Y-%m-%d))"
+            git push
+          fi
+      - name: Surface the exit code as the job status
+        run: |
+          if [ "${EVAL_EXIT:-0}" != "0" ]; then
+            echo "::warning::Eval reported failures (exit $EVAL_EXIT). Results published; see eval/results/latest.json."
+          fi

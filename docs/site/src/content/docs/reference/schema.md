@@ -40,7 +40,7 @@ Swagger fragments for `account`.
 | `audit` | boolean | no | Defaults to `true`. Set `false` to skip audit log writes for this schema. See [Audit log](/features/audit/). |
 | `acl` | object | no | Document-level role bypass slots (`list`, `delete`). See [ACL](/features/acl/). |
 | `webhooks` | object | no | Outbound webhook subscriptions for create / update / delete events on this schema. See [Webhooks](/features/webhooks/). |
-| `retention` | object | no | Auto-purge tombstoned rows after a configurable TTL. See [Backup & retention](/operations/backup/). |
+| `softDelete` | object | no | `{ retentionDays: N }` to auto-purge tombstoned rows after N days. Without it, tombstones live forever. See [Backup & retention](/operations/backup/). |
 | `version` | string | no | Defaults to `v1`. Set when you want a single schema under a non-default version segment. |
 
 Anything else on the top-level object is ignored — there's no
@@ -184,13 +184,17 @@ The framework signs each delivery with HMAC-SHA256, retries with
 exponential backoff, and emits an audit row per attempt. See
 [Webhooks](/features/webhooks/).
 
-## `retention`
+## `softDelete: { retentionDays }`
 
 ```js
-retention: {
-  tombstoneTtlDays: 30,   // hard-delete soft-deleted rows after N days
-}
+softDelete: { retentionDays: 30 }
 ```
+
+Opt in to auto-purge of soft-deleted rows after N days. Without
+this (and no `SOFT_DELETE_RETENTION_DAYS` env var), tombstones
+live forever. Audit log and webhook delivery rows aren't
+auto-purged at all — manual cron, see [Backup &
+retention](/operations/backup/).
 
 See [Backup & retention](/operations/backup/).
 

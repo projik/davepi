@@ -1,0 +1,49 @@
+# Render Blueprint for dAvePi.
+#
+# Provisions a Web Service on Render that builds the project,
+# runs `npm start`, and routes traffic once /healthz returns 200.
+# The MongoDB instance is NOT provisioned here — Render doesn't
+# host Mongo. Pair with MongoDB Atlas (or another reachable Mongo)
+# and set MONGO_URI via the dashboard after the service is
+# created.
+#
+# Deploy flow:
+#   1. Click "Deploy to Render" from a GitHub fork of this repo
+#      (or use the Blueprints section of the Render dashboard).
+#   2. After provisioning, set MONGO_URI and CORS_ORIGINS on the
+#      service's Environment tab (they're sync: false here so
+#      they're not committed).
+#   3. Push to main triggers a deploy.
+
+services:
+  - type: web
+    name: davepi
+    runtime: node
+    # The Starter plan is the cheapest tier that doesn't sleep
+    # after idle. Free tier sleeps; bump to Standard+ for
+    # auto-scaling on the Standard plan.
+    plan: starter
+    region: oregon
+    branch: main
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /healthz
+    envVars:
+      - key: NODE_ENV
+        value: production
+      # Render terminates TLS at its edge proxy. The rate limiter
+      # needs trust-proxy so per-client IP accounting works.
+      - key: TRUST_PROXY
+        value: "true"
+      - key: PAGE_SIZE
+        value: "20"
+      # Generated once by Render and stored encrypted. NOT
+      # rotated automatically — rotate by editing the value.
+      - key: TOKEN_KEY
+        generateValue: true
+      # Set manually in the dashboard — Render doesn't store
+      # cloud-DB credentials in the blueprint.
+      - key: MONGO_URI
+        sync: false
+      - key: CORS_ORIGINS
+        sync: false

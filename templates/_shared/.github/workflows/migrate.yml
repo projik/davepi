@@ -1,0 +1,66 @@
+name: Migrate
+
+# Applies pending data migrations against a production-grade
+# database. Two-stage:
+#
+#   1. dry-run: always runs, prints what WOULD be applied.
+#   2. apply:   gated on the `migrate-prod` GitHub Environment
+#               (configure required reviewers there so a human
+#               approves before the real run).
+#
+# Triggered by:
+#   - workflow_dispatch (manual, from the Actions tab)
+#   - tags matching `v*` (so a release tag drives migrations)
+#
+# Required secrets:
+#   MONGO_URI    Connection string for the target database.
+#   TOKEN_KEY    The same secret the app uses; some migrations
+#                may need it to mint admin tokens.
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: read
+
+jobs:
+  dry-run:
+    runs-on: ubuntu-latest
+    env:
+      MONGO_URI: ${{ secrets.MONGO_URI }}
+      TOKEN_KEY: ${{ secrets.TOKEN_KEY }}
+      NODE_ENV: production
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20.x'
+          cache: npm
+      - run: npm ci
+      - name: Preview pending migrations (no writes)
+        run: npx davepi migrate --dry
+
+  apply:
+    needs: dry-run
+    runs-on: ubuntu-latest
+    # The `migrate-prod` environment must exist on GitHub with
+    # required-reviewers configured. Without that, this step
+    # would auto-apply on tag push — which is exactly the
+    # foot-gun this gate prevents.
+    environment: migrate-prod
+    env:
+      MONGO_URI: ${{ secrets.MONGO_URI }}
+      TOKEN_KEY: ${{ secrets.TOKEN_KEY }}
+      NODE_ENV: production
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20.x'
+          cache: npm
+      - run: npm ci
+      - name: Apply pending migrations
+        run: npx davepi migrate

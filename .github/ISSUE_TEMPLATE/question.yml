@@ -1,0 +1,55 @@
+name: Question
+description: A usage question or "how do I do X?". Discussions is the better venue — read the note before filing.
+title: "[question] "
+labels: ["question"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ## Discussions is the better home for this
+
+        Usage questions are easier to find later — and faster to
+        answer — in [GitHub Discussions → Q&A](https://github.com/projik/davepi/discussions/categories/q-a)
+        than in the issue tracker. The issue queue is for tracking
+        bugs and feature work; questions tend to get lost.
+
+        If you've already searched Discussions and didn't find the
+        answer, you can still file the question here — but expect
+        the response to be "let's move this to Discussions" so the
+        answer is discoverable for the next person with the same
+        question.
+
+        For "the framework is broken / contradicts the docs", file
+        a [bug report](https://github.com/projik/davepi/issues/new?template=bug_report.yml)
+        instead.
+
+  - type: textarea
+    id: question
+    attributes:
+      label: Your question
+      description: One or two paragraphs. What are you trying to do?
+      placeholder: e.g. "I'm trying to add an aggregation that joins across two schemas. The docs cover single-schema aggregations but I can't find an example of one that references a related collection."
+    validations:
+      required: true
+
+  - type: textarea
+    id: tried
+    attributes:
+      label: What have you tried?
+      description: |
+        Helps avoid suggesting things you already ruled out. Links
+        to the docs pages you've read are useful.
+      placeholder: e.g. "Read /features/aggregations/, tried `$lookup`, hit X."
+
+  - type: textarea
+    id: code
+    attributes:
+      label: Relevant schema / code
+      description: A schema snippet or call site, if applicable.
+      render: js
+
+  - type: input
+    id: davepi-version
+    attributes:
+      label: dAvePi version
+      placeholder: e.g. 1.0.0

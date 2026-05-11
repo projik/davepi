@@ -1,5 +1,7 @@
 # dAvePi
 
+[![Agent eval](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fprojik%2Fdavepi%2Fmain%2Feval%2Fresults%2Fbadge.json)](https://docs.davepi.dev/concepts/agent-eval/)
+
 A dynamic REST and GraphQL API server that automatically generates endpoints, documentation, and schemas from simple configuration files.
 
 📚 **Full documentation: <https://docs.davepi.dev>** — concepts, schema reference, per-feature guides, and a flagship "Idea to deployed CRM in 10 minutes" walkthrough. The docs source lives under [`docs/site/`](./docs/site) and ships in lockstep with the framework.
@@ -7,6 +9,8 @@ A dynamic REST and GraphQL API server that automatically generates endpoints, do
 🤖 **Building on dAvePi with Claude Code / Cursor / another agent?** Every scaffolded project ships an [`agent.md`](./templates/_shared/agent.md) (mirrored to `.cursorrules`, `AGENTS.md`, and `.claude/skills/davepi/SKILL.md`) that encodes the framework conventions — read it before adding code, or hand it to your agent. One-line MCP wiring via [`@davepi/mcp`](./packages/mcp) (`npx -y @davepi/mcp`) connects any MCP-aware editor to a hosted or local dAvePi.
 
 📦 **Versioning**: dAvePi follows [semver](https://semver.org/) from v1.0.0 onward — major = breaking, minor = additive, patch = fix. Deprecated APIs surface a warning for at least one full minor release before removal in the next major. See [Stability commitments](https://docs.davepi.dev/reference/stability/) for which APIs are covered, the [CHANGELOG](./CHANGELOG.md) for release notes, and [SECURITY.md](./SECURITY.md) for the disclosure process and supported versions.
+
+🤝 **Community**: [Discussions](https://github.com/projik/davepi/discussions) for Q&A and "show what you built", [issues](https://github.com/projik/davepi/issues/new/choose) for bugs and feature requests, Discord (invite link coming soon). Contributor orientation in [CONTRIBUTING.md](./CONTRIBUTING.md); project conduct in [CODE_OF_CONDUCT.md](./CODE_OF_CONDUCT.md); current reviewers in [MAINTAINERS.md](./MAINTAINERS.md).
 
 ## Features
 

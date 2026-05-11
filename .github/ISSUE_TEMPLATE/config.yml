@@ -1,0 +1,20 @@
+# Disable the "open a blank issue" path. Forcing users through one
+# of the templates keeps the issue queue triageable. The contact
+# links below send "how do I do X" questions to Discussions
+# instead, where they're a better fit than a tracked issue.
+
+blank_issues_enabled: false
+
+contact_links:
+  - name: Q&A and usage questions
+    url: https://github.com/projik/davepi/discussions/categories/q-a
+    about: For "how do I do X?", ask in GitHub Discussions instead of opening an issue.
+  - name: Show & Tell — share what you built
+    url: https://github.com/projik/davepi/discussions/categories/show-and-tell
+    about: Built something interesting on dAvePi? Post it.
+  - name: Security disclosure
+    url: https://github.com/projik/davepi/security/advisories/new
+    about: Report a vulnerability privately. Don't open a public issue for security issues — see SECURITY.md.
+  - name: Documentation
+    url: https://docs.davepi.dev
+    about: Concepts, schema reference, per-feature guides, and the CRM-in-10-minutes walkthrough.

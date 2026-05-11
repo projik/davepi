@@ -30,6 +30,18 @@ EXPOSE 4001
 USER node
 CMD ["npx", "nodemon", "--ignore", "swagger/*.json", "index.js"]
 
+# ---- admin-build ----
+# Build the admin SPA into admin/dist/ so the runner image serves it
+# at /admin out of the box. Separate stage so the build's devDeps
+# (vite, refine, etc.) don't bloat the production image.
+FROM node:20-alpine AS admin-build
+WORKDIR /app
+COPY admin/package*.json ./admin/
+RUN --mount=type=cache,target=/root/.npm \
+    cd admin && npm ci --no-audit --no-fund
+COPY admin ./admin
+RUN cd admin && npm run build
+
 # ---- runner ----
 # Default target; the production image. Slim and non-root.
 FROM node:20-alpine AS runner
@@ -38,6 +50,10 @@ ENV NODE_ENV=production \
     NPM_CONFIG_LOGLEVEL=warn
 COPY --from=deps-prod /app/node_modules ./node_modules
 COPY . .
+# Overlay the freshly-built admin SPA on top of the source tree so
+# /admin works in the production stack without a host-side
+# `npm run build:admin` step.
+COPY --from=admin-build /app/admin/dist ./admin/dist
 EXPOSE 4001
 USER node
 CMD ["node", "index.js"]

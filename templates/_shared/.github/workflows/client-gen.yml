@@ -1,0 +1,65 @@
+name: Typed client drift
+
+# Regenerates client/davepi.ts from the live schema registry and
+# fails the PR if the committed copy doesn't match. This catches
+# the common bug where a schema field changes but the typed client
+# wasn't regenerated — without this guard, frontend code keeps
+# compiling against a stale type until someone hits a runtime
+# 500.
+#
+# The job uses a Mongo service because `davepi gen-client` boots
+# the schema loader (which connects to Mongo). It doesn't read or
+# write any data — Mongo just needs to accept the connection.
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      # Only run when something that could affect the generated
+      # client has changed. Saves CI minutes on docs-only PRs.
+      - 'schema/**'
+      - 'package.json'
+      - 'package-lock.json'
+      - '.github/workflows/client-gen.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  drift:
+    runs-on: ubuntu-latest
+    services:
+      mongo:
+        image: mongo:7
+        ports:
+          - 27017:27017
+        options: >-
+          --health-cmd "mongosh --quiet --eval 'db.adminCommand({ ping: 1 }).ok'"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      MONGO_URI: mongodb://127.0.0.1:27017/client-gen
+      TOKEN_KEY: ci-only-not-a-real-secret
+      NODE_ENV: development
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20.x'
+          cache: npm
+      - run: npm ci
+      - name: Regenerate the typed client
+        run: npx davepi gen-client --out client/davepi.ts
+      - name: Fail if the committed client is stale or missing
+        run: |
+          # Mark untracked files as intent-to-add so they show up in
+          # `git diff`. Without this, a never-committed (or
+          # accidentally gitignored) client/davepi.ts would silently
+          # pass the drift check — defeating the whole point of the
+          # workflow.
+          git add --intent-to-add client/davepi.ts 2>/dev/null || true
+          if ! git diff --exit-code -- client/davepi.ts; then
+            echo "::error::client/davepi.ts is out of date or not committed. Run \`npm run gen-client\` locally and commit the result."
+            exit 1
+          fi

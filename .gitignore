@@ -5,3 +5,6 @@
 # Local file-storage driver writes blobs here in dev / tests.
 /uploads
 .vscode/settings.json
+# Synced at publish time by `node bin/sync-templates.js` (the scaffolder's
+# prepublishOnly hook). Root-level `templates/` is the source.
+/create-davepi-app/templates

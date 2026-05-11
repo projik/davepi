@@ -135,18 +135,26 @@ analytics rows, ephemeral caches.
 ## Retention
 
 The audit log has its own collection (`audit_log`) and grows
-linearly with mutations. Schema-level retention applies:
+linearly with mutations. **The framework does not auto-purge
+audit rows** — they live forever unless you prune them manually.
+
+For a bounded retention window (compliance, storage cost), run a
+periodic prune on a cron:
 
 ```js
-retention: { auditTtlDays: 365 },
+// Keep 1 year of audit rows. Run weekly.
+db.audit_log.deleteMany({
+  createdAt: { $lt: new Date(Date.now() - 365 * 24 * 60 * 60 * 1000) },
+});
 ```
 
-A daily sweep hard-deletes audit rows older than `auditTtlDays`
-for that schema. See [Backup & retention](/operations/backup/).
+Framework-side audit retention is a tracked enhancement; today
+the auto-purge story stops at idempotency keys and soft-delete
+tombstones. See [Backup & retention](/operations/backup/).
 
 ## See also
 
 - [State machines](/features/state-machines/) — `transition` rows.
 - [ACL](/features/acl/) — projection on history rows.
 - [Webhooks](/features/webhooks/) — same projection layer.
-- [Backup & retention](/operations/backup/) — `auditTtlDays`.
+- [Backup & retention](/operations/backup/) — manual pruning patterns.
