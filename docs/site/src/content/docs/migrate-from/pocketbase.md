@@ -318,11 +318,12 @@ If you used `pb admin export`:
 require('dotenv').config();
 const fs   = require('fs');
 const mongoose = require('mongoose');
+const { buildLegacyMap } = require('./helpers');   // defined in the Supabase guide
 
 (async () => {
   await mongoose.connect(process.env.MONGO_URI);
   const Message = mongoose.model('message');
-  const userMap = await buildLegacyMap('user', 'legacyId');
+  const userMap = await buildLegacyMap('user');
 
   const rows = JSON.parse(fs.readFileSync(process.env.PB_DUMP_PATH, 'utf8')).messages;
 

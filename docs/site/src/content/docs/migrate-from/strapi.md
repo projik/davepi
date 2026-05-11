@@ -234,13 +234,14 @@ content for components and relations.
 require('dotenv').config();
 const mongoose = require('mongoose');
 const { Client } = require('pg');
+const { buildLegacyMap } = require('./helpers');   // defined in the Supabase guide
 
 const BATCH = 500;
 
 (async () => {
   await mongoose.connect(process.env.MONGO_URI);
   const Article = mongoose.model('article');
-  const userMap = await buildLegacyMap('user', 'legacyId');
+  const userMap = await buildLegacyMap('user');
 
   const pg = new Client({ connectionString: process.env.STRAPI_DB_URL });
   await pg.connect();

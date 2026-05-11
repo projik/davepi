@@ -140,7 +140,15 @@ const User = require('davepi/model/user');
 })();
 ```
 
-Pair this with a customised email template (set `RESET_EMAIL_SUBJECT` / `RESET_EMAIL_BODY` env vars or override `utils/email.js`) so users get a "we've migrated to a new system — set your new password" message rather than a generic reset.
+Pair this with a customised email body so users get a "we've
+migrated to a new system — set your new password" message rather
+than a generic reset. The subject and body are hardcoded in
+`/auth/forgot-password` inside dAvePi's `app.js`; to customise,
+fork the handler (e.g. mount your own at the same path *before*
+`require('davepi')`, or patch `app.js` and re-deploy). The
+underlying `sendMail` helper lives in `utils/mailer.js` and uses
+SMTP if `SMTP_HOST` is set, otherwise logs the body to the
+structured logger.
 
 ## RLS → ACL mapping
 
@@ -446,13 +454,29 @@ node scripts/etl/deals.js
 ### After the ETL: fix the FK references
 
 If `deals.account_id` referenced `accounts.id`, you need a
-second pass to rewrite those references to the new Mongo `_id`s:
+second pass to rewrite those references to the new Mongo `_id`s.
+First, a small helper that builds a `legacyId → _id` lookup for
+any collection — the per-source guides reuse this shape:
+
+```js
+// scripts/etl/helpers.js
+const mongoose = require('mongoose');
+
+async function buildLegacyMap(modelName, legacyField = 'legacyId') {
+  const Model = mongoose.model(modelName);
+  const rows = await Model.find({}, { [legacyField]: 1 }).lean();
+  return new Map(rows.map((r) => [String(r[legacyField]), r._id]));
+}
+
+module.exports = { buildLegacyMap };
+```
+
+Then the FK-rewrite pass:
 
 ```js
 // scripts/etl/rewrite-fks.js
-const accountMap = new Map(
-  (await Account.find({}, { legacyId: 1 }).lean()).map((a) => [a.legacyId.toString(), a._id]),
-);
+const { buildLegacyMap } = require('./helpers');
+const accountMap = await buildLegacyMap('account');
 
 const bulk = Deal.collection.initializeUnorderedBulkOp();
 const cursor = Deal.find({}, { legacyId: 1, account_id_legacy: 1 }).cursor();
