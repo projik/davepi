@@ -1,0 +1,95 @@
+# Production docker-compose for self-hosted dAvePi.
+#
+# Three services:
+#   - mongo    MongoDB 7, persistent volume.
+#   - api      dAvePi (built from the repo's Dockerfile, `runner`
+#              target). Reads env from the host .env.
+#   - caddy    Reverse proxy with automatic Let's Encrypt TLS.
+#              Set DOMAIN in .env to your real hostname and it
+#              provisions a cert on boot.
+#
+# Usage:
+#   1. Copy .env.example to .env and fill in TOKEN_KEY, DOMAIN, etc.
+#   2. docker compose -f deploy/docker-compose.prod.yml up -d
+#   3. Verify https://$DOMAIN/healthz returns ok.
+#
+# This is intentionally a single-host setup. For HA / multi-region,
+# move Mongo to Atlas (or self-hosted replica set) and run multiple
+# api replicas behind your platform's load balancer — see the
+# per-platform guides at /operations/deployment/.
+
+services:
+  mongo:
+    image: mongo:7
+    restart: unless-stopped
+    # No published ports — only reachable from the api container
+    # over the compose network. Backups + admin go through `docker
+    # compose exec mongo mongosh`.
+    volumes:
+      - mongo-data:/data/db
+      - mongo-config:/data/configdb
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+
+  api:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+      target: runner
+    restart: unless-stopped
+    depends_on:
+      mongo:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      MONGO_URI: mongodb://mongo:27017/davepi
+      TOKEN_KEY: ${TOKEN_KEY:?TOKEN_KEY must be set in .env}
+      API_PORT: "4001"
+      PAGE_SIZE: ${PAGE_SIZE:-20}
+      APP_NAME: ${APP_NAME:-dAvePi}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      CORS_ORIGINS: ${CORS_ORIGINS}
+      # Caddy terminates TLS in front of the app and adds
+      # X-Forwarded-For. TRUST_PROXY=true tells Express + the
+      # rate limiters to honour that header so per-client IP
+      # accounting works correctly through the proxy.
+      TRUST_PROXY: "true"
+      # Toggle observability bits per-deployment.
+      METRICS_ENABLED: ${METRICS_ENABLED:-false}
+      METRICS_TOKEN: ${METRICS_TOKEN:-}
+    # No published ports — Caddy handles ingress on 443 / 80.
+    expose:
+      - "4001"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:4001/healthz').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    depends_on:
+      - api
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      DOMAIN: ${DOMAIN:?DOMAIN must be set in .env}
+      # Email for Let's Encrypt registration (used for expiry notices).
+      ACME_EMAIL: ${ACME_EMAIL:?ACME_EMAIL must be set in .env}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+
+volumes:
+  mongo-data: {}
+  mongo-config: {}
+  caddy-data: {}
+  caddy-config: {}

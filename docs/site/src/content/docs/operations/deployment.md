@@ -1,12 +1,35 @@
 ---
 title: Deployment
-description: Production posture — env vars, process supervision, MongoDB, file storage, and the things to disable in production.
+description: Production posture — env vars, process supervision, MongoDB, file storage, and the things to disable in production. Plus per-platform deploy guides.
 ---
 
 dAvePi is a stock Node.js Express server. Anything you can run a
 Node app on (Render, Fly, Railway, ECS, GKE, a bare VM) will host
 it. There's no special build step — `node index.js` boots the
 server.
+
+## Per-platform guides
+
+Step-by-step deploys against the common targets. Each guide
+assumes you've read the env-var + posture sections below.
+
+| Target | Cost (small) | Managed Mongo | One-click |
+|--------|--------------|---------------|-----------|
+| [Self-host (Docker)](/operations/deployment/self-host/) | $5+/mo VPS | DIY container | — |
+| [Railway](/operations/deployment/railway/) | $5+/mo | Add-on | Template |
+| [Render](/operations/deployment/render/) | $7+/mo | External (Atlas) | Blueprint |
+| [Fly.io](/operations/deployment/fly/) | $0-5/mo idle | External (Atlas) | `fly launch` |
+| [AWS (ECS Fargate + DocumentDB)](/operations/deployment/aws/) | $50+/mo | DocumentDB | — |
+| [GCP (Cloud Run + Atlas)](/operations/deployment/gcp/) | $0-10/mo | Atlas | — |
+| [Azure (Container Apps + Cosmos)](/operations/deployment/azure/) | $30+/mo | Cosmos (Mongo API) | — |
+
+Costs are rough order of magnitude for a small production app
+(few requests/sec, single-replica, small DB) — your bill depends
+on traffic, retention, and the Mongo tier. The PaaS targets (top
+half of the table) are cheaper to get started and have less
+operational surface. The cloud targets (bottom half) are the
+right shape for larger / regulated deploys with VPC isolation,
+IAM, and audit-log integrations.
 
 ## Environment
 

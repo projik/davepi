@@ -44,6 +44,19 @@ require('mongoose-schema-jsonschema')(mongoose);
 
 const isProduction = () => process.env.NODE_ENV === 'production';
 
+// Trust the upstream reverse proxy when configured. Without this,
+// req.ip / X-Forwarded-For is treated as untrusted and the rate
+// limiters key on the proxy's connection IP — meaning one noisy
+// client would limit everyone behind the same proxy. Set
+// TRUST_PROXY=true in deployments where Caddy / nginx / a PaaS
+// load balancer terminates TLS in front of the app (the prod
+// Docker Compose stack at deploy/docker-compose.prod.yml sets it).
+// Off by default so a direct-exposed dev server doesn't trust
+// spoofed headers.
+if (String(process.env.TRUST_PROXY || '').toLowerCase() === 'true') {
+  app.set('trust proxy', 1);
+}
+
 // Default helmet (CSP enabled) for all routes. Swagger UI, Apollo's
 // GraphQL Playground, and the admin SPA need inline scripts / styles
 // that the default CSP would block, so CSP and
