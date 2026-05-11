@@ -246,18 +246,12 @@ await api.deal.transitionStage(dealId, 'proposal');
 // Same — literal union of allowed states.
 ```
 
-## 9:00 — Wire the admin SPA
+## 9:00 — Open the admin SPA
 
-Build it once:
+Open `http://localhost:4001/admin` in a browser.
 
-```bash
-cd ./node_modules/davepi/admin
-npm install
-npm run build
-```
-
-The build output lands at `<project>/admin/dist/`, which the
-server picks up at `/admin`. The admin reads `_describe` at
+The admin SPA ships pre-built inside the `davepi` package, so
+there's nothing to install or build. It reads `_describe` at
 startup and renders forms / tables / detail views for every loaded
 schema. New schemas appear automatically on refresh — there's
 nothing to wire up per-resource.

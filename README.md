@@ -131,25 +131,27 @@ npm run dev
 
 ### Admin UI
 
-A schema-driven admin UI is available at `/admin` once you've built it. It's
-a separate Vite + Refine SPA under `admin/` that fetches
-`/api-docs/swagger.json` at boot and renders list / show / create / edit /
-delete views for every schema you've defined — no per-resource configuration.
+A schema-driven admin UI is available at `/admin`. It ships pre-built inside
+the `davepi` package — no install or build step required for consumers. It's
+a Vite + Refine SPA that fetches `/api-docs/swagger.json` at boot and renders
+list / show / create / edit / delete views for every schema you've defined —
+no per-resource configuration.
 
 ```bash
-# One-time install + production build (output: admin/dist/)
-npm run build:admin
-
 # Browse to the admin once the API is running
 open http://localhost:4001/admin
 ```
 
-For development with hot-reload of the SPA itself, run the dev server alongside
-the API:
+If you're working **on this repo** (developing the SPA itself), the
+framework's own scripts let you rebuild it or run a hot-reload dev server:
 
 ```bash
-npm run dev:admin   # serves the SPA at http://localhost:5173 with API proxy
+npm run build:admin   # rebuild admin/dist/ from source
+npm run dev:admin     # SPA dev server at http://localhost:5173 with API proxy
 ```
+
+The published `davepi` package always ships the most recent `admin/dist/`
+bundle, so consumers never run these.
 
 The admin uses `/login` for authentication; the JWT is stored in
 `localStorage` and attached as `Authorization: Bearer …` on every request.

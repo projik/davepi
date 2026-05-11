@@ -352,7 +352,7 @@ async function scaffold({ name, template, install, davepiVersion, port }) {
       `- REST: http://localhost:${apiPort}/api/v1/...`,
       `- GraphQL: http://localhost:${apiPort}/graphql/`,
       `- Swagger: http://localhost:${apiPort}/api-docs`,
-      `- Admin SPA: http://localhost:${apiPort}/admin (after \`npm run build:admin\` in node_modules/davepi)`,
+      `- Admin SPA: http://localhost:${apiPort}/admin`,
       `- Capability manifest: http://localhost:${apiPort}/_describe`,
       '',
       '## What\'s in this template',
