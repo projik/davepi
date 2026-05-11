@@ -68,13 +68,13 @@ The CLI:
 1. Connects to Mongo using the same `MONGO_URI` as the app.
 2. Loads the schema registry (so `models` carries every Mongoose model).
 3. Reads the `migrations/` directory in alphabetical order.
-4. Skips any migration whose `name` is already in the `_davepi_migrations` collection.
+4. Skips any migration whose `name` is already in the `_migrations` collection.
 5. Wraps each `up` call in a recorded run — partial failures leave the row marked `failed` so the CLI knows to surface the error and not skip on the next run.
 
 ## Idempotency
 
 Migrations are run-at-most-once: each successful run inserts a row
-into `_davepi_migrations` keyed by `name`. The CLI refuses to run a
+into `_migrations` keyed by `name`. The CLI refuses to run a
 migration whose row already exists with status `succeeded`.
 
 For migrations that need to be **resumable** (large backfills,

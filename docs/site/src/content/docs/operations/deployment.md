@@ -61,7 +61,7 @@ CORS_ORIGINS=https://app.example.com,https://admin.example.com
 IDEMPOTENCY_TTL_SECONDS=86400       # 24h, matches Stripe
 
 # Storage (pick one)
-STORAGE_BACKEND=s3                  # 'local' | 's3' | 'gcs'
+STORAGE_DRIVER=s3                  # 'local' | 's3'
 STORAGE_S3_BUCKET=acme-davepi-uploads
 STORAGE_S3_REGION=us-east-1
 
@@ -150,7 +150,6 @@ Three options, pick one per file field:
 |---------|-------------------|
 | `local` | Small / single-host setups. Files vanish if the host's disk does — pair with regular backups. |
 | `s3` | Default for most production deploys. Public files use direct CDN URLs; private files use signed URLs with ~5min TTL. |
-| `gcs` | Same posture as `s3`, on Google Cloud. |
 
 Per-field config means you can mix — sensitive uploads to `local`
 on an encrypted volume, public assets to `s3` behind CloudFront.

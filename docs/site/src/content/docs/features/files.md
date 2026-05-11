@@ -1,6 +1,6 @@
 ---
 title: File uploads
-description: Type 'File' fields generate per-field upload, fetch, and delete routes — local, S3, or GCS storage with public or signed URLs.
+description: Type 'File' fields generate per-field upload, fetch, and delete routes — local or S3 storage with public or signed URLs.
 ---
 
 A `type: 'File'` field tells the loader: "this is an uploaded blob,
@@ -19,7 +19,7 @@ storage backend.
   file: {
     maxBytes:    5 * 1024 * 1024,    // 5MB
     accept:      ['image/png', 'image/jpeg'],
-    storage:     'local',            // or 's3' / 'gcs'
+    storage:     'local',            // or 's3'
     visibility:  'private',          // 'public' for direct CDN URLs
   },
 }
@@ -29,7 +29,7 @@ storage backend.
 |---------|-------------|
 | `maxBytes` | Hard upload limit. Defaults to 10MB. |
 | `accept` | Array of allowed MIME types. Server validates the wire-level type against this list before storage. |
-| `storage` | `'local'` (default — disk under `STORAGE_LOCAL_DIR`), `'s3'`, or `'gcs'`. |
+| `storage` | `'local'` (default — disk under `UPLOADS_DIR`) or `'s3'`. GCS support is on the roadmap but not yet implemented. |
 | `visibility` | `'public'` for stable URLs, `'private'` (default) for short-lived signed URLs on read. |
 
 ## Generated surfaces
@@ -69,9 +69,8 @@ executable as `image/png`.
 
 | Backend | Configuration |
 |---------|---------------|
-| `local` | `STORAGE_LOCAL_DIR` env var — directory under which blobs are written. Default `./uploads`. |
+| `local` | `UPLOADS_DIR` env var — directory under which blobs are written. Default `./uploads`. |
 | `s3` | `STORAGE_S3_BUCKET`, `STORAGE_S3_REGION`, plus standard AWS credentials chain. |
-| `gcs` | `STORAGE_GCS_BUCKET`, `GOOGLE_APPLICATION_CREDENTIALS`. |
 
 Per-field storage choice means a single schema can mix backends —
 public assets to S3, sensitive uploads to local disk encrypted at
@@ -117,7 +116,7 @@ A soft-deleted record's files are NOT removed — `deletedAt` is set,
 the file routes return 404 (because the record is filtered), but
 the blob persists. On `restore`, the file becomes accessible again.
 
-Hard-delete (whether direct, via retention's `tombstoneTtlDays`, or
+Hard-delete (whether direct, via `softDelete: { retentionDays }`'s sweep, or
 on a `softDelete: false` schema) **does** remove the blob from
 storage.
 
