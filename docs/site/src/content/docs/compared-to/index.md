@@ -50,3 +50,12 @@ per-page text:
 
 These appear on every page; the per-comparison pages add the
 alternative's specific strengths on top.
+
+## Already on one of these, looking to move?
+
+The [Migrate from](/migrate-from/) section has per-source guides
+with schema-mapping tables, ETL script templates, auth migration
+walkthroughs, and cutover checklists. The
+[Supabase guide](/migrate-from/supabase/) is the reference
+end-to-end walkthrough; the others reference it for shared
+patterns (auth, ETL, file storage).

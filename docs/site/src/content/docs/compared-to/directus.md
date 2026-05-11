@@ -142,8 +142,15 @@ Directus → dAvePi:
    are not in dAvePi's scope today — plan for password-reset
    flows or a custom auth path.
 
+The full guide — collection mapping, permissions, Flows
+decomposed into webhooks + state-machine `onEnter` handlers, file
+asset move, ETL template, cutover checklist — is at
+[Migrate from Directus](/migrate-from/directus/).
+
 ## See also
 
+- [Migrate from Directus](/migrate-from/directus/) — the full
+  migration guide.
 - [Schema-driven generation](/concepts/schema-driven/)
 - [Schema file shape](/reference/schema/)
 - [Other comparisons](/compared-to/)

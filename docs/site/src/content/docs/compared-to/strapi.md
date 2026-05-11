@@ -149,8 +149,15 @@ Strapi → dAvePi:
    per-resource or stick with Strapi for now if i18n is core to
    the product.
 
+The full guide — content-types-to-schema mapping, components as
+sub-schemas, draft/publish replaced by a state machine, plugins,
+media library, ETL template, cutover checklist — is at
+[Migrate from Strapi](/migrate-from/strapi/).
+
 ## See also
 
+- [Migrate from Strapi](/migrate-from/strapi/) — the full
+  migration guide.
 - [Schema-driven generation](/concepts/schema-driven/)
 - [State machines](/features/state-machines/)
 - [Other comparisons](/compared-to/)

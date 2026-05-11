@@ -142,8 +142,14 @@ PocketBase → dAvePi:
    `subscribe()` to dAvePi's outbound webhooks for change events,
    or poll the relevant resource if push isn't strictly required.
 
+The full guide — collection-to-schema mapping, API-rule
+translation, SQLite ETL, realtime → webhook relay, cutover
+checklist — is at [Migrate from PocketBase](/migrate-from/pocketbase/).
+
 ## See also
 
+- [Migrate from PocketBase](/migrate-from/pocketbase/) — the
+  full migration guide.
 - [Schema-driven generation](/concepts/schema-driven/)
 - [Idea to deployed CRM in 10 minutes](/guides/crm-in-10-minutes/)
 - [Other comparisons](/compared-to/)

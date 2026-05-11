@@ -142,8 +142,14 @@ Hasura → dAvePi:
 6. **Data.** Postgres → Mongo migration via your ETL of choice;
    most rows map 1:1 once the schema is in place.
 
+The full guide — schema mapping table, permissions translation,
+event-triggers-as-webhooks, ETL template, cutover checklist — is
+at [Migrate from Hasura](/migrate-from/hasura/).
+
 ## See also
 
+- [Migrate from Hasura](/migrate-from/hasura/) — the full
+  migration guide.
 - [Schema-driven generation](/concepts/schema-driven/)
 - [GraphQL surface](/surfaces/graphql/)
 - [Other comparisons](/compared-to/)
