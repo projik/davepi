@@ -79,8 +79,9 @@ at it and it works" out-of-box experience.
   is a meaningful step up in memory / disk / boot time.
 - **First-party admin UI.** PocketBase's admin is one of its
   best features — polished, opinionated, and works with no
-  configuration. dAvePi ships a Refine-based admin SPA, but
-  it's an extra build step (`npm run build:admin`).
+  configuration. dAvePi ships a Refine-based admin SPA pre-built
+  inside the package; both are zero-config out of the box, but
+  PocketBase's UI is the more mature surface.
 - **Realtime WebSockets.** Native subscriptions to row changes.
   dAvePi pushes change events via outbound webhooks; clients
   poll or use a webhook-receiver service for similar effect.

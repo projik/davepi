@@ -8,6 +8,10 @@ from v1.0.0 onward (see [Stability commitments](https://docs.davepi.dev/referenc
 
 ## [Unreleased]
 
+### Fixed
+
+- **Docs and the scaffolder's post-scaffold message told users to build the admin SPA — which isn't needed.** The published `davepi` package ships a pre-built `admin/dist/` bundle. Dropped the "9:00 — Wire the admin SPA" build steps from the "Idea to deployed CRM in 10 minutes" guide; replaced with a single "open `http://localhost:4001/admin`" line. README's Admin UI section reframed: pre-built for consumers; the `build:admin` / `dev:admin` scripts are documented as for-this-repo-only (developing the SPA itself). PocketBase comparison updated to drop the "extra build step" claim. `create-davepi-app@0.1.1`: scaffolder's "Admin SPA: ..." next-steps line no longer carries the misleading "after `npm run build:admin` in node_modules/davepi" suffix. (#97)
+
 ## [1.0.2] - 2026-05-11
 
 ### Fixed
