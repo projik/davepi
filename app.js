@@ -431,19 +431,28 @@ app.get('/_describe', (req, res, next) => {
 // don't opt in. When enabled, optionally token-gated via METRICS_TOKEN.
 app.get('/_metrics', asyncHandler(metricsHandler));
 
-// Admin SPA — built artifacts live under admin/dist/. Only mounted
-// when the build exists so a fresh clone without `npm run build:admin`
-// boots cleanly and just returns 404 for /admin/*. The SPA uses
-// client-side routing under /admin/<resource>/...; the wildcard
-// handler falls back to index.html for any unmatched path so a deep
-// link survives a refresh.
+// Admin SPA — built artifacts live under admin/dist/. The catch-all
+// handler is registered unconditionally so /admin/* requests don't
+// fall through to Express's finalhandler (which injects
+// `Content-Security-Policy: default-src 'none'` on 404 — breaking
+// the helmet carve-out the admin SPA relies on). When the build is
+// missing, the handler returns a clear 404 itself.
 const adminDist = path.resolve('./admin/dist');
-if (require('fs').existsSync(path.join(adminDist, 'index.html'))) {
+const hasAdminBuild = require('fs').existsSync(path.join(adminDist, 'index.html'));
+if (hasAdminBuild) {
   app.use('/admin', express.static(adminDist));
-  app.get(/^\/admin(?:\/.*)?$/, (req, res) => {
-    res.sendFile(path.join(adminDist, 'index.html'));
-  });
 }
+app.get(/^\/admin(?:\/.*)?$/, (req, res) => {
+  if (hasAdminBuild) {
+    // SPA uses client-side routing under /admin/<resource>/...; the
+    // wildcard falls back to index.html so a deep link survives a refresh.
+    res.sendFile(path.join(adminDist, 'index.html'));
+  } else {
+    res.status(404).type('text/plain').send(
+      'admin SPA not built. Run `npm run build:admin` after install.'
+    );
+  }
+});
 
 // Errors from any route — REST handlers, /auth/*, the indirection
 // middleware that delegates to the current Apollo router — flow through
