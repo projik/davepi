@@ -168,8 +168,7 @@ custom shape.
 
 ## See also
 
-- [Admin SPA](https://docs.davepi.dev/surfaces/describe/) — how
-  the bundled admin reads `_describe`.
+- [Admin SPA](/surfaces/describe/) — how the bundled admin reads `_describe`.
 - [TypeScript client](/surfaces/client/) — what frontend code
   (Refine or otherwise) calls to talk to dAvePi.
 - [Other comparisons](/compared-to/) — these are about competing
