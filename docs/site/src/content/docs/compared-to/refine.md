@@ -22,6 +22,13 @@ to figure out which problem each solves.
 
 ## At a glance
 
+The matrix axes here deliberately diverge from the other
+comparison pages. Refine and dAvePi don't share a feature surface
+— a row like "REST" or "GraphQL" applies to one side and is
+nonsense on the other. The shape below is the orientation table
+instead: what each tool *is*, so the differentiation is clear
+before the rest of the page.
+
 | Aspect | dAvePi | Refine |
 |--------|--------|--------|
 | What it is | Backend framework (API server) | Frontend framework (React admin builder) |
@@ -31,6 +38,7 @@ to figure out which problem each solves.
 | Schema location | JS files on the backend | TS resource definitions in the frontend |
 | Auth | JWT + refresh on the backend | Auth provider abstraction; works with any auth backend |
 | Hosting | Bring your own (Node host) | Bring your own (static hosting) |
+| Replaces | Hand-written backend + auto-generated admin | Hand-written admin UI code |
 
 ## How they relate
 
@@ -118,6 +126,45 @@ do against any other backend.
 If you find the bundled admin doesn't fit, the upgrade path is
 to fork or replace it with a standalone Refine app — same
 framework, more control.
+
+## Migration sketch
+
+Refine doesn't compete with dAvePi, so there's no
+"migrate FROM Refine TO dAvePi" path. The adjacent migration is
+**switching a Refine app's backend (data provider) to dAvePi** —
+common when the team has an existing Refine admin pointed at
+Supabase / Strapi / a hand-written REST API and wants to consolidate
+on dAvePi as the backend. High-level steps:
+
+1. **Spin up dAvePi** with the schemas the Refine app needs
+   (see [Quickstart](/quickstart/)). One JS file per resource;
+   keep field names in sync with the Refine resource definitions
+   to minimise frontend churn.
+2. **Generate the typed client.** `npx davepi gen-client --out
+   src/api/davepi.ts` in the Refine project. Pair with
+   [`client/davepi-runtime.ts`](/surfaces/client/).
+3. **Swap the data provider.** Replace the existing
+   `dataProvider` in your Refine `<Refine>` config with one that
+   wraps dAvePi's typed client. Refine's data provider
+   interface is small (`getList`, `getOne`, `create`, `update`,
+   `deleteOne`, etc.) — each method becomes a call into
+   `api.<resource>.<method>`. Several community data providers
+   for REST shapes can be adapted to dAvePi's
+   mongo-querystring filter convention with minimal changes.
+4. **Auth provider.** Swap the Refine `authProvider` for one that
+   hits dAvePi's `/login` and stores the JWT. The provider's
+   `getIdentity` reads `req.user` from a `/me`-style endpoint or
+   decodes the token client-side.
+5. **ETL the data.** Source-specific — typical pattern is a one-off
+   script that reads from the old backend and POSTs to dAvePi's
+   REST surface (use `Idempotency-Key` so reruns are safe).
+6. **Drop the old data provider once cutover is complete.**
+
+If you're going the other direction — dAvePi backend, but the
+bundled Refine-based admin SPA doesn't fit and you want a custom
+Refine app — fork the bundled admin or start a fresh Refine
+project against `davepi gen-client`'s output. Same framework,
+custom shape.
 
 ## See also
 
