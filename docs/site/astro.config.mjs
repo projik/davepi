@@ -83,6 +83,18 @@ export default defineConfig({
             { label: 'Observability', link: '/operations/observability/' },
           ],
         },
+        {
+          label: 'Compared to',
+          items: [
+            { label: 'Overview', link: '/compared-to/' },
+            { label: 'Supabase', link: '/compared-to/supabase/' },
+            { label: 'Hasura', link: '/compared-to/hasura/' },
+            { label: 'PocketBase', link: '/compared-to/pocketbase/' },
+            { label: 'Strapi', link: '/compared-to/strapi/' },
+            { label: 'Directus', link: '/compared-to/directus/' },
+            { label: 'Refine', link: '/compared-to/refine/' },
+          ],
+        },
       ],
       // Pagefind is bundled by default — no extra config needed for
       // search.
