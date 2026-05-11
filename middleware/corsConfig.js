@@ -16,18 +16,70 @@ const parseOrigins = (raw) => {
     .filter(Boolean);
 };
 
-// True when the request's Origin matches its Host — i.e. the request
-// is hitting the same server that emitted the page making it. The
-// admin SPA is served by this server, so its asset loads and fetches
-// back to /api/v1/* are same-origin and must be allowed regardless
-// of CORS_ORIGINS. A cross-site attacker can't spoof this: the
-// browser sets Host based on the target URL, not the attacker's page.
+// Compare `<host>` strings with default-port tolerance: 'example.com'
+// matches 'example.com:80' when scheme is http and 'example.com:443' when
+// scheme is https. Browsers usually omit default ports in the Host
+// header, but some clients / proxies don't, so the comparison has to
+// handle both.
+const stripDefaultPort = (host, scheme) => {
+  if (!host) return host;
+  const defaultPort = scheme === 'https' ? ':443' : ':80';
+  return host.endsWith(defaultPort) ? host.slice(0, -defaultPort.length) : host;
+};
+
+// Returns the effective request host — `X-Forwarded-Host` when the app
+// runs behind a trusted proxy, otherwise the `Host` header. Comma-split
+// + first-token: some proxies chain values when there are multiple
+// forwarders, and the originator (left-most) is the one to match.
+const effectiveRequestHost = (req) => {
+  const trustsProxy = req.app && req.app.get('trust proxy');
+  if (trustsProxy) {
+    const fwd = req.headers['x-forwarded-host'];
+    if (fwd) return String(fwd).split(',')[0].trim().toLowerCase();
+  }
+  return String(req.headers.host || '').trim().toLowerCase();
+};
+
+// True when the request's Origin matches its effective Host — i.e. the
+// request is hitting the same server that emitted the page making it.
+// The admin SPA is served by this server, so its asset loads and
+// fetches back to /api/v1/* are same-origin and must be allowed
+// regardless of CORS_ORIGINS.
+//
+// Comparison is robust to:
+//   - Hostname case (hosts are case-insensitive per RFC 3986).
+//   - Default ports — 'example.com' vs 'example.com:80' / ':443'.
+//   - Reverse-proxy deployments via `TRUST_PROXY=true`: we honour
+//     `X-Forwarded-Host` so requests proxied through Caddy / nginx
+//     resolve to the externally-visible hostname the browser used.
+//
+// A cross-site attacker can't spoof this: the browser sets `Host`
+// based on the target URL it's fetching, not the attacker page's
+// origin, so a malicious page at evil.example.com fetching
+// api.example.com will have `Origin: evil.example.com` and
+// `Host: api.example.com` — the mismatch keeps it on the allowlist
+// path.
 const isSameOrigin = (req) => {
   const origin = req.headers.origin;
-  const host = req.headers.host;
-  if (!origin || !host) return false;
-  const originHost = origin.replace(/^https?:\/\//, '');
-  return originHost === host;
+  if (!origin) return false;
+
+  let originHost;
+  let originScheme;
+  try {
+    const url = new URL(origin);
+    originHost = url.host.toLowerCase();
+    originScheme = url.protocol.replace(':', '');
+  } catch {
+    return false;
+  }
+
+  const requestHost = effectiveRequestHost(req);
+  if (!originHost || !requestHost) return false;
+
+  return (
+    stripDefaultPort(originHost, originScheme) ===
+    stripDefaultPort(requestHost, originScheme)
+  );
 };
 
 const buildCorsMiddleware = (raw = process.env.CORS_ORIGINS) => {
@@ -63,4 +115,10 @@ const buildCorsMiddleware = (raw = process.env.CORS_ORIGINS) => {
   };
 };
 
-module.exports = { buildCorsMiddleware, parseOrigins, CorsNotAllowedError, isSameOrigin };
+module.exports = {
+  buildCorsMiddleware,
+  parseOrigins,
+  CorsNotAllowedError,
+  isSameOrigin,
+  effectiveRequestHost,
+};
