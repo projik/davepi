@@ -1,0 +1,127 @@
+name: 'Publish davepi'
+
+# Publishes the root `davepi` package to npm when a tag matching
+# `davepi@<version>` is pushed. The tag's <version> must equal the
+# package.json's `version` field — the workflow checks this and
+# fails fast on mismatch so a stale tag doesn't publish the wrong
+# bits.
+#
+# Auth: classic NPM_TOKEN via the `npm-publish` GitHub Environment
+# (same secret + environment as the other two publish workflows).
+# Trusted Publishing isn't available on the npm account yet; when it
+# is, swap in `id-token: write` + `--provenance` to match the
+# original davepi-mcp-publish.yml.
+#
+# Pre-publish runs in order:
+#   1. tag-vs-package-version check
+#   2. `npm ci` for deterministic deps
+#   3. `npm test` against mongodb-memory-server (the suite's `--runInBand --forceExit` is enforced by the script)
+#   4. `npm run build:admin` so admin/dist/ is populated for the tarball
+#   5. `npm pack --dry-run --json` with an allowlist check + a forbidden-dirs check (catches `files[]` drift either way)
+#   6. `npm publish` — runs `prepublishOnly` (also `build:admin`) once more as the npm-enforced safety net
+
+on:
+  push:
+    tags:
+      - 'davepi@*'
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    environment: npm-publish
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20.x
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Verify tag matches package.json version
+        env:
+          GITHUB_REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -e
+          # Tag format: davepi@<version>
+          tag_version="${GITHUB_REF_NAME##*@}"
+          pkg_version=$(node -p "require('./package.json').version")
+          if [ "$tag_version" != "$pkg_version" ]; then
+            echo "::error::tag version ($tag_version) does not match package.json version ($pkg_version)"
+            exit 1
+          fi
+          echo "Publishing davepi@$pkg_version"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run tests
+        run: npm test
+
+      - name: Build admin SPA
+        run: npm run build:admin
+
+      - name: Verify pack contents
+        run: |
+          set -euo pipefail
+          npm pack --dry-run --json > /tmp/pack.json
+          node -e '
+            const data = JSON.parse(require("fs").readFileSync("/tmp/pack.json", "utf8"));
+            const files = data[0].files.map((f) => f.path);
+
+            // Allowlist: every required path must be in the tarball.
+            const required = [
+              "index.js",
+              "app.js",
+              "package.json",
+              "README.md",
+              "LICENSE",
+              "bin/davepi.js",
+            ];
+            const missing = required.filter((r) => !files.includes(r));
+            if (missing.length) {
+              console.error("missing required files:", missing);
+              process.exit(1);
+            }
+
+            // At least one file under each of these directories must ship.
+            const requiredDirs = [
+              "config/",
+              "middleware/",
+              "model/",
+              "routes/",
+              "utils/",
+              "admin/dist/",
+            ];
+            const missingDirs = requiredDirs.filter((d) => !files.some((f) => f.startsWith(d)));
+            if (missingDirs.length) {
+              console.error("no files under required dirs:", missingDirs);
+              process.exit(1);
+            }
+
+            // Forbidden: nothing under these prefixes should ship.
+            const forbidden = [
+              "test/",
+              "eval/",
+              "docs/",
+              "create-davepi-app/",
+              "packages/",
+              "templates/",
+              "deploy/",
+              "schema/",
+              ".github/",
+            ];
+            const leaked = forbidden.filter((p) => files.some((f) => f.startsWith(p)));
+            if (leaked.length) {
+              console.error("should not be in tarball:", leaked);
+              process.exit(1);
+            }
+
+            console.log("pack ok: " + files.length + " files");
+          '
+
+      - name: Publish to npm
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm publish --access public
