@@ -461,7 +461,9 @@ app.get(/^\/admin(?:\/.*)?$/, (req, res) => {
     res.sendFile(path.join(adminDist, 'index.html'));
   } else {
     res.status(404).type('text/plain').send(
-      'admin SPA not built. Run `npm run build:admin` after install.'
+      'admin SPA bundle missing from this dAvePi install. ' +
+      'Reinstall the `davepi` package, or — if developing on the framework itself — ' +
+      'run `npm run build:admin` from the dAvePi repo root.'
     );
   }
 });
