@@ -36,9 +36,11 @@ acme-crm/
 
 ## 1:00 — Boot
 
+`create-davepi-app` already ran `npm install` for you; just start
+the local Mongo container and the server.
+
 ```bash
 docker compose up -d         # Mongo
-npm install                   # ~30s
 npm start                     # binds to 5050 by default
 ```
 
@@ -55,7 +57,7 @@ Register a user, log in, hit `/api/v1/account`:
 ```bash
 curl -s -X POST http://localhost:5050/register \
   -H 'Content-Type: application/json' \
-  -d '{"email":"me@example.com","password":"sup3r-secret-pw!"}' | jq
+  -d '{"first_name":"Me","last_name":"Demo","email":"me@example.com","password":"sup3r-secret-pw!"}' | jq
 
 TOKEN=$(curl -s -X POST http://localhost:5050/login \
   -H 'Content-Type: application/json' \
@@ -248,7 +250,7 @@ await api.deal.transitionStage(dealId, 'proposal');
 
 ## 9:00 — Open the admin SPA
 
-Open `http://localhost:4001/admin` in a browser.
+Open `http://localhost:5050/admin` in a browser.
 
 The admin SPA ships pre-built inside the `davepi` package, so
 there's nothing to install or build. It reads `_describe` at
