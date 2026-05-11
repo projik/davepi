@@ -1,0 +1,58 @@
+name: 'Publish create-davepi-app'
+
+# Publishes the `create-davepi-app` package to npm when a tag matching
+# `create-davepi-app@<version>` is pushed. The tag's <version> must
+# equal the package.json's `version` field — the workflow checks this
+# and fails fast on mismatch so a stale tag doesn't publish the wrong
+# bits.
+#
+# Auth: classic NPM_TOKEN via the `npm-publish` GitHub Environment.
+# Trusted Publishing (OIDC) is the longer-term path but isn't yet
+# available on this npm account; until then a granular access token
+# with write scope on this package lives in the env secret as
+# NPM_TOKEN, gated behind the `npm-publish` environment so a reviewer
+# approves each release.
+#
+# The package's prepublishOnly hook (`node bin/sync-templates.js`)
+# runs automatically as part of `npm publish` — no extra step here.
+
+on:
+  push:
+    tags:
+      - 'create-davepi-app@*'
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    environment: npm-publish
+    defaults:
+      run:
+        working-directory: create-davepi-app
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20.x
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Verify tag matches package.json version
+        env:
+          GITHUB_REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -e
+          # Tag format: create-davepi-app@<version>
+          tag_version="${GITHUB_REF_NAME##*@}"
+          pkg_version=$(node -p "require('./package.json').version")
+          if [ "$tag_version" != "$pkg_version" ]; then
+            echo "::error::tag version ($tag_version) does not match package.json version ($pkg_version)"
+            exit 1
+          fi
+          echo "Publishing create-davepi-app@$pkg_version"
+
+      - name: Publish to npm
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm publish --access public
