@@ -1,0 +1,26 @@
+# Caddyfile for self-hosted dAvePi.
+#
+# Caddy provisions a Let's Encrypt certificate automatically on
+# first boot. The {$DOMAIN} env-var substitution picks up the
+# DOMAIN value from docker-compose.prod.yml.
+
+{$DOMAIN} {
+	# Let's Encrypt email — sourced from the ACME_EMAIL env var.
+	tls {$ACME_EMAIL}
+
+	# Proxy everything to the dAvePi container.
+	reverse_proxy api:4001 {
+		# Forward real client IP so dAvePi's rate limiter
+		# accounts per-IP instead of per-Caddy-container.
+		header_up X-Forwarded-For {remote_host}
+		header_up X-Real-IP {remote_host}
+	}
+
+	# Strict transport security — opt-in once you're confident
+	# the cert provisioned cleanly. Uncomment after the first
+	# successful HTTPS request.
+	# header Strict-Transport-Security "max-age=31536000; includeSubDomains"
+
+	# Hide server identification.
+	header -Server
+}

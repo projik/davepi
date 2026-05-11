@@ -77,7 +77,19 @@ export default defineConfig({
         {
           label: 'Operations',
           items: [
-            { label: 'Deployment', link: '/operations/deployment/' },
+            {
+              label: 'Deployment',
+              items: [
+                { label: 'Overview', link: '/operations/deployment/' },
+                { label: 'Self-host (Docker)', link: '/operations/deployment/self-host/' },
+                { label: 'Railway', link: '/operations/deployment/railway/' },
+                { label: 'Render', link: '/operations/deployment/render/' },
+                { label: 'Fly.io', link: '/operations/deployment/fly/' },
+                { label: 'AWS (ECS + DocumentDB)', link: '/operations/deployment/aws/' },
+                { label: 'GCP (Cloud Run + Atlas)', link: '/operations/deployment/gcp/' },
+                { label: 'Azure (Container Apps + Cosmos)', link: '/operations/deployment/azure/' },
+              ],
+            },
             { label: 'Migrations', link: '/operations/migrations/' },
             { label: 'Backup & retention', link: '/operations/backup/' },
             { label: 'Observability', link: '/operations/observability/' },
