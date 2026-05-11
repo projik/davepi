@@ -163,4 +163,90 @@ describe('CORS middleware', () => {
     expect(blocked.status).toBe(403);
     expect(blocked.body.error.code).toBe('CORS_NOT_ALLOWED');
   });
+
+  test('allows same-origin requests (Origin matches Host) regardless of allowlist', async () => {
+    // CORS_ORIGINS deliberately set to a different origin so the only
+    // reason this should succeed is the same-origin bypass.
+    const app = buildAppWithCors('https://app.example.com');
+    const res = await supertest(app)
+      .get('/ping')
+      .set('Host', 'api.example.com')
+      .set('Origin', 'http://api.example.com');
+    expect(res.status).toBe(200);
+    expect(res.headers['access-control-allow-origin']).toBe('http://api.example.com');
+  });
+
+  test('still rejects cross-origin even when Host coincidentally matches a different origin', async () => {
+    // Defense check: an attacker page at evil.example.com fetching
+    // api.example.com sets Host=api.example.com but Origin=evil.example.com.
+    // The mismatch keeps us on the allowlist path.
+    const app = buildAppWithCors('https://app.example.com');
+    const res = await supertest(app)
+      .get('/ping')
+      .set('Host', 'api.example.com')
+      .set('Origin', 'http://evil.example.com');
+    expect(res.status).toBe(403);
+    expect(res.body.error.code).toBe('CORS_NOT_ALLOWED');
+  });
+
+  test('same-origin bypass is case-insensitive on the hostname', async () => {
+    const app = buildAppWithCors('https://allowed.example.com');
+    const res = await supertest(app)
+      .get('/ping')
+      .set('Host', 'API.Example.COM')
+      .set('Origin', 'http://api.example.com');
+    expect(res.status).toBe(200);
+  });
+
+  test('same-origin bypass tolerates default-port differences (http:80)', async () => {
+    const app = buildAppWithCors('https://allowed.example.com');
+    const res = await supertest(app)
+      .get('/ping')
+      .set('Host', 'api.example.com:80')
+      .set('Origin', 'http://api.example.com');
+    expect(res.status).toBe(200);
+  });
+
+  test('same-origin bypass tolerates default-port differences (https:443)', async () => {
+    const app = buildAppWithCors('https://allowed.example.com');
+    const res = await supertest(app)
+      .get('/ping')
+      .set('Host', 'api.example.com:443')
+      .set('Origin', 'https://api.example.com');
+    expect(res.status).toBe(200);
+  });
+
+  test('same-origin bypass honors X-Forwarded-Host when trust proxy is enabled', async () => {
+    // Trust-proxy deployments (Caddy / nginx / a PaaS LB in front of
+    // the app) terminate TLS upstream and rewrite Host to the
+    // internal target. The original externally-visible host travels
+    // in X-Forwarded-Host. The bypass needs to use that to match
+    // the Origin the browser actually saw.
+    const app = express();
+    app.set('trust proxy', 1);
+    app.use(buildCorsMiddleware('https://allowed.example.com'));
+    app.get('/ping', (req, res) => res.status(200).json({ ok: true }));
+    app.use(errorHandler);
+
+    const res = await supertest(app)
+      .get('/ping')
+      .set('Host', '127.0.0.1:5050')                       // internal proxy target
+      .set('X-Forwarded-Host', 'api.example.com')          // external hostname
+      .set('Origin', 'https://api.example.com');
+    expect(res.status).toBe(200);
+  });
+
+  test('does NOT trust X-Forwarded-Host when trust proxy is disabled', async () => {
+    // Without trust proxy, an attacker could try to bypass CORS by
+    // setting X-Forwarded-Host to match Origin. The bypass should
+    // ignore X-Forwarded-Host entirely in that case.
+    const app = buildAppWithCors('https://allowed.example.com');
+    const res = await supertest(app)
+      .get('/ping')
+      .set('Host', '127.0.0.1:5050')
+      .set('X-Forwarded-Host', 'evil.example.com')
+      .set('Origin', 'http://evil.example.com');
+    expect(res.status).toBe(403);
+    expect(res.body.error.code).toBe('CORS_NOT_ALLOWED');
+  });
 });

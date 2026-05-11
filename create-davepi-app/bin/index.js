@@ -230,7 +230,11 @@ async function scaffold({ name, template, install, davepiVersion, port }) {
       `TOKEN_KEY=${randomSecret()}`,
       `API_PORT=${apiPort}`,
       `PAGE_SIZE=20`,
-      `CORS_ORIGINS=http://localhost:3000,http://localhost:5173`,
+      // localhost:3000 + localhost:5173 cover common frontend dev servers
+      // (CRA, Vite). localhost:${apiPort} covers same-origin asset loads
+      // from the bundled admin SPA in case the framework's same-origin
+      // bypass is ever bypassed.
+      `CORS_ORIGINS=http://localhost:3000,http://localhost:5173,http://localhost:${apiPort}`,
       `# Set HOT_RELOAD_SCHEMAS=true in dev to pick up schema/versions/* changes live.`,
       `HOT_RELOAD_SCHEMAS=true`,
       `NODE_ENV=development`,
