@@ -1,10 +1,25 @@
 {
   "name": "davepi",
   "version": "1.0.0",
+  "description": "Schema-driven Node.js backend that auto-generates REST + GraphQL + MCP from one schema file per resource. Built for AI agents.",
   "main": "index.js",
   "bin": {
     "davepi": "bin/davepi.js"
   },
+  "files": [
+    "index.js",
+    "app.js",
+    "bin/",
+    "config/",
+    "middleware/",
+    "model/",
+    "routes/",
+    "utils/",
+    "admin/dist/",
+    "README.md",
+    "LICENSE",
+    "CHANGELOG.md"
+  ],
   "scripts": {
     "start": "nodemon index.js",
     "dev": "nodemon --ignore 'swagger/*.json' index.js",
@@ -12,9 +27,23 @@
     "test:coverage": "jest --runInBand --forceExit --coverage",
     "install:admin": "cd admin && npm install --no-audit --no-fund",
     "build:admin": "cd admin && npm install --no-audit --no-fund && npm run build",
-    "dev:admin": "cd admin && npm run dev"
+    "dev:admin": "cd admin && npm run dev",
+    "prepublishOnly": "npm run build:admin"
   },
-  "keywords": [],
+  "keywords": [
+    "api",
+    "framework",
+    "backend",
+    "rest",
+    "graphql",
+    "mcp",
+    "mongoose",
+    "express",
+    "schema-driven",
+    "ai",
+    "agents",
+    "model-context-protocol"
+  ],
   "author": "David Baxter",
   "license": "ISC",
   "dependencies": {
@@ -70,13 +99,15 @@
       "/eval/"
     ]
   },
+  "engines": {
+    "node": ">=18"
+  },
   "repository": {
     "type": "git",
-    "url": "git+https://bitbucket.org/projik/davepi.git"
+    "url": "git+https://github.com/projik/davepi.git"
   },
   "bugs": {
-    "url": "https://bitbucket.org/projik/davepi/issues"
+    "url": "https://github.com/projik/davepi/issues"
   },
-  "homepage": "https://bitbucket.org/projik/davepi#readme",
-  "description": ""
+  "homepage": "https://docs.davepi.dev"
 }
