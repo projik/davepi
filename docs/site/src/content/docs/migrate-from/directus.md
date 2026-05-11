@@ -30,8 +30,8 @@ them to schema files.
 | Files & assets | `type: 'File'` field + `file: { ... }` | Local or S3. |
 | Asset transforms | Build a custom route or run a service in front | dAvePi doesn't transform images. |
 | Flow (visual automation) | State-machine `onEnter` + outbound webhooks + custom routes | Code instead of visual; covered below. |
-| Webhook (Directus) | `webhooks: [...]` on the schema | Same idea, declared per-schema. |
-| Hook (script) | Custom Express route, state-machine `onEnter`, or schema webhook | Depends on whether it's pre/post and what trigger. |
+| Webhook (Directus) | Webhook subscription (`POST /api/v1/webhooks`) | Per-tenant subscriptions registered at runtime, not schema config. |
+| Hook (script) | Custom Express route, state-machine `onEnter`, or webhook subscription | Depends on whether it's pre/post and what trigger. |
 | Custom field interface (admin UI) | (no map — admin SPA is auto-rendered) | If you customised the admin heavily, the SPA route is the right surface — write a custom React component for the Refine admin. |
 | Auth (local) | `User` model + JWT | Force password reset on cutover. |
 | Auth (SSO / SAML / OAuth) | Build-your-own | dAvePi ships JWT + email/password + reset. |
@@ -161,7 +161,7 @@ etc.). dAvePi's equivalent is code-driven and split by trigger:
 
 | Directus Flow trigger | dAvePi |
 |-----------------------|--------|
-| **Event** (create / update / delete on collection) | `webhooks: [{ event: 'create' | 'update' | 'delete', url }]` |
+| **Event** (create / update / delete on collection) | Webhook subscription: `POST /api/v1/webhooks` with `{ events: ['deal.*'], url }` |
 | **State transition** | `stateMachine.onEnter['stateName']: async (record, ctx) => ...` |
 | **Manual** (button in admin) | Custom Express route triggered from an admin SPA action |
 | **Schedule** (cron) | `node-cron` in `index.js`, or your platform's scheduler |
@@ -192,25 +192,28 @@ Directus Flow:
 
 becomes:
 
-```js
-// schema/versions/v1/deal.js
-webhooks: [
-  { event: 'create', url: 'https://example.com/deals-on-create', secret: process.env.HOOK_SECRET },
-],
+```bash
+# One-time setup: register a webhook subscription against the running server.
+curl -X POST https://api.example.com/api/v1/webhooks \
+  -H "authorization: Bearer $TOKEN" \
+  -H "content-type: application/json" \
+  -d '{ "events": ["deal.created"], "url": "https://example.com/deals-on-create" }'
+# Response includes a `secret`. Stash it — it's shown only once.
 ```
 
 ```js
 // services/deals-on-create.js (a Cloudflare Worker, Fly app, or whatever's receiving the webhook)
 export default {
   async fetch(req) {
-    const body = await req.json();
-    if (body.amountCents > 10_000_000) {
+    const body = await req.json();              // payload: { type, recordId, record, userId, deliveredAt, ... }
+    const record = body.record || {};
+    if (record.amountCents > 10_000_000) {
       await fetch(process.env.SLACK_WEBHOOK, {
         method: 'POST',
-        body: JSON.stringify({ text: `High-value deal: ${body.title}` }),
+        body: JSON.stringify({ text: `High-value deal: ${record.title}` }),
       });
       // Apply the priority update via dAvePi REST
-      await fetch(`${process.env.DAVEPI_API}/api/v1/deal/${body._id}`, {
+      await fetch(`${process.env.DAVEPI_API}/api/v1/deal/${body.recordId}`, {
         method: 'PUT',
         headers: { 'authorization': `Bearer ${process.env.SERVICE_TOKEN}`, 'content-type': 'application/json' },
         body: JSON.stringify({ priority: 'high' }),

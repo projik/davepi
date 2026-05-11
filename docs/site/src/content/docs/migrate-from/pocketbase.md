@@ -26,9 +26,9 @@ SQLite to Mongo.
 | `users` system collection | `User` model (`model/user.js`) | Force password reset on cutover. |
 | Auth tokens | JWT + refresh (dAvePi-issued) | Tokens don't migrate. Users re-login (or reset password). |
 | OAuth providers | Build your own | dAvePi ships email/password + JWT. |
-| Realtime `subscribe()` | `webhooks` block on the schema | Push → pull-via-webhook OR webhook→websocket relay. |
+| Realtime `subscribe()` | Webhook subscription (`POST /api/v1/webhooks`) | Push → pull-via-webhook OR webhook→websocket relay. |
 | File field | `type: 'File'` + `file: { ... }` | Local or S3 storage. |
-| JS hooks (`onRecordBeforeCreate`, etc.) | `webhooks` for after-events; custom routes for before-events | PocketBase's `before*` hooks are inline; dAvePi's equivalent is a custom route that handles its own logic before calling `Model.create`. |
+| JS hooks (`onRecordBeforeCreate`, etc.) | Webhook subscriptions for after-events; custom routes for before-events | PocketBase's `before*` hooks are inline; dAvePi's equivalent is a custom route that handles its own logic before calling `Model.create`. |
 | Admin UI | Refine-based admin SPA | Both polished; PocketBase's is the killer feature, dAvePi's is auto-rendered from `_describe`. |
 
 ## Field-type mapping
@@ -136,7 +136,7 @@ field-level ACL is more direct:
 }
 ```
 
-## Realtime → webhooks (or relay)
+## Realtime → webhook subscriptions (or relay)
 
 PocketBase's WebSocket subscriptions:
 
@@ -146,21 +146,34 @@ pb.collection('messages').subscribe('*', (e) => {
 });
 ```
 
-dAvePi doesn't push over WebSockets. Three options, in
-descending order of "matches the source behaviour":
+dAvePi doesn't push over WebSockets. It does have subscription
+webhooks — `POST /api/v1/webhooks` registers a URL + event
+pattern, the framework dispatches matching events to it. Three
+options, in descending order of "matches the source behaviour":
 
 ### 1. Webhook → WebSocket relay
 
-Run a tiny relay service (Cloudflare Worker, Fly app, ~50 LOC)
-that:
+Subscribe a tiny relay service (Cloudflare Worker, Fly app,
+~50 LOC) to dAvePi:
 
-- accepts webhook deliveries from dAvePi (with HMAC verification),
+```bash
+curl -X POST https://api.example.com/api/v1/webhooks \
+  -H "authorization: Bearer $TOKEN" \
+  -d '{ "events": ["message.*"], "url": "https://relay.example.com/in" }'
+```
+
+The relay:
+
+- accepts webhook deliveries from dAvePi (verifying `X-davepi-Signature`),
 - holds WebSocket connections from your frontends,
-- forwards each delivered event to the connected sockets.
+- forwards each delivered event (`{ type, recordId, record, ... }`) to the connected sockets.
 
 Frontend code changes from `pb.collection(...).subscribe()` to
 `new WebSocket('wss://relay.example.com/messages')`. The relay
-is stateless — drop it, redeploy, sockets reconnect.
+is stateless — drop it, redeploy, sockets reconnect. Note that
+dAvePi retries failed deliveries (1s / 5s / 30s / 5m / 1h);
+your relay must be idempotent or accept "the same event might
+arrive twice."
 
 ### 2. Polling
 
@@ -363,7 +376,7 @@ customising `middleware/auth.js`).
 - [ ] `FileMeta` sub-documents stamped in the ETL pass.
 - [ ] User records imported; bulk password reset emails sent.
 - [ ] OAuth providers replaced (if used).
-- [ ] PocketBase JS hooks reimplemented as schema webhooks (post-events) or custom routes (pre-events).
+- [ ] PocketBase JS hooks reimplemented as webhook subscriptions (post-events) or custom routes (pre-events).
 - [ ] Frontend PocketBase SDK (`pocketbase` npm package) calls replaced with the dAvePi typed client.
 - [ ] Single-binary deploy retired in favour of the dAvePi Node + Mongo stack.
 

@@ -186,7 +186,12 @@ The FK column is a plain `String` — no Postgres-style
 write time only if you add a `validate` function or check
 relations in app code.
 
-## Event triggers → schema webhooks
+## Event triggers → subscription webhooks
+
+dAvePi's webhooks are subscription-based: register one URL per
+event-pattern set via `POST /api/v1/webhooks`. The framework
+emits events from the auto-generated mutations and dispatches
+them to matching subscriptions.
 
 ```yaml
 # Hasura
@@ -199,34 +204,67 @@ relations in app code.
     delete: { columns: '*' }
 ```
 
-```js
-// dAvePi
-module.exports = {
-  path: 'deal',
-  fields: [/* ... */],
-  webhooks: [
-    { event: 'create', url: 'https://example.com/hook', secret: process.env.HOOK_SECRET },
-    { event: 'update', url: 'https://example.com/hook', secret: process.env.HOOK_SECRET },
-    { event: 'delete', url: 'https://example.com/hook', secret: process.env.HOOK_SECRET },
-  ],
-};
+```bash
+# dAvePi: one subscription that covers all three with a wildcard
+curl -X POST https://api.example.com/api/v1/webhooks \
+  -H "authorization: Bearer $TOKEN" \
+  -H "content-type: application/json" \
+  -d '{
+    "events": ["deal.*"],
+    "url": "https://example.com/hook"
+  }'
 ```
 
-Payloads carry the full record (plus the `before` document on
-update / delete) and are signed via HMAC-SHA256 in the
-`X-DavePi-Signature` header. Receivers verify:
+The response contains a `secret` field, shown exactly once.
+Save it; it's used for HMAC verification on every delivery.
+
+Event types emitted: `<path>.created`, `<path>.updated`,
+`<path>.deleted`, `<path>.transitioned`. Patterns: exact,
+`<resource>.*`, or `*` (global).
+
+### Delivery shape
+
+Each POST carries headers:
+
+```http
+X-davepi-Signature: sha256=<hex>
+X-davepi-Event:     deal.created
+X-davepi-Delivery:  <uuid>
+```
+
+`X-davepi-Signature` is `HMAC_SHA256(secret, rawBody)`,
+hex-encoded:
 
 ```js
 const expected = 'sha256=' +
-  crypto.createHmac('sha256', process.env.HOOK_SECRET).update(rawBody).digest('hex');
+  crypto.createHmac('sha256', secret).update(rawBody).digest('hex');
 if (req.headers['x-davepi-signature'] !== expected) return res.status(401).end();
 ```
 
+### Payload
+
+```json
+{
+  "id":          "<uuid>",
+  "type":        "deal.created",
+  "version":     "v1",
+  "userId":      "<tenant>",
+  "recordId":    "<doc-id>",
+  "record":      { /* current record */ },
+  "deliveredAt": "2026-05-11T12:00:00Z"
+}
+```
+
+Bulk operations emit `filter` + `numAffected` instead of
+`recordId` + `record`.
+
 ### Differences worth knowing
 
-- **No retries with backoff.** Hasura retries failed deliveries with exponential backoff. dAvePi delivers once + logs failures; consumers should be idempotent.
-- **No ordering guarantee.** Webhook delivery is best-effort fan-out; if strict ordering matters, persist the event server-side first.
-- **No filter rules.** Hasura's "fire only on column X change" — replicate that with logic in your webhook receiver.
+- **No `before` document.** Hasura event triggers include the old row on update / delete. dAvePi doesn't — if you need the prior state, query the audit log (`GET /api/v1/<path>/:id/history`) from the receiver.
+- **Retries with backoff.** Failed deliveries retry on 1s / 5s / 30s / 5m / 1h. After 10 consecutive failures the subscription auto-disables. Receivers must be idempotent.
+- **No ordering guarantee.** Delivery is best-effort fan-out from a process-local event bus; if strict ordering matters, persist the event server-side first or read the audit log in order.
+- **No filter rules.** Hasura's "fire only on column X change" — replicate that with logic in your webhook receiver, or in the event payload (which carries the full record).
+- **Per-tenant.** Subscriptions are scoped to the creating user's `userId`; you only receive events for records owned by that tenant.
 
 ## Actions → custom routes
 

@@ -65,6 +65,8 @@ cutover. Both endpoints are built in:
 ```js
 // scripts/migrate-supabase-users.js
 require('dotenv').config();
+const crypto = require('crypto');
+const bcrypt = require('bcryptjs');
 const { createClient } = require('@supabase/supabase-js');
 const mongoose = require('mongoose');
 const User = require('davepi/model/user');
@@ -82,15 +84,18 @@ const User = require('davepi/model/user');
     if (error) throw error;
     if (!data.users.length) break;
 
-    const docs = data.users.map((u) => ({
+    const docs = await Promise.all(data.users.map(async (u) => ({
       _id: new mongoose.Types.ObjectId(),
       legacyId: u.id,
       email: u.email,
       first_name: u.user_metadata?.first_name || null,
       last_name: u.user_metadata?.last_name || null,
-      password: 'pending-reset',           // any non-empty string; reset on first login
+      // Bcrypt hash of random bytes: matches dAvePi's auth shape so
+      // login attempts get a normal bcrypt.compare (which will fail
+      // until the user completes the password-reset flow below).
+      password: await bcrypt.hash(crypto.randomBytes(24).toString('hex'), 10),
       roles: u.app_metadata?.roles || ['user'],
-    }));
+    })));
     await User.collection.insertMany(docs, { ordered: false });
 
     console.log(`page ${page}: inserted ${docs.length}`);
@@ -103,7 +108,9 @@ const User = require('davepi/model/user');
 
 `legacyId` is a temporary column. The ETL script (below) uses it
 to rewrite Supabase `user_id` references to the new Mongo
-`_id`s. Drop the column after cutover.
+`_id`s. Drop the column after cutover. The stub bcrypt hash is
+intentionally unrecoverable — every user **must** complete the
+password-reset flow below before they can log in.
 
 ### Triggering the bulk reset
 
@@ -296,23 +303,80 @@ app.post('/api/v1/checkout', auth(true), asyncHandler(async (req, res) => {
 `asyncHandler` plumbs rejections into the framework's terminal
 error handler. Use `req.log` (Pino) instead of `console.log`.
 
-## Database webhooks → schema webhooks
+## Database webhooks → subscription API
 
-```js
-// schema/versions/v1/deal.js
-module.exports = {
-  path: 'deal',
-  fields: [/* ... */],
-  webhooks: [
-    { event: 'create', url: 'https://hooks.zapier.com/...', secret: process.env.HOOK_SECRET },
-    { event: 'update', url: 'https://internal.example.com/sync' },
-  ],
-};
+dAvePi's webhooks are runtime subscriptions, not schema config.
+After a user authenticates, they (or a setup script) `POST` to
+`/api/v1/webhooks` with the events they care about; the server
+returns a freshly-generated `secret` (visible exactly once at
+create time) and starts dispatching matching events to that URL.
+
+```bash
+curl -X POST https://api.example.com/api/v1/webhooks \
+  -H "authorization: Bearer $TOKEN" \
+  -H "content-type: application/json" \
+  -d '{
+    "events": ["deal.created", "deal.updated", "account.*"],
+    "url": "https://hooks.zapier.com/..."
+  }'
 ```
 
-Webhook payloads are HMAC-signed (header
-`X-DavePi-Signature: sha256=<hex>`). Receivers verify with
-`HMAC_SHA256(secret, body)`.
+Patterns:
+
+- **Exact**: `deal.created`
+- **Resource wildcard**: `deal.*` (matches `deal.created`, `deal.updated`, `deal.deleted`, `deal.transitioned`)
+- **Global wildcard**: `*`
+
+Emitted event types are `<path>.created`, `<path>.updated`,
+`<path>.deleted`, `<path>.transitioned` (state-machine moves).
+
+### Delivery
+
+Each delivery is a POST with headers:
+
+```http
+X-davepi-Signature: sha256=<hex>
+X-davepi-Event:     deal.created
+X-davepi-Delivery:  <uuid>
+Content-Type:       application/json
+```
+
+`X-davepi-Signature` is `HMAC_SHA256(secret, rawBody)`,
+hex-encoded. Receivers verify:
+
+```js
+const expected = 'sha256=' +
+  crypto.createHmac('sha256', secret).update(rawBody).digest('hex');
+if (req.headers['x-davepi-signature'] !== expected) return res.status(401).end();
+```
+
+### Payload shape
+
+```json
+{
+  "id":          "<uuid>",
+  "type":        "deal.created",
+  "version":     "v1",
+  "userId":      "<tenant>",
+  "recordId":    "<doc-id>",
+  "record":      { /* current record */ },
+  "deliveredAt": "2026-05-11T12:00:00Z"
+}
+```
+
+`record` is present on single-record events (create / update /
+transition). Bulk operations emit events with `filter` +
+`numAffected` instead of `record` + `recordId`. No `before`
+document is included today — if you need a diff, query the
+record's `/history` (audit log) endpoint from the receiver.
+
+### Retries
+
+Deliveries are retried with backoff (1s, 5s, 30s, 5m, 1h).
+After 10 consecutive failures the subscription auto-disables
+(`active: false`) — re-enable manually after fixing the
+receiver. **Receivers must be idempotent**: a delivery may
+arrive more than once.
 
 ## The ETL template
 

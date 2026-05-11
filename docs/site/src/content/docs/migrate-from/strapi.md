@@ -25,7 +25,7 @@ This guide assumes you've decided to move.
 | Localisation (i18n) | `translations: { [locale]: ... }` sub-document, or per-locale resources | No native i18n; pick a pattern. |
 | Permissions (roles + actions) | `acl.list` / `acl.delete` + `field.acl.*` | Per-row → document; per-field → field ACL. |
 | Users & Permissions plugin users | `User` model | Force password reset on cutover. |
-| Lifecycle hooks (`beforeCreate`, etc.) | Custom routes (for before-events), `webhooks` + state-machine `onEnter` (for after-events) | Strapi's `before*` hooks are inline; dAvePi's equivalent is a custom route that intercepts before calling `Model.create`. |
+| Lifecycle hooks (`beforeCreate`, etc.) | Custom routes (for before-events); webhook subscriptions (`POST /api/v1/webhooks`) or state-machine `onEnter` (for after-events) | Strapi's `before*` hooks are inline; dAvePi's equivalent is a custom route that intercepts before calling `Model.create`. Webhooks dispatch async with retry backoff. |
 | Custom controllers / services / policies | Custom Express routes / helpers in `utils/` | Move the code out of Strapi's folder structure into the Node app's structure. |
 | Plugins | Custom routes, helpers, or external services | Strapi plugins don't translate; rewrite per-plugin. |
 | Media library | File fields (`type: 'File'`) + local / S3 driver | Each upload becomes a `FileMeta` sub-document on its owning record. |
