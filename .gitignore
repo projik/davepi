@@ -4,3 +4,4 @@
 /admin/dist
 # Local file-storage driver writes blobs here in dev / tests.
 /uploads
+.vscode/settings.json
