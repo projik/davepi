@@ -8,8 +8,11 @@ from v1.0.0 onward (see [Stability commitments](https://docs.davepi.dev/referenc
 
 ## [Unreleased]
 
+## [1.0.1] - 2026-05-11
+
 ### Fixed
 
+- **Scaffolded apps crashed on `npm start` with "unable to determine transport target for pino-pretty".** `utils/logger.js` configures a `pino-pretty` transport whenever `NODE_ENV` isn't `production` or `test`, but `pino-pretty` was in `devDependencies` — so the consumer's `npm install` didn't pull it in and pino bailed at boot. Hidden during framework dev because devDeps are installed locally; surfaced as soon as `davepi@1.0.0` was published and someone ran `npx create-davepi-app demo && cd demo && npm install && npm start`. Fix: move `pino-pretty` to `dependencies`, plus a `require.resolve` guard in `utils/logger.js` so if anything ever strips the package (`npm prune --production`, custom install profile), pino falls back to plain JSON output instead of crashing. Production path is unchanged — `NODE_ENV=production` skips the transport entirely. (#94)
 - **`/admin/*` CSP carve-out now holds when the SPA isn't built.** The helmet middleware skips CSP for `/admin/*` so ant-design's inline styles render, but the catch-all route was registered conditionally on `admin/dist/index.html` existing. When the build was missing, requests fell through to Express's `finalhandler`, which injects `Content-Security-Policy: default-src 'none'` on 404s — breaking the carve-out the security suite asserts. Hidden during local dev (the build is usually present) and only surfaced once `davepi-publish.yml` started running `npm test` before `npm run build:admin`. Fix: register the `/admin/*` GET handler unconditionally; serve `index.html` when the build exists, otherwise return a clear 404 ("admin SPA not built. Run `npm run build:admin` after install.") directly without touching `finalhandler`. (#90)
 
 ### Added
