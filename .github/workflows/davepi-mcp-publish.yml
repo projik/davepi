@@ -6,11 +6,12 @@ name: 'Publish @davepi/mcp'
 # fails fast on mismatch so a stale tag doesn't publish the wrong
 # bits.
 #
-# Auth: npm Trusted Publishing via OIDC. No long-lived NPM_TOKEN
-# needed — the `id-token: write` permission lets npm exchange this
-# job's OIDC token for a short-lived publish token. Requires the
-# package to have a trusted publisher configured on npmjs.com that
-# matches this repo, workflow filename, and environment name.
+# Auth: classic NPM_TOKEN via the `npm-publish` GitHub Environment.
+# Trusted Publishing (OIDC) is the longer-term path but isn't yet
+# available on this npm account; until then a granular access token
+# with write scope on this package lives in the env secret as
+# NPM_TOKEN, gated behind the `npm-publish` environment so a reviewer
+# approves each release.
 
 on:
   push:
@@ -19,7 +20,6 @@ on:
 
 permissions:
   contents: read
-  id-token: write   # required for npm Trusted Publishing + provenance
 
 jobs:
   publish:
@@ -52,5 +52,7 @@ jobs:
       - name: Run package tests before publish
         run: npm test
 
-      - name: Publish to npm via Trusted Publishing
-        run: npm publish --access public --provenance
+      - name: Publish to npm
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm publish --access public

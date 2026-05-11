@@ -52,6 +52,32 @@ jobs:
           fi
           echo "Publishing create-davepi-app@$pkg_version"
 
+      - name: Sync templates (fail fast before npm wraps it in prepublish)
+        run: node bin/sync-templates.js
+
+      - name: CLI smoke check
+        run: node bin/index.js --help
+
+      - name: Verify pack contents
+        run: |
+          set -euo pipefail
+          out=$(npm pack --dry-run --json)
+          echo "$out" | node -e '
+            const data = JSON.parse(require("fs").readFileSync(0, "utf8"));
+            const files = data[0].files.map((f) => f.path);
+            const required = ["bin/index.js", "bin/sync-templates.js", "README.md"];
+            const missing = required.filter((r) => !files.includes(r));
+            if (missing.length) {
+              console.error("missing from tarball:", missing);
+              process.exit(1);
+            }
+            if (!files.some((f) => f.startsWith("templates/"))) {
+              console.error("no templates/* files in tarball");
+              process.exit(1);
+            }
+            console.log("pack ok:", files.length, "files");
+          '
+
       - name: Publish to npm
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
