@@ -444,7 +444,12 @@ app.get('/_metrics', asyncHandler(metricsHandler));
 // `Content-Security-Policy: default-src 'none'` on 404 — breaking
 // the helmet carve-out the admin SPA relies on). When the build is
 // missing, the handler returns a clear 404 itself.
-const adminDist = path.resolve('./admin/dist');
+//
+// Path is resolved against __dirname (the framework's own directory)
+// rather than process.cwd() — when davepi is installed as a dep, the
+// admin/dist/ bundle ships INSIDE node_modules/davepi/, not in the
+// consumer's project root.
+const adminDist = path.resolve(__dirname, 'admin/dist');
 const hasAdminBuild = require('fs').existsSync(path.join(adminDist, 'index.html'));
 if (hasAdminBuild) {
   app.use('/admin', express.static(adminDist));
@@ -456,7 +461,9 @@ app.get(/^\/admin(?:\/.*)?$/, (req, res) => {
     res.sendFile(path.join(adminDist, 'index.html'));
   } else {
     res.status(404).type('text/plain').send(
-      'admin SPA not built. Run `npm run build:admin` after install.'
+      'admin SPA bundle missing from this dAvePi install. ' +
+      'Reinstall the `davepi` package, or — if developing on the framework itself — ' +
+      'run `npm run build:admin` from the dAvePi repo root.'
     );
   }
 });
