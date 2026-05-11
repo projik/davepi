@@ -16,6 +16,20 @@ const parseOrigins = (raw) => {
     .filter(Boolean);
 };
 
+// True when the request's Origin matches its Host — i.e. the request
+// is hitting the same server that emitted the page making it. The
+// admin SPA is served by this server, so its asset loads and fetches
+// back to /api/v1/* are same-origin and must be allowed regardless
+// of CORS_ORIGINS. A cross-site attacker can't spoof this: the
+// browser sets Host based on the target URL, not the attacker's page.
+const isSameOrigin = (req) => {
+  const origin = req.headers.origin;
+  const host = req.headers.host;
+  if (!origin || !host) return false;
+  const originHost = origin.replace(/^https?:\/\//, '');
+  return originHost === host;
+};
+
 const buildCorsMiddleware = (raw = process.env.CORS_ORIGINS) => {
   const allowedOrigins = parseOrigins(raw);
   const allowAll = allowedOrigins.includes('*');
@@ -27,7 +41,7 @@ const buildCorsMiddleware = (raw = process.env.CORS_ORIGINS) => {
     allowedOrigins.push('http://localhost:3000');
   }
 
-  return cors({
+  const allowlistCors = cors({
     origin: (origin, cb) => {
       // Same-origin requests, server-to-server, and tools like curl have
       // no Origin header — let those through unconditionally.
@@ -37,6 +51,16 @@ const buildCorsMiddleware = (raw = process.env.CORS_ORIGINS) => {
     },
     credentials: true,
   });
+
+  // Reflect-Origin variant used for same-origin requests so the
+  // browser's `crossorigin` checks on `<script>` / `<link>` succeed
+  // without needing the API's own origin in CORS_ORIGINS.
+  const sameOriginCors = cors({ origin: true, credentials: true });
+
+  return (req, res, next) => {
+    if (isSameOrigin(req)) return sameOriginCors(req, res, next);
+    return allowlistCors(req, res, next);
+  };
 };
 
-module.exports = { buildCorsMiddleware, parseOrigins, CorsNotAllowedError };
+module.exports = { buildCorsMiddleware, parseOrigins, CorsNotAllowedError, isSameOrigin };

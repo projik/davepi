@@ -8,6 +8,12 @@ from v1.0.0 onward (see [Stability commitments](https://docs.davepi.dev/referenc
 
 ## [Unreleased]
 
+## [1.0.4] - 2026-05-11
+
+### Fixed
+
+- **Admin SPA assets returned `403 CORS_NOT_ALLOWED` for same-origin requests.** Vite emits `<script type="module" crossorigin src="/admin/assets/index-…js">` and `<link rel="stylesheet" crossorigin href="/admin/assets/index-…css">`, and the browser sends an `Origin` header for `crossorigin`-attributed elements **even on same-origin requests**. The default `CORS_ORIGINS=http://localhost:3000` doesn't include the API's own origin, so requests from `/admin/` back to `/admin/assets/*` were rejected with 403 + JSON body — manifesting as `GET .../admin/assets/...js 403 (Forbidden)` and `Refused to apply style from .../admin/assets/...css because its MIME type ('application/json') is not a supported stylesheet MIME type`. Fix: `middleware/corsConfig.js` now detects same-origin (`Origin` matches `Host`) and bypasses the allowlist check, reflecting the request's Origin via a separate `cors({ origin: true })` instance. A cross-site attacker can't spoof this because the browser sets `Host` based on the target URL it's fetching, not the attacker page's origin. New `create-davepi-app@0.1.2` adds `http://localhost:${apiPort}` to the scaffolded `.env`'s `CORS_ORIGINS` as belt-and-suspenders so the admin SPA also works for users on `davepi@1.0.3` who upgrade just the scaffolder. (#99)
+
 ## [1.0.3] - 2026-05-11
 
 ### Fixed
