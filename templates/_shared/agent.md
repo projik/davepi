@@ -126,7 +126,7 @@ How to transition a record:
   file: {
     maxBytes:   5 * 1024 * 1024,
     accept:     ['image/png', 'image/jpeg'],
-    storage:    's3',                             // or 'local' / 'gcs'
+    storage:    's3',                             // or 'local'
     visibility: 'private',                        // or 'public'
   },
 }
@@ -167,10 +167,7 @@ module.exports = {
     endpoints: [{ url: '...', secret: '...' }],
   },
 
-  retention: {                                    // optional — auto-purge tombstones / audit
-    tombstoneTtlDays: 30,
-    auditTtlDays:     365,
-  },
+  softDelete: { retentionDays: 30 },              // optional — auto-purge tombstoned rows. Audit log + webhook_delivery don't auto-purge; prune manually.
 };
 ```
 

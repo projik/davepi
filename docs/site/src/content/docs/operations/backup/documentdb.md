@@ -124,7 +124,7 @@ standard answer.
 - **Migration drift**. If you restore to a point in time before a
   schema migration ran, but the application code expects the
   post-migration shape, you'll get errors until you replay the
-  migration. The `_davepi_migrations` collection is part of the
+  migration. The `_migrations` collection is part of the
   restore, so the migration runner will see it as not-yet-run and
   re-apply on next boot.
 

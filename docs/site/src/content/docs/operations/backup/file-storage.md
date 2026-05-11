@@ -1,6 +1,6 @@
 ---
 title: File-storage backup
-description: Backup strategies for each file-storage driver — local, S3, GCS — so the FileMeta sub-document and the actual blob stay in sync after a restore.
+description: Backup strategies for each file-storage driver — local and S3 — so the FileMeta sub-document and the actual blob stay in sync after a restore.
 ---
 
 `type: 'File'` fields store metadata (key, size, content type,
@@ -14,9 +14,9 @@ Restore is the inverse + the [restore drill](/operations/backup/restore-drill/)'
 final consistency check that every `FileMeta` in the DB has a
 matching blob in the store.
 
-## Local storage (`STORAGE_BACKEND=local`)
+## Local storage (`STORAGE_DRIVER=local`)
 
-Blobs are written to `STORAGE_LOCAL_DIR` (default `./uploads`).
+Blobs are written to `UPLOADS_DIR` (default `./uploads`).
 Three options, in order of robustness:
 
 ### Filesystem snapshot
@@ -58,7 +58,7 @@ aws s3 cp /tmp/uploads-*.tar.gz s3://acme-backups/davepi-uploads/
 
 Becomes painful past ~10GB of uploads — switch to `restic` then.
 
-## S3 (`STORAGE_BACKEND=s3`)
+## S3 (`STORAGE_DRIVER=s3`)
 
 S3 has the strongest built-in primitives. Three layers:
 
@@ -113,59 +113,28 @@ destination bucket should also have versioning + lifecycle.
 (from a deleted version or a replicated bucket), the keys still
 match — no Mongo migration needed.
 
-## GCS (`STORAGE_BACKEND=gcs`)
+## GCS
 
-GCS mirrors S3's model with slightly different commands:
-
-### Object versioning
-
-```bash
-gsutil versioning set on gs://acme-davepi-uploads
-```
-
-### Lifecycle to coldline / archive
-
-```bash
-gsutil lifecycle set lifecycle.json gs://acme-davepi-uploads
-```
-
-```json
-{
-  "lifecycle": {
-    "rule": [
-      {
-        "action": { "type": "SetStorageClass", "storageClass": "COLDLINE" },
-        "condition": { "age": 30, "isLive": false }
-      },
-      {
-        "action": { "type": "Delete" },
-        "condition": { "age": 365, "isLive": false }
-      }
-    ]
-  }
-}
-```
-
-### Cross-region: turn the bucket dual-region or multi-region
-
-Set the bucket's location to `nam4` (dual-region US) or `us`
-(multi-region) at creation time. Replication is built into the
-bucket type — no separate replication rule needed.
+A GCS driver is on the roadmap but not yet implemented — the
+framework today supports `local` and `s3`. For Google Cloud
+deploys, point the S3 driver at GCS's S3-compatible
+interoperability endpoint, or run a small adapter service in
+front of GCS that translates S3 API calls.
 
 ## Tombstone-driven cleanup
 
-The framework's [tombstone retention](/operations/backup/#soft-delete-tombstones-per-schema-retention)
-(`retention.tombstoneTtlDays`) deletes the matching file blobs
-when it sweeps soft-deleted rows. **This deletion is permanent
-at the storage layer** — once the tombstone retention sweep
-runs, the blob's gone from S3 unless versioning or replication
-caught a copy first.
+The framework's [soft-delete retention](/operations/backup/#soft-delete-tombstones)
+(`softDelete: { retentionDays }`) deletes the matching file
+blobs when it sweeps soft-deleted rows. **This deletion is
+permanent at the storage layer** — once the sweep runs, the
+blob's gone from S3 unless versioning or replication caught a
+copy first.
 
-If you use `retention.tombstoneTtlDays` for GDPR / right-to-be-
-forgotten compliance, you usually want the blob actually deleted.
-Pair this with S3 versioning's `NoncurrentVersionExpiration` so
-old versions of deleted blobs also expire within the compliance
-window.
+If you use `softDelete: { retentionDays }` for GDPR /
+right-to-be-forgotten compliance, you usually want the blob
+actually deleted. Pair this with S3 versioning's
+`NoncurrentVersionExpiration` so old versions of deleted blobs
+also expire within the compliance window.
 
 ## Restore consistency: the FileMeta ↔ blob check
 

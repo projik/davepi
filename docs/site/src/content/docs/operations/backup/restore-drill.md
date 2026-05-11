@@ -45,14 +45,14 @@ docker run --rm -it mongo:7 \
     db = db.getSiblingDB("davepi");
     print("collections:", db.getCollectionNames().length);
     print("audit_log:", db.audit_log.countDocuments({}));
-    print("_davepi_migrations:", db._davepi_migrations.countDocuments({}));
+    print("_migrations:", db._migrations.countDocuments({}));
   '
 ```
 
 - [ ] Confirm the collection count is sensible (matches
       production's `_describe` schema count + framework
       collections).
-- [ ] `_davepi_migrations` is present — without this, the
+- [ ] `_migrations` is present — without this, the
       migration runner thinks the DB is fresh and may re-run
       everything.
 

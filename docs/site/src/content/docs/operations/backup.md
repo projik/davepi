@@ -39,18 +39,25 @@ The whole database, with a couple of exceptions:
 | Collection | Back up? | Why |
 |------------|----------|-----|
 | Every schema-driven collection | **Yes** | This is your data. |
-| `audit_log` | **Yes** | Compliance + post-incident forensics. Subject to `retention.auditTtlDays` per-schema (see below). |
-| `_davepi_migrations` | **Yes** | Losing this means the migration runner thinks it needs to re-run everything. Catastrophic if migrations aren't idempotent. |
+| `audit_log` | **Yes** | Compliance + post-incident forensics. The framework doesn't auto-purge audit rows — once written, they're permanent until you manually prune. |
+| `_migrations` | **Yes** | Losing this means the migration runner thinks it needs to re-run everything. Catastrophic if migrations aren't idempotent. |
 | `idempotency_key` | No (optional) | Auto-purged after `IDEMPOTENCY_TTL_SECONDS` (default 24h). It's a retry-correctness mechanism, not history. |
-| `webhook_delivery` | No (optional) | Auto-purged after `WEBHOOK_DELIVERY_TTL_DAYS` (default 30). Operational telemetry, not data. |
+| `webhook_delivery` | **Yes** | Operational telemetry, but the framework doesn't auto-purge it — grows linearly with mutations. Include in backups if you keep delivery audit trails; prune periodically to stop unbounded growth. |
 
 If you really need a partial restore, grab the full dump and
 filter on restore.
 
 ## Framework-managed retention
 
-Three things the framework purges automatically. Configuration
-lives on the schema or in env vars.
+What the framework purges automatically vs. what you have to
+manage yourself:
+
+| Collection | Auto-purge? | Configured via |
+|------------|-------------|----------------|
+| `idempotency_key` | Yes | `IDEMPOTENCY_TTL_SECONDS` env (default 24h). |
+| Soft-deleted records (per-schema) | Optional | `softDelete: { retentionDays: N }` on the schema, or `SOFT_DELETE_RETENTION_DAYS` env globally. |
+| `audit_log` | **No** | Manual pruning. The framework records audit rows but never deletes them. |
+| `webhook_delivery` | **No** | Manual pruning. Same posture as audit. |
 
 ### Idempotency tokens
 
@@ -59,46 +66,55 @@ override with `IDEMPOTENCY_TTL_SECONDS`. Mongo's TTL monitor
 sweeps expired rows on its background cycle (~60s). Collection
 size stays bounded.
 
-### Soft-delete tombstones (per-schema retention)
+### Soft-delete tombstones
+
+Opt in per-schema or globally:
 
 ```js
 module.exports = {
   path: 'contact',
-  retention: { tombstoneTtlDays: 30 },
+  softDelete: { retentionDays: 30 },   // per-schema
   fields: [/* ... */],
 };
 ```
 
-A daily sweep hard-deletes any row whose `deletedAt` is older than
-`tombstoneTtlDays`. The matching file blobs (for `type: 'File'`
-fields) are removed too. Useful for GDPR / right-to-be-forgotten
-windows.
+Or via env (applies to every schema that doesn't specify its
+own):
 
-Without `tombstoneTtlDays`, tombstoned rows live forever — the
-soft-delete is the retention.
+```bash
+SOFT_DELETE_RETENTION_DAYS=30
+```
 
-### Audit log retention
+A periodic sweep hard-deletes any row whose `deletedAt` is
+older than the configured retention. The matching file blobs
+(for `type: 'File'` fields) are removed too. Useful for GDPR /
+right-to-be-forgotten windows.
+
+Without `softDelete: { retentionDays }` (and no global env),
+tombstoned rows live forever — the soft-delete is the retention.
+
+### Audit log
+
+`audit_log` grows linearly with mutations and the framework
+**does not auto-purge it**. If your audit volume is high or your
+compliance window is bounded, prune the collection yourself on a
+cron:
 
 ```js
-module.exports = {
-  path: 'order',
-  audit: true,
-  retention: { auditTtlDays: 365 },
-  fields: [/* ... */],
-};
+// e.g. weekly: keep 1 year of audit rows
+db.audit_log.deleteMany({
+  createdAt: { $lt: new Date(Date.now() - 365 * 24 * 60 * 60 * 1000) },
+});
 ```
 
-A daily sweep hard-deletes audit rows for this schema older than
-`auditTtlDays`. Tune per schema based on the audit log's
-compliance vs. storage trade-off.
-
-The retention sweep itself writes one summary audit row per pass
-so you can verify it ran.
+Adding framework-side audit retention is a tracked enhancement;
+for now, manual pruning is the path.
 
 ### Webhook delivery rows
 
-`webhook_delivery` is auto-purged after `WEBHOOK_DELIVERY_TTL_DAYS`
-(default 30). No per-schema knob.
+Same posture as audit: `webhook_delivery` records every delivery
+attempt and the framework doesn't prune them. Manual cleanup on a
+cron is the current path.
 
 ## Before a destructive operation
 
@@ -108,7 +124,7 @@ so you can verify it ran.
 | Bulk delete via the admin SPA | Same. |
 | `db.collection.dropIndex` | Take a snapshot, then run the migration that re-creates whatever the framework needs. |
 | `npx davepi migrate down` | Snapshot first — `down` is best-effort, and some operations don't have a clean inverse. |
-| Tuning `retention.tombstoneTtlDays` shorter | Snapshot first. The next sweep will hard-delete rows that fell out of the new window. |
+| Tuning `softDelete.retentionDays` shorter | Snapshot first. The next sweep will hard-delete rows that fell out of the new window. |
 
 ## Recovery point + recovery time targets
 
@@ -132,8 +148,8 @@ The pages above walk through configuring each.
 
 ## See also
 
-- [Soft delete](/features/soft-delete/) — `tombstoneTtlDays`.
-- [Audit log](/features/audit/) — `auditTtlDays`.
+- [Soft delete](/features/soft-delete/) — `softDelete: { retentionDays }`.
+- [Audit log](/features/audit/) — manual pruning patterns.
 - [Webhooks](/features/webhooks/) — `webhook_delivery` rows.
-- [Migrations](/operations/migrations/) — the `_davepi_migrations` collection.
+- [Migrations](/operations/migrations/) — the `_migrations` collection.
 - [Deployment](/operations/deployment/) — each per-platform deploy guide links here.

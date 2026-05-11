@@ -87,18 +87,25 @@ their own TTL).
 ## Retention: auto-purge tombstones
 
 If you want soft-deleted rows to eventually go away — say, GDPR
-deletion windows — set `retention.tombstoneTtlDays`:
+deletion windows — opt in per-schema:
 
 ```js
 module.exports = {
   path: 'contact',
-  retention: { tombstoneTtlDays: 30 },
+  softDelete: { retentionDays: 30 },
   fields: [/* ... */],
 };
 ```
 
-A daily sweep hard-deletes any tombstoned row older than
-`tombstoneTtlDays`. See [Backup & retention](/operations/backup/).
+Or globally via env:
+
+```bash
+SOFT_DELETE_RETENTION_DAYS=30
+```
+
+A periodic sweep hard-deletes any tombstoned row older than the
+configured retention; matching file blobs are removed too. See
+[Backup & retention](/operations/backup/).
 
 ## Cross-tenant `delete` bypass
 
@@ -117,4 +124,4 @@ See [ACL](/features/acl/).
 
 - [Schema file shape](/reference/schema/#softdelete) — top-level syntax.
 - [Audit log](/features/audit/) — `delete` and `restore` actions.
-- [Backup & retention](/operations/backup/) — `tombstoneTtlDays`.
+- [Backup & retention](/operations/backup/) — `softDelete: { retentionDays }`.
