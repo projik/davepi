@@ -1,0 +1,81 @@
+name: Feature request
+description: A change to the framework that doesn't fit in the existing schema vocabulary or surfaces.
+title: "[feature] "
+labels: ["feature"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for proposing a feature. Before you spend time on
+        the form: the framework prefers to express new capabilities
+        through the schema vocabulary (schema-level options,
+        field-level flags) rather than ad-hoc routes. If you can
+        sketch the user-facing surface as a schema option, the
+        feature is much more likely to land — see existing examples
+        like `softDelete`, `audit`, `searchable`, `acl`, and the
+        `stateMachine` field config.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem does this solve?
+      description: One or two paragraphs on the use case. Concrete is better than abstract.
+      placeholder: e.g. "Users with the 'editor' role need to update other tenants' published articles. Today this means hand-writing a route after the schemas.forEach loop and re-implementing the ACL projection."
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed approach
+      description: |
+        Sketch the surface. Schema option? New field option? New CLI
+        command? A schema example is worth a thousand abstract
+        descriptions.
+      placeholder: |
+        Add an `acl.update: ['editor']` slot at the schema level that
+        works like `acl.list` / `acl.delete` but for partial updates.
+        Schema:
+        ```js
+        acl: { update: ['editor'] }
+        ```
+      render: markdown
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: |
+        What's the workaround today? Why isn't it good enough? A request
+        is much more compelling when you've already tried the existing
+        tools.
+
+  - type: dropdown
+    id: scope
+    attributes:
+      label: Surfaces affected
+      description: Where this would show up.
+      multiple: true
+      options:
+        - REST
+        - GraphQL
+        - MCP
+        - Swagger
+        - Admin SPA
+        - Typed client (gen-client)
+        - `_describe` manifest
+        - CLI (davepi migrate / mcp / gen-client)
+        - None — it's an internal helper
+    validations:
+      required: true
+
+  - type: textarea
+    id: stability
+    attributes:
+      label: Stability considerations
+      description: |
+        Is the new surface stable from day one (covered by semver) or
+        experimental? If it overlaps with an existing stable API, would
+        it deprecate something? See [Stability commitments](https://docs.davepi.dev/reference/stability/).
