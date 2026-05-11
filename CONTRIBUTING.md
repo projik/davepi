@@ -28,9 +28,17 @@ points. This file is for people changing dAvePi's own code.
 git clone https://github.com/projik/davepi.git
 cd davepi
 npm install
+cp .env.example .env        # MONGO_URI / TOKEN_KEY / API_PORT live here
+# Open .env and replace TOKEN_KEY with a real random string.
+# (One-liner: node -e "console.log(require('crypto').randomBytes(48).toString('hex'))")
 docker compose up -d        # local Mongo on :27017
 npm start                   # dev server with nodemon
 ```
+
+`index.js` reads the `.env` via dotenv before connecting to Mongo;
+without a `.env`, startup fails at the DB connect step. The
+`MONGO_URI` in `.env.example` matches the Docker Compose Mongo
+above, so the only mandatory edit is `TOKEN_KEY`.
 
 Tests use `mongodb-memory-server`, so they don't need the Docker
 Mongo — but if you want to point a manual `curl` at a real

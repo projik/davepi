@@ -58,9 +58,13 @@ body:
     attributes:
       label: Server logs
       description: |
-        The Pino JSON line(s) around the failure, if any. Redact tokens
-        and emails — the logger is configured to redact these already,
-        but check before pasting.
+        The Pino JSON line(s) around the failure, if any.
+
+        **Manually redact before pasting.** The framework's logger
+        redacts `authorization`, `cookie`, `set-cookie`, `*.password`,
+        `*.token`, and `*.encryptedPassword` — but emails, user IDs,
+        and other PII are NOT redacted. Strip them yourself before
+        posting to a public issue.
       render: text
 
   - type: input
