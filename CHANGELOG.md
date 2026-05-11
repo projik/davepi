@@ -8,6 +8,12 @@ from v1.0.0 onward (see [Stability commitments](https://docs.davepi.dev/referenc
 
 ## [Unreleased]
 
+## [1.0.2] - 2026-05-11
+
+### Fixed
+
+- **Scaffolded apps crashed on `npm start` with `Cannot find module './schema/versions/v1/<name>.js'`.** `app.js:140` discovered schema files via `dirTree` (which walks paths relative to `process.cwd()` — the consumer's project root, correct), then called `require("./" + file.path)` to load them. Node resolves `"./..."` requires relative to the **calling file**, which when installed as a dep is `node_modules/davepi/app.js`. So the require looked for `node_modules/davepi/schema/versions/v1/account.js` and crashed. Hidden during framework dev because `process.cwd()` and the framework's own directory are the same. Fix: resolve the schema file path to an absolute path via `path.resolve(file.path)` before `require`-ing — same pattern the next line already used for `__sourceFile` metadata. Hot-reload path was unaffected: `chokidar` emits absolute paths, so `schemaWatcher.requireFresh` was already correct. (#95)
+
 ## [1.0.1] - 2026-05-11
 
 ### Fixed

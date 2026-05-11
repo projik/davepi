@@ -133,13 +133,20 @@ const schemaLoader = createSchemaLoader({
 // call is awaited later via the rebuildGraphQL Promise; tests and prod
 // callers wait on the exported `app.locals.ready` Promise before issuing
 // requests against /graphql/.
+//
+// `dirTree` walks "./schema/versions" relative to process.cwd() — i.e.
+// the consumer's project root. The `require` call below MUST resolve
+// the schema file against the same root, otherwise Node looks for it
+// next to app.js (inside node_modules/davepi/ when installed as a dep)
+// and crashes with MODULE_NOT_FOUND.
 const filteredTree = dirTree("./schema/versions", { extensions: /\.js/ });
 const initialSchemas = [];
 filteredTree.children.forEach((versionDir) => {
   versionDir.children.forEach((file) => {
-    const schemaModule = require("./" + file.path);
+    const absPath = path.resolve(file.path);
+    const schemaModule = require(absPath);
     schemaModule.version = versionDir.name;
-    schemaModule.__sourceFile = path.resolve(file.path);
+    schemaModule.__sourceFile = absPath;
     initialSchemas.push(schemaModule);
   });
 });
