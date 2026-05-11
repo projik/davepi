@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
   "label": "agent eval",
-  "message": "pending",
-  "color": "lightgrey"
+  "message": "0/10",
+  "color": "red"
 }

@@ -1,0 +1,69 @@
+{
+  "runAt": "2026-05-11T07:04:54.465Z",
+  "agentMode": "real",
+  "model": "claude-sonnet-4-6",
+  "total": 10,
+  "passed": 0,
+  "results": [
+    {
+      "name": "01-task-fields",
+      "passed": false,
+      "message": "ANTHROPIC_API_KEY is required for real-agent mode (set EVAL_AGENT=stub to skip).",
+      "durationMs": 3
+    },
+    {
+      "name": "02-status-state-machine",
+      "passed": false,
+      "message": "ANTHROPIC_API_KEY is required for real-agent mode (set EVAL_AGENT=stub to skip).",
+      "durationMs": 1
+    },
+    {
+      "name": "03-parent-relation",
+      "passed": false,
+      "message": "ANTHROPIC_API_KEY is required for real-agent mode (set EVAL_AGENT=stub to skip).",
+      "durationMs": 2
+    },
+    {
+      "name": "04-computed-displayLabel",
+      "passed": false,
+      "message": "ANTHROPIC_API_KEY is required for real-agent mode (set EVAL_AGENT=stub to skip).",
+      "durationMs": 2
+    },
+    {
+      "name": "05-aggregation-countByStatus",
+      "passed": false,
+      "message": "ANTHROPIC_API_KEY is required for real-agent mode (set EVAL_AGENT=stub to skip).",
+      "durationMs": 2
+    },
+    {
+      "name": "06-acl-admin-delete",
+      "passed": false,
+      "message": "ANTHROPIC_API_KEY is required for real-agent mode (set EVAL_AGENT=stub to skip).",
+      "durationMs": 9
+    },
+    {
+      "name": "07-file-attachment",
+      "passed": false,
+      "message": "ANTHROPIC_API_KEY is required for real-agent mode (set EVAL_AGENT=stub to skip).",
+      "durationMs": 3
+    },
+    {
+      "name": "08-searchable-fields",
+      "passed": false,
+      "message": "ANTHROPIC_API_KEY is required for real-agent mode (set EVAL_AGENT=stub to skip).",
+      "durationMs": 4
+    },
+    {
+      "name": "09-field-level-acl",
+      "passed": false,
+      "message": "ANTHROPIC_API_KEY is required for real-agent mode (set EVAL_AGENT=stub to skip).",
+      "durationMs": 5
+    },
+    {
+      "name": "10-aggregation-tasks-per-project",
+      "passed": false,
+      "message": "ANTHROPIC_API_KEY is required for real-agent mode (set EVAL_AGENT=stub to skip).",
+      "durationMs": 4
+    }
+  ]
+}
