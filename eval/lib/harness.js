@@ -61,13 +61,24 @@ async function runPrompt(name, { agentMode = process.env.EVAL_AGENT || 'real', m
 
     agentResponse = await runAgent({ agentMode, projectRoot: scratch, prompt: promptText, model });
 
-    const verdict = await check(scratch);
-    if (verdict && verdict.ok === false) {
-      passed = false;
-      message = verdict.message || 'check returned ok: false';
-    } else {
-      passed = true;
-      message = (verdict && verdict.message) || 'all assertions passed';
+    // Defense in depth: even though check.js loads agent-written
+    // schemas through a vm sandbox (lib/load-schema.js, no `require`
+    // or `process` in scope), null out sensitive env vars before
+    // invoking the check. If the sandbox is ever bypassed via a
+    // future Node bug, the API key still isn't reachable.
+    const savedApiKey = process.env.ANTHROPIC_API_KEY;
+    delete process.env.ANTHROPIC_API_KEY;
+    try {
+      const verdict = await check(scratch);
+      if (verdict && verdict.ok === false) {
+        passed = false;
+        message = verdict.message || 'check returned ok: false';
+      } else {
+        passed = true;
+        message = (verdict && verdict.message) || 'all assertions passed';
+      }
+    } finally {
+      if (savedApiKey) process.env.ANTHROPIC_API_KEY = savedApiKey;
     }
   } catch (err) {
     passed = false;

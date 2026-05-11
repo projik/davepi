@@ -1,10 +1,10 @@
 'use strict';
 
 const path = require('node:path');
+const { loadSchemaSandboxed } = require('../../lib/load-schema');
 
 module.exports = function checkStatusStateMachine(projectRoot) {
-  delete require.cache[require.resolve(path.join(projectRoot, 'schema/versions/v1/task.js'))];
-  const schema = require(path.join(projectRoot, 'schema/versions/v1/task.js'));
+  const schema = loadSchemaSandboxed(path.join(projectRoot, 'schema/versions/v1/task.js'));
 
   const status = schema.fields.find((f) => f && f.name === 'status');
   if (!status) return { ok: false, message: 'task.status field is missing' };

@@ -10,6 +10,18 @@ each with a programmatic check. The pass-rate runs nightly, gets
 committed back to `main`, and feeds both the README badge and this
 page.
 
+## Latest pass-rate
+
+![Agent eval pass rate](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fprojik%2Fdavepi%2Fmain%2Feval%2Fresults%2Fbadge.json)
+
+The badge above is rendered from
+[`eval/results/badge.json`](https://github.com/projik/davepi/blob/main/eval/results/badge.json)
+on `main`. The nightly workflow commits that file (plus the
+per-prompt breakdown in
+[`eval/results/latest.json`](https://github.com/projik/davepi/blob/main/eval/results/latest.json))
+after every run, so this number is at most ~24 hours behind the
+latest commit.
+
 ## What the prompts cover
 
 Each is a single, concrete change against a tiny task-tracker

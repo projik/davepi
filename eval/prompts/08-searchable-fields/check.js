@@ -1,10 +1,10 @@
 'use strict';
 
 const path = require('node:path');
+const { loadSchemaSandboxed } = require('../../lib/load-schema');
 
 module.exports = function checkSearchable(projectRoot) {
-  delete require.cache[require.resolve(path.join(projectRoot, 'schema/versions/v1/task.js'))];
-  const schema = require(path.join(projectRoot, 'schema/versions/v1/task.js'));
+  const schema = loadSchemaSandboxed(path.join(projectRoot, 'schema/versions/v1/task.js'));
 
   const description = schema.fields.find((f) => f && f.name === 'description');
   if (!description) return { ok: false, message: 'description field is missing' };

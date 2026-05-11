@@ -1,13 +1,15 @@
 'use strict';
 
 const path = require('node:path');
+const { loadSchemaSandboxed } = require('../../lib/load-schema');
 
 module.exports = function checkTaskFields(projectRoot) {
-  // require() the schema file — proves it parses and is a valid
-  // CommonJS module. A typo or stray markdown fence in the file
-  // would throw here, which the harness reports as failure.
-  delete require.cache[require.resolve(path.join(projectRoot, 'schema/versions/v1/task.js'))];
-  const schema = require(path.join(projectRoot, 'schema/versions/v1/task.js'));
+  // Load through the sandboxed loader so the agent's output can't
+  // exfiltrate secrets via top-level side effects (no `require`,
+  // `process`, or other Node globals inside the schema's scope).
+  // Parse errors and missing exports surface as thrown errors, which
+  // the harness reports as failure.
+  const schema = loadSchemaSandboxed(path.join(projectRoot, 'schema/versions/v1/task.js'));
 
   const title = schema.fields.find((f) => f && f.name === 'title');
   if (!title) return { ok: false, message: 'task.title field is missing' };
