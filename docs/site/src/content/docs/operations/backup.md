@@ -1,64 +1,63 @@
 ---
 title: Backup & retention
-description: How to back up dAvePi data, what the framework purges automatically, and what you should snapshot before destructive operations.
+description: How to back up dAvePi data, what the framework purges automatically, and how to test the restore path. Per-platform deep dives for self-host, Atlas, DocumentDB, and Cosmos.
 ---
 
 dAvePi stores everything it cares about in two places:
 
-1. **MongoDB** — every record, every audit row, every idempotency token, every webhook delivery row, every migration record.
-2. **File storage** — blobs for `type: 'File'` fields. Local disk, S3, or GCS depending on your config.
+1. **MongoDB** — every record, every audit row, every idempotency
+   token, every webhook delivery row, every migration record.
+2. **File storage** — blobs for `type: 'File'` fields. Local
+   disk, S3, or GCS depending on your config.
 
 Backups need to cover both. Restores need to put both back in
-sync.
+sync. This page covers the framework-level invariants (what to
+back up, what the framework already purges, retention
+configuration); per-platform deep dives live one click deeper.
 
-## Database backup
+## Per-platform guides
 
-Use whatever tool fits your Mongo deployment:
+| Where Mongo lives | Guide |
+|-------------------|-------|
+| Self-hosted Mongo on a VM (e.g. the Docker Compose stack) | [Self-host backup](/operations/backup/self-host/) |
+| MongoDB Atlas | [Atlas backup](/operations/backup/atlas/) |
+| AWS DocumentDB | [DocumentDB backup](/operations/backup/documentdb/) |
+| Azure Cosmos DB (Mongo API) | [Cosmos backup](/operations/backup/cosmos/) |
 
-| Setup | Tool |
-|-------|------|
-| MongoDB Atlas | Atlas Cloud Backups (continuous, point-in-time-restore). |
-| Self-hosted replica set | `mongodump` (logical) or filesystem snapshots of the data volume (physical, faster, requires fsync-locking). |
-| Single-node Mongo (dev / small prod) | `mongodump` on a cron, or volume snapshots of the host. |
+For uploaded blobs:
 
-The framework doesn't ship its own backup tool — the standard
-ecosystem options are well-tested and your platform may already
-have a managed solution.
+- [File-storage backup](/operations/backup/file-storage/) — strategies for `local`, `s3`, and `gcs` storage drivers.
 
-### What to back up
+And the most important page nobody reads until 3am:
 
-The whole database. The framework writes to many collections and
-doesn't separate "data" from "audit" — restoring a partial backup
-risks orphan audit rows that reference missing documents.
+- [Restore drill](/operations/backup/restore-drill/) — a documented rehearsal procedure. Untested backups aren't backups.
+
+## What to back up (and what not to)
+
+The whole database, with a couple of exceptions:
+
+| Collection | Back up? | Why |
+|------------|----------|-----|
+| Every schema-driven collection | **Yes** | This is your data. |
+| `audit_log` | **Yes** | Compliance + post-incident forensics. Subject to `retention.auditTtlDays` per-schema (see below). |
+| `_davepi_migrations` | **Yes** | Losing this means the migration runner thinks it needs to re-run everything. Catastrophic if migrations aren't idempotent. |
+| `idempotency_key` | No (optional) | Auto-purged after `IDEMPOTENCY_TTL_SECONDS` (default 24h). It's a retry-correctness mechanism, not history. |
+| `webhook_delivery` | No (optional) | Auto-purged after `WEBHOOK_DELIVERY_TTL_DAYS` (default 30). Operational telemetry, not data. |
 
 If you really need a partial restore, grab the full dump and
 filter on restore.
 
-## File storage backup
-
-| Backend | Backup approach |
-|---------|----------------|
-| `s3` | S3 versioning + lifecycle rules to a glacier-tier bucket. Cross-region replication for DR. |
-| `gcs` | Object versioning + lifecycle to coldline. Cross-region replication. |
-| `local` | Filesystem snapshots of the storage volume. |
-
-Files and DB are written separately — back them up with the same
-cadence so restores don't see "metadata in Mongo, blob missing in
-S3" or vice versa.
-
 ## Framework-managed retention
 
-Three things the framework purges automatically:
+Three things the framework purges automatically. Configuration
+lives on the schema or in env vars.
 
 ### Idempotency tokens
 
 `idempotency_key` rows have an `expiresAt` TTL — defaults to 24h,
 override with `IDEMPOTENCY_TTL_SECONDS`. Mongo's TTL monitor
-sweeps expired rows on its background cycle (~60s). The collection
-size bounded.
-
-You don't need to back this collection up — it's purely a
-correctness mechanism for in-flight retries, not history.
+sweeps expired rows on its background cycle (~60s). Collection
+size stays bounded.
 
 ### Soft-delete tombstones (per-schema retention)
 
@@ -96,22 +95,10 @@ compliance vs. storage trade-off.
 The retention sweep itself writes one summary audit row per pass
 so you can verify it ran.
 
-## Webhook delivery rows
+### Webhook delivery rows
 
-`webhook_delivery` grows linearly with mutations — every event,
-every endpoint, every retry attempt is a row. Default retention is
-30 days; override with `WEBHOOK_DELIVERY_TTL_DAYS`.
-
-Like idempotency tokens, you don't typically need to back these up
-— they're operational telemetry, not history.
-
-## Migration records
-
-`_davepi_migrations` tracks which migrations have run. **Always
-back this up** — restoring a database snapshot but losing the
-migration record means the migration runner thinks it needs to
-re-run everything, which is fine if your migrations are
-idempotent and a disaster if they aren't.
+`webhook_delivery` is auto-purged after `WEBHOOK_DELIVERY_TTL_DAYS`
+(default 30). No per-schema knob.
 
 ## Before a destructive operation
 
@@ -121,21 +108,27 @@ idempotent and a disaster if they aren't.
 | Bulk delete via the admin SPA | Same. |
 | `db.collection.dropIndex` | Take a snapshot, then run the migration that re-creates whatever the framework needs. |
 | `npx davepi migrate down` | Snapshot first — `down` is best-effort, and some operations don't have a clean inverse. |
+| Tuning `retention.tombstoneTtlDays` shorter | Snapshot first. The next sweep will hard-delete rows that fell out of the new window. |
 
-## Restore drill
+## Recovery point + recovery time targets
 
-A backup you've never restored is a backup you don't have. At
-least once a quarter:
+A useful mental model when picking a platform-specific backup
+strategy:
 
-1. Grab the latest production backup.
-2. Restore it into a staging environment.
-3. Boot dAvePi against the staging Mongo.
-4. Hit `GET /_describe` — confirms schemas load.
-5. Hit `GET /api/v1/<resource>` — confirms a known sample query works.
-6. Check the migration table — `npx davepi migrate status` should show all entries `succeeded`.
+| Target | What it means |
+|--------|---------------|
+| **RPO** (recovery point objective) | How much data you can afford to lose. If your last good backup is 24h ago, your RPO is 24h. |
+| **RTO** (recovery time objective) | How long it takes to bring the system back. A `mongorestore` from S3 of a 500GB database isn't a 10-minute operation. |
 
-If any of those fail, the backup didn't capture what it needed to.
-Better to find out now than at 3am.
+| Platform | Typical RPO | Typical RTO (small DB) | Cost shape |
+|----------|------------|------------------------|------------|
+| Self-host with daily `mongodump` cron | 24h | 30-60 min | Storage of dumps + your time |
+| Self-host with hourly `mongodump` cron | 1h | 30-60 min | Same |
+| Atlas continuous backup | <1 min (oplog) | 5-20 min | Included in M10+ tiers |
+| DocumentDB automated snapshots | 5 min (oplog) | 10-30 min | Included; longer retention costs extra |
+| Cosmos continuous backup | <1 min | 5-30 min | Built-in once enabled |
+
+The pages above walk through configuring each.
 
 ## See also
 
@@ -143,3 +136,4 @@ Better to find out now than at 3am.
 - [Audit log](/features/audit/) — `auditTtlDays`.
 - [Webhooks](/features/webhooks/) — `webhook_delivery` rows.
 - [Migrations](/operations/migrations/) — the `_davepi_migrations` collection.
+- [Deployment](/operations/deployment/) — each per-platform deploy guide links here.
