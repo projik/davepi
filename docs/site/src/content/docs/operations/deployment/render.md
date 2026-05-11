@@ -58,31 +58,15 @@ practical floor.
 
 ### One-click blueprint
 
-Drop a `render.yaml` at the repo root:
-
-```yaml
-services:
-  - type: web
-    name: davepi
-    runtime: node
-    plan: starter
-    buildCommand: npm install
-    startCommand: npm start
-    healthCheckPath: /healthz
-    envVars:
-      - key: NODE_ENV
-        value: production
-      - key: MONGO_URI
-        sync: false        # set manually in dashboard
-      - key: TOKEN_KEY
-        generateValue: true
-      - key: CORS_ORIGINS
-        sync: false
-```
-
-Then "Deploy to Render" from the GitHub UI uses the blueprint to
-provision the service in one click. `sync: false` keeps the
-secret values out of the repo.
+The repo ships a
+[`render.yaml`](https://github.com/projik/davepi/blob/main/render.yaml)
+blueprint at the root. Render's "Deploy to Render" flow (from a
+fork of the repo, or via the Blueprints section of the
+dashboard) uses it to provision the service in one click —
+auto-generating `TOKEN_KEY`, prompting for `MONGO_URI` +
+`CORS_ORIGINS` (marked `sync: false` so the secret values stay
+out of the repo), and setting `TRUST_PROXY=true` so the rate
+limiter keys on real client IPs behind Render's edge proxy.
 
 ## Custom domain + TLS
 

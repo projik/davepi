@@ -53,6 +53,11 @@ services:
       APP_NAME: ${APP_NAME:-dAvePi}
       LOG_LEVEL: ${LOG_LEVEL:-info}
       CORS_ORIGINS: ${CORS_ORIGINS}
+      # Caddy terminates TLS in front of the app and adds
+      # X-Forwarded-For. TRUST_PROXY=true tells Express + the
+      # rate limiters to honour that header so per-client IP
+      # accounting works correctly through the proxy.
+      TRUST_PROXY: "true"
       # Toggle observability bits per-deployment.
       METRICS_ENABLED: ${METRICS_ENABLED:-false}
       METRICS_TOKEN: ${METRICS_TOKEN:-}

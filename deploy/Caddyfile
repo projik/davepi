@@ -8,13 +8,12 @@
 	# Let's Encrypt email — sourced from the ACME_EMAIL env var.
 	tls {$ACME_EMAIL}
 
-	# Proxy everything to the dAvePi container.
-	reverse_proxy api:4001 {
-		# Forward real client IP so dAvePi's rate limiter
-		# accounts per-IP instead of per-Caddy-container.
-		header_up X-Forwarded-For {remote_host}
-		header_up X-Real-IP {remote_host}
-	}
+	# Proxy everything to the dAvePi container. Caddy sets the
+	# X-Forwarded-* headers itself; the app trusts them only
+	# when TRUST_PROXY=true (set in docker-compose.prod.yml) so
+	# the rate limiter accounts per real client IP instead of
+	# per Caddy-container.
+	reverse_proxy api:4001
 
 	# Strict transport security — opt-in once you're confident
 	# the cert provisioned cleanly. Uncomment after the first
