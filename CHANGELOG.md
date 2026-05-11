@@ -8,6 +8,12 @@ from v1.0.0 onward (see [Stability commitments](https://docs.davepi.dev/referenc
 
 ## [Unreleased]
 
+## [1.0.3] - 2026-05-11
+
+### Fixed
+
+- **Admin SPA `/admin/*` returned a "SPA not built" 404 even though the bundle was in the published package.** Same class of bug as 1.0.2's schema-require fix: `app.js` resolved `path.resolve('./admin/dist')` against `process.cwd()` (the consumer's project root) instead of `__dirname` (the framework's location inside `node_modules/davepi/`). The pre-built SPA ships **inside** the package at `node_modules/davepi/admin/dist/`, so the existsSync check was looking in the wrong place and `hasAdminBuild` was always false in a consumer install. Fix: `path.resolve(__dirname, 'admin/dist')`. The schema-loading path (`dirTree("./schema/versions")`) and the watcher's `schemasDir` correctly stay cwd-relative — those target the consumer's schemas. (#96)
+
 ## [1.0.2] - 2026-05-11
 
 ### Fixed
