@@ -47,6 +47,7 @@ export default defineConfig({
             { label: 'Tenant isolation', link: '/concepts/tenancy/' },
             { label: 'Hot reload', link: '/concepts/hot-reload/' },
             { label: 'Why agents come first', link: '/concepts/agent-first/' },
+            { label: 'Agent eval suite', link: '/concepts/agent-eval/' },
           ],
         },
         {

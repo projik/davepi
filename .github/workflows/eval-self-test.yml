@@ -1,0 +1,38 @@
+name: Eval self-tests
+
+# Validates the eval harness itself on every PR that touches it.
+# These tests don't call the Anthropic API — they exercise the
+# harness's apply-fixture / check-consistency invariants and the
+# stub agent path. The nightly eval.yml workflow is the one that
+# burns API credits; this one keeps the harness honest in PRs.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'eval/**'
+      - '.github/workflows/eval-self-test.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'eval/**'
+      - '.github/workflows/eval-self-test.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  self-test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: eval
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20.x
+      # No `npm install` needed — the self-tests don't touch the
+      # Anthropic SDK; they use node:test (built-in) and exercise
+      # the lib/ + prompts/ directly.
+      - run: node --test test/*.test.js
