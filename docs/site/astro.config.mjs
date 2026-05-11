@@ -118,6 +118,17 @@ export default defineConfig({
             { label: 'Refine', link: '/compared-to/refine/' },
           ],
         },
+        {
+          label: 'Migrate from',
+          items: [
+            { label: 'Overview', link: '/migrate-from/' },
+            { label: 'Supabase', link: '/migrate-from/supabase/' },
+            { label: 'Hasura', link: '/migrate-from/hasura/' },
+            { label: 'PocketBase', link: '/migrate-from/pocketbase/' },
+            { label: 'Strapi', link: '/migrate-from/strapi/' },
+            { label: 'Directus', link: '/migrate-from/directus/' },
+          ],
+        },
       ],
       // Pagefind is bundled by default — no extra config needed for
       // search.

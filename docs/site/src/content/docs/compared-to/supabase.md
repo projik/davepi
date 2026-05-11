@@ -144,11 +144,14 @@ Supabase → dAvePi:
    to outbound webhooks (dAvePi's `schema.webhooks` block) or
    poll the relevant aggregation endpoints.
 
-Per-platform [migration guides](/operations/migrations/) cover
-the ETL details once those land.
+The full end-to-end walkthrough — including the ETL script
+template, FK-rewrite pass, file-storage move, and cutover
+checklist — is at [Migrate from Supabase](/migrate-from/supabase/).
 
 ## See also
 
+- [Migrate from Supabase](/migrate-from/supabase/) — the
+  full end-to-end migration guide.
 - [Schema-driven generation](/concepts/schema-driven/) — the
   framework's central idea.
 - [Why agents come first](/concepts/agent-first/) — the design
