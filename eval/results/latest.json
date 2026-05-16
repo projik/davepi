@@ -1,5 +1,5 @@
 {
-  "runAt": "2026-05-15T07:01:44.697Z",
+  "runAt": "2026-05-16T06:43:21.715Z",
   "agentMode": "real",
   "model": "claude-sonnet-4-6",
   "total": 10,
@@ -21,13 +21,13 @@
       "name": "03-parent-relation",
       "passed": false,
       "message": "ANTHROPIC_API_KEY is required for real-agent mode (set EVAL_AGENT=stub to skip).",
-      "durationMs": 1
+      "durationMs": 2
     },
     {
       "name": "04-computed-displayLabel",
       "passed": false,
       "message": "ANTHROPIC_API_KEY is required for real-agent mode (set EVAL_AGENT=stub to skip).",
-      "durationMs": 2
+      "durationMs": 3
     },
     {
       "name": "05-aggregation-countByStatus",
@@ -51,19 +51,19 @@
       "name": "08-searchable-fields",
       "passed": false,
       "message": "ANTHROPIC_API_KEY is required for real-agent mode (set EVAL_AGENT=stub to skip).",
-      "durationMs": 2
+      "durationMs": 3
     },
     {
       "name": "09-field-level-acl",
       "passed": false,
       "message": "ANTHROPIC_API_KEY is required for real-agent mode (set EVAL_AGENT=stub to skip).",
-      "durationMs": 2
+      "durationMs": 3
     },
     {
       "name": "10-aggregation-tasks-per-project",
       "passed": false,
       "message": "ANTHROPIC_API_KEY is required for real-agent mode (set EVAL_AGENT=stub to skip).",
-      "durationMs": 3
+      "durationMs": 2
     }
   ]
 }
