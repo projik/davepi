@@ -59,11 +59,6 @@
         ],
         // comparison: '$and'
       }
-    },
-    hooks: {
-      before: (req) => {
-        return;
-      }
     }
   };
 

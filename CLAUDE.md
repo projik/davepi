@@ -36,11 +36,56 @@ There is no lint/typecheck step; CommonJS, no TypeScript. Don't add one without 
 
 ## Where to put new code
 
-- New REST handlers for an existing resource → custom routes after the `schemas.forEach` loop in `app.js`. Use `auth(true)` and `asyncHandler`.
+- New REST handlers for an existing resource → custom routes after the `schemas.forEach` loop in `app.js`. Use `auth(true)` and `asyncHandler`. Prefer a **plugin** (see below) if the code shouldn't live in framework source — e.g. anything in a consumer project that installed davepi as a dep.
 - New cross-cutting middleware → `middleware/`.
 - New shared helpers / error classes → `utils/`.
 - New manually-defined Mongoose models (User-style, not schema-driven) → `model/`.
 - New auto-generated resource → a single `schema/versions/v1/{name}.js` file. See `AGENTS.md` for the schema field reference.
+- **Per-resource invariants / side effects** (validate before save, send a welcome email after create, refuse delete if dependents exist) → schema-level lifecycle hooks. See "Extensibility" below.
+- **Cross-cutting extensions** (audit exports, third-party integrations, scheduled jobs, ad-hoc routes that span resources) → plugins. See "Extensibility" below.
+
+## Extensibility
+
+The framework has two extension points; pick the one that matches the scope of the work.
+
+**1. Schema lifecycle hooks** (per resource). Add a `hooks` block to any schema file:
+
+```js
+module.exports = {
+  path: 'order',
+  collection: 'order',
+  fields: [...],
+  hooks: {
+    beforeCreate: async ({ input, user, req, schema }) => ({ ...input, code: genCode() }),
+    afterCreate:  async ({ record, user, req, schema }) => sendWelcome(record),
+    beforeUpdate: async ({ input, current, user, req, schema }) => input,
+    afterUpdate:  async ({ record, previous, user, req, schema }) => {},
+    beforeDelete: async ({ current, user, req, schema }) => { if (current.locked) throw new ForbiddenError('locked'); },
+    afterDelete:  async ({ record, user, req, schema }) => {},
+  },
+};
+```
+
+- `before*` hooks run synchronously to the request. Returning a value from `beforeCreate` / `beforeUpdate` **replaces** the input that gets persisted; returning `undefined` keeps it. Throw a typed error from `utils/errors.js` to reject the operation — it flows through `errorHandler` like any other thrown error.
+- `after*` hooks run after persistence and are **best-effort**: a thrown error is logged but does not fail the response (same posture as audit and state-machine `onEnter`).
+- Coverage: REST `POST` / `PUT /:id` / `DELETE /:id` and GraphQL `{path}CreateOne` / `{path}UpdateById` / `{path}RemoveById`. **Bulk paths intentionally do NOT invoke hooks** — use a plugin subscribing to the event bus for bulk reactions.
+
+**2. Plugins** (cross-cutting). Plugin module specifiers are listed under `davepi.plugins` in the consumer project's `package.json`:
+
+```json
+{
+  "davepi": {
+    "plugins": [
+      "./plugins/audit-export.js",
+      "davepi-plugin-slack"
+    ]
+  }
+}
+```
+
+Each plugin module exports `{ name, async setup({ app, schemaLoader, bus, log, appName }) }`. Plugins load in declaration order, after every schema is registered, so a plugin can introspect `schemaLoader.listSchemas()` and wire a route per resource. The `bus` is the same `EventEmitter` from `utils/events.js` that fires `record` events for every CRUD mutation — the webhook dispatcher uses the same bus, so plugin event subscribers compose with webhooks. After plugins finish loading, the loader re-asserts `errorHandler` at the tail of the middleware stack via `schemaLoader.moveErrorHandlerToEnd()`.
+
+A plugin that throws during `setup` will fail boot. This is deliberate — silently dropping a plugin would hide misconfiguration from operators.
 
 ## Conventions worth knowing
 
@@ -49,6 +94,7 @@ There is no lint/typecheck step; CommonJS, no TypeScript. Don't add one without 
 - The seed schemas declare `userId` (and sometimes `accountId`) as required fields. The REST POST handler stamps both from `req.user.user_id`; GraphQL wrappers do the same. If you add a new schema and it needs ownership scoping, follow that pattern — don't invent a different field name.
 - Apollo Server v3, not v4. `playground` and `introspection` are gated on `NODE_ENV !== 'production'`.
 - Tests connect Mongo via `mongodb-memory-server` and `await` the connection event before issuing requests; copy the boilerplate from any of the existing `test/*.test.js` files.
+- **Local requires use `#` subpath imports, not `../` ladders.** Every dAvePi project (including the scaffolded ones) ships with `imports` in `package.json` mapping `#plugins/*` → `./plugins/*.js`, `#lib/*` → `./lib/*.js`, `#schema/*` → `./schema/*.js`. Inside a schema file or a plugin, prefer `require('#plugins/postmark')` and `require('#lib/codes')` over `require('../../../plugins/postmark')`. This is [Node's built-in subpath imports](https://nodejs.org/api/packages.html#subpath-imports) — no extra dependency, works in `require`, `import`, and Jest. The trailing `.js` on the mapping target is required: Node's subpath-import resolver does NOT fall back to `.js`/`/index.js` for bare-glob targets, so `"./plugins/*"` would crash MODULE_NOT_FOUND. `#` is the right prefix; `@` is reserved for npm-scoped packages and will not resolve. The framework's own `utils/` is still loaded via the `davepi` package (e.g. `require('davepi/utils/errors')` from a consumer project) — `#` aliases are for the consumer's own files.
 
 ## See also
 

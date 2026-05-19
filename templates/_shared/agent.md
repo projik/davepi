@@ -206,6 +206,32 @@ module.exports = {
 - **State machines need `initial`.** Without it, the framework can't pick
   a default starting state on POST and creates fail with a validation
   error.
+- **Use `#` subpath imports for local requires — never `../` ladders.**
+  Every scaffolded project ships with this in `package.json`:
+
+  ```json
+  "imports": {
+    "#plugins/*": "./plugins/*.js",
+    "#lib/*":     "./lib/*.js",
+    "#schema/*":  "./schema/*.js"
+  }
+  ```
+
+  So from a schema file or plugin, write:
+
+  ```js
+  const postmark = require('#plugins/postmark');   // ✅ → ./plugins/postmark.js
+  const { genCode } = require('#lib/codes');       // ✅ → ./lib/codes.js
+  const postmark = require('../../../plugins/postmark');  // ❌ fragile
+  ```
+
+  This is [Node's built-in subpath imports](https://nodejs.org/api/packages.html#subpath-imports) —
+  no bundler, no extra dep, no `@` prefix (Node reserves `@` for npm-scoped
+  packages like `@scope/pkg`; `#` is the standard for local aliases). The
+  trailing `.js` on the mapping target is required — Node's resolver does
+  not fall back to `.js`/`/index.js` for bare-glob subpath targets. Add
+  more entries to `imports` as you grow the project. Framework code from
+  the `davepi` package itself stays as `require('davepi/utils/...')`.
 
 ## The MCP tool surface
 

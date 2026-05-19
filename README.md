@@ -522,6 +522,52 @@ app.get('/api/v1/custom-endpoint', auth(true), async (req, res) => {
 });
 ```
 
+### Extending dAvePi
+
+Beyond CRUD ("DAVE"), there are two officially supported extension points:
+
+**1. Per-resource lifecycle hooks** — declare on the schema file:
+
+```js
+module.exports = {
+  path: 'order',
+  collection: 'order',
+  fields: [...],
+  hooks: {
+    beforeCreate: async ({ input, user }) => ({ ...input, code: generateCode() }),
+    afterCreate:  async ({ record }) => sendConfirmationEmail(record),
+    beforeDelete: async ({ current }) => {
+      if (current.locked) throw new ForbiddenError('record is locked');
+    },
+  },
+};
+```
+
+`before*` hooks can mutate the input and reject via throw; `after*` hooks are best-effort. Coverage: REST single-record `POST` / `PUT /:id` / `DELETE /:id` and the matching GraphQL `*One` / `*ById` mutations. See `AGENTS.md` for the full signature reference.
+
+**2. Plugins** — global extensions registered in your `package.json`:
+
+```json
+{
+  "davepi": {
+    "plugins": ["./plugins/my-plugin.js"]
+  }
+}
+```
+
+```js
+// ./plugins/my-plugin.js
+module.exports = {
+  name: 'my-plugin',
+  async setup({ app, schemaLoader, bus, log }) {
+    app.get('/api/v1/_status', (req, res) => res.json({ schemas: schemaLoader.listSchemas() }));
+    bus.on('record', (e) => log.info({ event: e.type, id: e.recordId }, 'observed'));
+  },
+};
+```
+
+Plugins are loaded after every initial schema is registered, so a plugin can introspect the registry and wire a route per resource.
+
 ### Debugging
 
 The application includes extensive console logging. Check the terminal output for:
