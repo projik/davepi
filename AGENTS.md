@@ -228,10 +228,71 @@ The system uses `graphql-compose` and `graphql-compose-mongoose` to:
 ### When Adding Features
 
 1. **New Schema Fields**: Add to schema file, restart server
-2. **Custom Endpoints**: Add after auto-generated routes in `app.js`
+2. **Custom Endpoints**: Add after auto-generated routes in `app.js`, OR register a plugin (see "Extensibility" below) if davepi is installed as a dep
 3. **Middleware**: Place in `./middleware/` directory
 4. **Models**: Manual models go in `./model/` (like `user.js`)
 5. **Utilities**: Add to `./utils/` directory
+6. **Per-resource side effects** (validate before persist, fire a notification on create, refuse delete if a dependent exists): declare a `hooks` block on the schema — see "Extensibility" below
+7. **Cross-cutting extensions** (integrations, scheduled jobs, audit exports): register a plugin — see "Extensibility" below
+
+## Extensibility
+
+dAvePi exposes two extension points beyond the auto-generated CRUD surface. Pick the one that matches the scope of the work.
+
+### Schema lifecycle hooks (per resource)
+
+Declare a `hooks` block on the schema definition. Hook signatures:
+
+```js
+hooks: {
+  beforeCreate: async ({ input, user, req, schema }) => input,    // can mutate / replace input, throw to reject
+  afterCreate:  async ({ record, user, req, schema }) => {},      // best-effort, throws are logged
+  beforeUpdate: async ({ input, current, user, req, schema }) => input,
+  afterUpdate:  async ({ record, previous, user, req, schema }) => {},
+  beforeDelete: async ({ current, user, req, schema }) => {},     // throw to refuse delete
+  afterDelete:  async ({ record, user, req, schema }) => {},
+}
+```
+
+Posture:
+- `before*` hooks run synchronously. Returning a value replaces the input that gets persisted; returning `undefined` keeps it. Throwing a typed error from `utils/errors.js` rejects the operation through the centralised `errorHandler`.
+- `after*` hooks run after persistence and are best-effort — a thrown error is logged but does not fail the response. Use this slot for fan-out (emails, webhooks, derived caches) where retryability matters less than not blocking the client.
+- **Coverage**: REST `POST` / `PUT /:id` / `DELETE /:id` and GraphQL `{path}CreateOne` / `{path}UpdateById` / `{path}RemoveById`. Bulk paths (REST bulk `PUT`, GraphQL `createMany` / `updateMany` / `removeMany`) intentionally do not invoke hooks — subscribe to the event bus from a plugin if you need bulk reactions.
+
+### Plugins (cross-cutting)
+
+List plugin module specifiers under `davepi.plugins` in the **consumer project's** `package.json` (not davepi's own):
+
+```json
+{
+  "davepi": {
+    "plugins": [
+      "./plugins/audit-export.js",
+      "davepi-plugin-slack"
+    ]
+  }
+}
+```
+
+Each plugin module exports:
+
+```js
+module.exports = {
+  name: 'audit-export',
+  async setup({ app, schemaLoader, bus, log, appName }) {
+    app.get('/api/v1/_audit-export', auth(true), handler);
+    bus.on('record', (event) => { /* event.type === '<path>.created|updated|deleted' */ });
+  },
+};
+```
+
+- `app` — the Express app, so `app.use(...)` and `app.<verb>(...)` work. Errors propagate through the framework's `errorHandler` because the loader re-asserts it at the tail of the middleware stack after every plugin is loaded.
+- `schemaLoader` — the live registry (`listSchemas`, `getEntry`, `runAggregation`, `onChange`). Plugins commonly use `listSchemas()` to wire a route per resource.
+- `bus` — the same `EventEmitter` from `utils/events.js` that fires `record` events for every CRUD mutation. Composes with the existing webhook dispatcher.
+- `log` — a pino child logger keyed by plugin name.
+- `appName` — convenience for context.
+
+Plugins run after every initial schema is loaded, in declaration order, and are awaited. A throw during `setup` fails boot — silent dropping would hide misconfiguration from operators.
 
 ### When Debugging
 

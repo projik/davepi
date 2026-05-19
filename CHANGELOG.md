@@ -8,6 +8,10 @@ from v1.0.0 onward (see [Stability commitments](https://docs.davepi.dev/referenc
 
 ## [Unreleased]
 
+### Added
+
+- **Extensibility framework: schema lifecycle hooks + plugins.** Two officially supported extension points beyond the auto-generated CRUD surface. (1) **Per-resource lifecycle hooks** — declare a `hooks` block on a schema with any of `beforeCreate` / `afterCreate` / `beforeUpdate` / `afterUpdate` / `beforeDelete` / `afterDelete`. `before*` hooks run synchronously to the request, can mutate the persisted input (return value replaces input; `undefined` keeps it as-is), and throw to reject via the centralised `errorHandler`. `after*` hooks run after persistence and are best-effort — thrown errors are logged but never fail the response (same posture as audit and state-machine `onEnter`). Coverage: REST single-record `POST` / `PUT /:id` / `DELETE /:id` and GraphQL `{path}CreateOne` / `{path}UpdateById` / `{path}RemoveById`. Bulk paths deliberately bypass hooks — use the event bus for bulk reactions. (2) **Plugins** — module specifiers listed under the consumer project's `package.json` → `davepi.plugins` array. Each plugin exports `{ name, async setup({ app, schemaLoader, bus, log, appName }) }` and runs after every initial schema is registered, so plugins can introspect `schemaLoader.listSchemas()` and wire per-resource routes. The `bus` is the same `EventEmitter` from `utils/events.js` that fires `record` events for every CRUD mutation, so plugin event subscribers compose with the existing webhook dispatcher. After plugin setup completes, the schema loader re-asserts `errorHandler` at the tail of the middleware stack via the newly-exposed `moveErrorHandlerToEnd`. A throw during plugin `setup` fails boot deliberately — silent dropping would hide misconfiguration from operators. Removed the stale `hooks.before` stub from `schema/versions/v1/product.js` that the framework never honored.
+
 ## [1.0.4] - 2026-05-11
 
 ### Fixed

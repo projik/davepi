@@ -7,6 +7,8 @@ const {
   canReadField,
 } = require('./acl');
 const { emitRecordEvent } = require('./events');
+const { runBeforeHook, runAfterHook } = require('./hooks');
+const logger = require('./logger');
 
 const STAMPED_FIELDS = ['userId', 'accountId'];
 
@@ -194,10 +196,24 @@ const wrapCreateOne = (resolver, { schema } = {}) => {
     const userId = requireUser(rp);
     const user = userFromContext(rp);
     const filtered = filterWritable(rp.args.record || {}, schema, user, 'create');
-    rp.args.record = { ...filtered, ...stampedValues(userId) };
+    let stamped = { ...filtered, ...stampedValues(userId) };
+    stamped = await runBeforeHook(schema, 'beforeCreate', {
+      input: stamped,
+      user,
+    });
+    rp.args.record = stamped;
     const result = await next(rp);
     emitForMutation(schema, 'created', user, result);
-    return projectResult(result, schema, user);
+    const projected = projectResult(result, schema, user);
+    if (projected && projected.record) {
+      await runAfterHook(
+        schema,
+        'afterCreate',
+        { record: projected.record, user },
+        logger
+      );
+    }
+    return projected;
   });
 };
 
@@ -271,20 +287,70 @@ const wrapByIdMutation = (Model) => (resolver, { schema, action, kind = 'write' 
       ? { _id: rp.args._id }
       : { _id: rp.args._id, userId };
 
-    const exists = await Model.findOne(ownershipQuery).select('_id').lean();
-    if (!exists) throw new ForbiddenError('Record not found');
+    // Update/delete hooks may want the `current` document. Pull the
+    // full lean copy when a relevant hook is declared; otherwise keep
+    // the cheap _id-only existence check.
+    const isUpdate = action === 'update';
+    const isDelete = kind === 'delete';
+    const hookName = isUpdate
+      ? (isDelete ? null : 'beforeUpdate')
+      : (isDelete ? 'beforeDelete' : null);
+    const afterHookName = isUpdate ? 'afterUpdate' : (isDelete ? 'afterDelete' : null);
+    const needsCurrent = Boolean(
+      schema && schema.hooks && (
+        (hookName && schema.hooks[hookName]) ||
+        (afterHookName && schema.hooks[afterHookName])
+      )
+    );
+
+    let current = null;
+    if (needsCurrent) {
+      current = await Model.findOne(ownershipQuery).lean();
+      if (!current) throw new ForbiddenError('Record not found');
+    } else {
+      const exists = await Model.findOne(ownershipQuery).select('_id').lean();
+      if (!exists) throw new ForbiddenError('Record not found');
+    }
 
     if (rp.args.record) {
       // Filter first, stamp last — see comment in wrapFilter.
       let record = rp.args.record;
       if (action) record = filterWritable(record, schema, user, action);
-      rp.args.record = { ...record, ...stampedValues(userId) };
+      let stamped = { ...record, ...stampedValues(userId) };
+      if (hookName && schema && schema.hooks && schema.hooks[hookName]) {
+        stamped = await runBeforeHook(schema, hookName, {
+          input: stamped,
+          current,
+          user,
+        });
+      }
+      rp.args.record = stamped;
+    } else if (isDelete && hookName && schema && schema.hooks && schema.hooks[hookName]) {
+      await runBeforeHook(schema, hookName, {
+        input: null,
+        current,
+        user,
+      });
     }
 
     const result = await next(rp);
-    if (action === 'update') emitForMutation(schema, 'updated', user, result);
-    else if (kind === 'delete') emitForMutation(schema, 'deleted', user, result);
-    return projectResult(result, schema, user);
+    if (isUpdate) emitForMutation(schema, 'updated', user, result);
+    else if (isDelete) emitForMutation(schema, 'deleted', user, result);
+    const projected = projectResult(result, schema, user);
+    if (afterHookName && schema && schema.hooks && schema.hooks[afterHookName]) {
+      const recordOut = projected && projected.record ? projected.record : null;
+      await runAfterHook(
+        schema,
+        afterHookName,
+        {
+          record: recordOut,
+          previous: current,
+          user,
+        },
+        logger
+      );
+    }
+    return projected;
   });
 };
 

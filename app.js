@@ -35,6 +35,8 @@ const PasswordResetToken = require("./model/passwordResetToken");
 const RefreshToken = require("./model/refreshToken");
 const { createSchemaLoader } = require("./utils/schemaLoader");
 const { startSchemaWatcher } = require("./utils/schemaWatcher");
+const { loadPlugins } = require("./utils/pluginLoader");
+const { bus: eventBus } = require("./utils/events");
 
 const { API_PORT } = process.env;
 const port = process.env.PORT || API_PORT;
@@ -160,6 +162,22 @@ app.locals.ready = (async () => {
     { schemas: schemaLoader.listSchemas() },
     'schemas loaded'
   );
+
+  // Plugins run AFTER schemas so they can introspect the registry
+  // (e.g. wire a route per resource). Plugin specifiers come from
+  // the consumer project's package.json under the `davepi.plugins`
+  // key — see utils/pluginLoader.js for the contract. After loading,
+  // re-assert the errorHandler tail so plugin-mounted routes route
+  // their errors through the same shape every other handler uses.
+  app.locals.plugins = await loadPlugins({
+    app,
+    schemaLoader,
+    bus: eventBus,
+    appName,
+  });
+  if (app.locals.plugins.length) {
+    schemaLoader.moveErrorHandlerToEnd();
+  }
 
   app.locals.schemaWatcher = startSchemaWatcher({ loader: schemaLoader });
 })();
