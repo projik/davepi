@@ -45,6 +45,7 @@ const {
   stampInitialStates,
   listTransitionsToValidate,
 } = require('./stateMachine');
+const { runBeforeHook, runAfterHook } = require('./hooks');
 
 /**
  * Map a schema field's declared `type` onto the GraphQL scalar name
@@ -779,7 +780,7 @@ function createSchemaLoader({ app, apiSpec, setApolloRouter, buildGraphqlContext
       idempotencyMiddleware,
       asyncHandler(async (req, res) => {
         const writable = filterWritable(req.body, s, req.user, 'create');
-        const data = {
+        let data = {
           ...writable,
           accountId: req.user.user_id,
           userId: req.user.user_id,
@@ -789,6 +790,14 @@ function createSchemaLoader({ app, apiSpec, setApolloRouter, buildGraphqlContext
         // filterWritable so a forged `{ status: 'approved' }` doesn't
         // bypass the transition graph.
         stampInitialStates(data, s);
+        // beforeCreate runs after server-side stamping so the hook
+        // sees (and can override) the final persisted shape. Throws
+        // reject the request via errorHandler.
+        data = await runBeforeHook(s, 'beforeCreate', {
+          input: data,
+          user: req.user,
+          req,
+        });
         const record = await model.create(data);
         const plain = JSON.parse(JSON.stringify(record));
         await decorateFileUrls(plain, s, storage);
@@ -812,6 +821,12 @@ function createSchemaLoader({ app, apiSpec, setApolloRouter, buildGraphqlContext
           recordId: String(record._id),
           record: projected,
         });
+        await runAfterHook(
+          s,
+          'afterCreate',
+          { record: projected, user: req.user, req },
+          req.log || logger
+        );
         res.status(201).json(projected);
       })
     );
@@ -994,6 +1009,12 @@ function createSchemaLoader({ app, apiSpec, setApolloRouter, buildGraphqlContext
             .findOne({ ...baseQuery, deletedAt: null })
             .lean();
           if (!existing) throw new NotFoundError(path);
+          await runBeforeHook(s, 'beforeDelete', {
+            input: null,
+            current: existing,
+            user: req.user,
+            req,
+          });
           const now = new Date();
           await model.updateOne(
             { _id: existing._id },
@@ -1012,6 +1033,16 @@ function createSchemaLoader({ app, apiSpec, setApolloRouter, buildGraphqlContext
             userId: req.user.user_id,
             recordId: String(req.params.id),
           });
+          await runAfterHook(
+            s,
+            'afterDelete',
+            {
+              record: projectByAcl(existing, s, req.user),
+              user: req.user,
+              req,
+            },
+            req.log || logger
+          );
           return res.status(200).json({ acknowledged: true, deletedCount: 1, softDeleted: true });
         }
 
@@ -1019,6 +1050,15 @@ function createSchemaLoader({ app, apiSpec, setApolloRouter, buildGraphqlContext
         const existing = (fileFields && fileFields.length)
           ? await model.findOne(baseQuery).lean()
           : await model.findOne(baseQuery).lean();
+        if (s.hooks && s.hooks.beforeDelete) {
+          if (!existing) throw new NotFoundError(path);
+          await runBeforeHook(s, 'beforeDelete', {
+            input: null,
+            current: existing,
+            user: req.user,
+            req,
+          });
+        }
         const result = await model.deleteOne(baseQuery);
         if (!result.deletedCount) throw new NotFoundError(path);
         if (existing && fileFields && fileFields.length) {
@@ -1042,6 +1082,16 @@ function createSchemaLoader({ app, apiSpec, setApolloRouter, buildGraphqlContext
           userId: req.user.user_id,
           recordId: String(req.params.id),
         });
+        await runAfterHook(
+          s,
+          'afterDelete',
+          {
+            record: existing ? projectByAcl(existing, s, req.user) : null,
+            user: req.user,
+            req,
+          },
+          req.log || logger
+        );
         res.status(200).json(result);
       })
     );
@@ -1150,14 +1200,36 @@ function createSchemaLoader({ app, apiSpec, setApolloRouter, buildGraphqlContext
           { userId: req.user.user_id, _id: req.params.id },
           req
         );
-        const writable = filterWritable(req.body, s, req.user, 'update');
+        let writable = filterWritable(req.body, s, req.user, 'update');
         // We need the `before` snapshot whenever audit is on OR
         // there's a state-machine field whose validation needs the
-        // current value. Fetch once so we don't double-read.
+        // current value OR a beforeUpdate / afterUpdate hook is
+        // declared (the hook receives the `current` document). Fetch
+        // once so we don't double-read.
         const hasStateMachine = stateMachineFieldsOf(s).length > 0;
-        const before = (auditEnabled || hasStateMachine)
+        const hasUpdateHook = Boolean(
+          (s.hooks && (s.hooks.beforeUpdate || s.hooks.afterUpdate))
+        );
+        const before = (auditEnabled || hasStateMachine || hasUpdateHook)
           ? await model.findOne(query).lean()
           : null;
+
+        // beforeUpdate runs after filterWritable so the hook sees
+        // the post-ACL payload and can mutate it before persist.
+        // Throws reject the request via errorHandler. The hook runs
+        // BEFORE state-machine validation so a hook that rewrites a
+        // transition target (e.g. routes 'review' → 'rejected'
+        // because of business rules) still gets validated by the
+        // FSM below.
+        if (s.hooks && s.hooks.beforeUpdate) {
+          if (!before) throw new NotFoundError(path);
+          writable = await runBeforeHook(s, 'beforeUpdate', {
+            input: writable,
+            current: before,
+            user: req.user,
+            req,
+          });
+        }
 
         // Validate every state-machine transition the client is
         // attempting BEFORE we touch the record. An invalid
@@ -1218,6 +1290,21 @@ function createSchemaLoader({ app, apiSpec, setApolloRouter, buildGraphqlContext
           userId: req.user.user_id,
           recordId: String(req.params.id),
         });
+        if (s.hooks && s.hooks.afterUpdate) {
+          const after = await model.findById(req.params.id).lean();
+          const projected = after ? projectByAcl(after, s, req.user) : null;
+          await runAfterHook(
+            s,
+            'afterUpdate',
+            {
+              record: projected,
+              previous: before,
+              user: req.user,
+              req,
+            },
+            req.log || logger
+          );
+        }
 
         // Per-transition tail: audit row, dedicated event, and the
         // optional onEnter hook. All three are best-effort — a
@@ -1890,6 +1977,11 @@ function createSchemaLoader({ app, apiSpec, setApolloRouter, buildGraphqlContext
     // routes added after the schemas.forEach loop) can call into the
     // same safety/cache/tenant code path that REST and GraphQL use.
     runAggregation,
+    // Exposed for the plugin loader: after plugins register their
+    // routes via `app.use`, errorHandler needs to be re-asserted at
+    // the tail of the middleware stack, the same invariant the
+    // schema loader maintains on every load/unload.
+    moveErrorHandlerToEnd,
   };
 }
 
