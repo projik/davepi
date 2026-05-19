@@ -146,6 +146,60 @@ the user can `git clone` and run.
 (The generated *client* is TypeScript, but it's an output, not part
 of the server.)
 
+## Local requires: `#` subpath imports
+
+Every scaffolded dAvePi project ships with this in `package.json`:
+
+```json
+{
+  "imports": {
+    "#plugins/*": "./plugins/*.js",
+    "#lib/*":     "./lib/*.js",
+    "#schema/*":  "./schema/*.js"
+  }
+}
+```
+
+Use these aliases for requires that point at your own code:
+
+```js
+// inside schema/versions/v1/user.js
+const postmark = require('#plugins/postmark');     // → ./plugins/postmark.js
+const { genCode } = require('#lib/codes');         // → ./lib/codes.js
+
+// inside plugins/audit-export.js
+const { defaultRetention } = require('#lib/policies');
+
+// nested files work too — the `*` matches the full sub-path
+const helpers = require('#plugins/postmark/helpers');   // → ./plugins/postmark/helpers.js
+```
+
+This is [Node's built-in subpath imports](https://nodejs.org/api/packages.html#subpath-imports) —
+no extra dependency, supported in `require` / `import` / Jest /
+`node --test`. The `#` prefix is part of the spec; **`@` will not
+work** because Node treats it as an npm-scoped package
+(`@scope/pkg`).
+
+Two gotchas worth knowing:
+
+- **The trailing `.js` on the mapping target is required.** Node's subpath-import resolver does not fall back to CJS extension resolution, so `"./plugins/*"` would crash MODULE_NOT_FOUND. Stick to `"./plugins/*.js"`.
+- **The aliases live in the consumer project's `package.json`, not davepi's.** Framework code from the published `davepi` package stays as `require('davepi/utils/errors')` — `#` aliases are for the consumer's own files only.
+
+Add more aliases to `imports` as your project grows.
+
+### What goes where
+
+| Directory | Alias | Use for |
+|-----------|-------|---------|
+| `./plugins/` | `#plugins/*` | [Plugins](/features/plugins/) registered under `davepi.plugins` in `package.json`. Also commonly used by [hooks](/features/hooks/) that need to call into a plugin (e.g. `require('#plugins/postmark')` from a schema's `afterCreate`). |
+| `./lib/` | `#lib/*` | Shared helpers used across schemas, plugins, and hooks. Pure functions, validation helpers, code generators, third-party client wrappers. |
+| `./schema/` | `#schema/*` | Schema files. Rarely used as a require target — schemas are auto-loaded by the framework — but useful when a plugin or test needs to read a schema definition directly. |
+
+You don't have to create the directories upfront; Node only
+resolves the alias when a `require` actually fires. The aliases
+ship in the scaffolded `package.json` so that day-one code
+written by an agent doesn't need to think about path math.
+
 ## See also
 
 - [Schema file shape](/reference/schema/) — what goes in a schema file.

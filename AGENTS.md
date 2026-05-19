@@ -308,6 +308,7 @@ Plugins run after every initial schema is loaded, in declaration order, and are 
 - Async/await for database operations
 - Callback-based async flow control with `async` library
 - Lodash for utility functions (e.g., `_.camelCase`)
+- **Local requires use `#` subpath imports.** Every dAvePi project ships with `imports` in `package.json` mapping `#plugins/*` → `./plugins/*.js`, `#lib/*` → `./lib/*.js`, `#schema/*` → `./schema/*.js`. Inside a schema file, plugin, or hook, prefer `require('#plugins/postmark')` and `require('#lib/codes')` over `../../../` path ladders. This is Node's built-in [subpath imports](https://nodejs.org/api/packages.html#subpath-imports) — no extra dependency, works in `require`, `import`, and Jest. The trailing `.js` on the right-hand side is required: Node's subpath-import resolver doesn't fall back to CJS extension resolution, so a bare `"./plugins/*"` target would crash MODULE_NOT_FOUND. **`#` not `@`**: `@`-prefixed specifiers are reserved by Node for npm-scoped packages (`@scope/pkg`) and won't resolve to local paths. Framework code from the `davepi` package itself is still imported as `require('davepi/utils/errors')` — the `#` aliases are for the consumer's own files.
 
 ## Security Considerations
 

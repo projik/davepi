@@ -43,6 +43,12 @@ Specifiers can be:
 | `/absolute/path/to/plugin.js` | Absolute path, loaded as-is. |
 | `davepi-plugin-slack` | Node module resolution from your project root — installed packages win over anything next to the framework. |
 
+The `davepi.plugins` list is the only place that uses path-form
+specifiers — everywhere else in your project (schemas, hooks,
+other plugins, tests) `require` plugins via the `#plugins/`
+subpath import alias, e.g. `require('#plugins/audit-export')`.
+See [Conventions › Local requires](/reference/conventions/#local-requires-subpath-imports).
+
 Plugins load **after** every initial schema is registered, in
 declaration order. Each plugin's `setup` is awaited before the
 next one runs, so a plugin that establishes shared state for
@@ -162,6 +168,66 @@ async setup({ app, schemaLoader }) {
   }
 }
 ```
+
+### Expose helpers for hooks to call
+
+A plugin module is just a CommonJS module — anything it exports
+can be required from a schema's [lifecycle hook](/features/hooks/).
+Keep one-time client initialisation in `setup` (so the plugin owns
+its lifecycle) and export the per-call helpers on
+`module.exports`:
+
+```js
+// plugins/postmark.js
+const { ServerClient } = require('postmark');
+
+let client = null;
+
+async function sendEmail({ to, subject, body }) {
+  if (!client) throw new Error('postmark not initialised');
+  return client.sendEmail({ From: 'noreply@example.com', To: to, Subject: subject, TextBody: body });
+}
+
+module.exports = {
+  name: 'postmark',
+  async setup({ log }) {
+    client = new ServerClient(process.env.POSTMARK_TOKEN);
+    log.info({}, 'postmark ready');
+  },
+  sendEmail,   // exported helper
+};
+```
+
+```js
+// schema/versions/v1/user.js
+const postmark = require('#plugins/postmark');
+
+module.exports = {
+  path: 'user',
+  hooks: {
+    afterCreate: async ({ record }) => {
+      await postmark.sendEmail({
+        to: record.email,
+        subject: 'Welcome',
+        body: `Hi ${record.firstName}!`,
+      });
+    },
+  },
+  // ...
+};
+```
+
+This works because:
+
+1. Schema files are required at boot — the `require('#plugins/postmark')` resolves the module exports immediately, with `client` still `null`.
+2. Plugin `setup` runs after the schema pass — `client` becomes a real Postmark client.
+3. Hooks only fire on request handling — by which point `client` is guaranteed initialised.
+
+The framework doesn't impose anything here — it's plain Node
+module semantics. The convention is to (a) `require` plugins via
+`#plugins/*` (see [Conventions](/reference/conventions/#local-requires-subpath-imports))
+and (b) wrap third-party calls in the hook with `try/catch` so a
+remote outage doesn't crash an `afterCreate`.
 
 ### React to schema hot-reloads
 

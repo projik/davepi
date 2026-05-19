@@ -180,10 +180,12 @@ the bus fires `<path>.updated` / `<path>.deleted` with a
 ## Composing hooks across schemas
 
 There's no built-in "hook every schema" slot — that's a plugin's
-job. But hooks can share a helper:
+job. But hooks can share a helper. Put it under `./lib/` and
+require it via the `#lib/` subpath import alias every scaffolded
+project ships with:
 
 ```js
-// utils/audit-author.js
+// lib/audit-author.js
 exports.recordAuthor = async ({ input, user }) => ({
   ...input,
   createdBy: user.user_id,
@@ -191,7 +193,8 @@ exports.recordAuthor = async ({ input, user }) => ({
 ```
 
 ```js
-const { recordAuthor } = require('../utils/audit-author');
+// schema/versions/v1/note.js
+const { recordAuthor } = require('#lib/audit-author');
 
 module.exports = {
   path: 'note',
@@ -205,6 +208,68 @@ For anything that genuinely cross-cuts every resource (an audit
 mirror, a third-party CRM sync), use a
 [plugin](/features/plugins/) — it subscribes once to the event
 bus and reacts to every CRUD event.
+
+## Calling a plugin from a hook
+
+A common pattern: you've written a plugin that wraps a third-party
+client (Postmark, Slack, Stripe), and you want a per-resource hook
+to call its exported helpers. Plugins are plain CommonJS modules,
+so `require` them like any other helper — by convention, via the
+`#plugins/` alias:
+
+```js
+// plugins/postmark.js
+const { ServerClient } = require('postmark');
+
+let client = null;
+
+async function sendEmail({ to, subject, body }) {
+  if (!client) throw new Error('postmark plugin not initialised');
+  return client.sendEmail({ From: 'noreply@example.com', To: to, Subject: subject, TextBody: body });
+}
+
+module.exports = {
+  name: 'postmark',
+  async setup({ log }) {
+    client = new ServerClient(process.env.POSTMARK_TOKEN);
+    log.info({}, 'postmark client ready');
+  },
+  sendEmail,   // exported so hooks can call it
+};
+```
+
+```js
+// schema/versions/v1/user.js
+const postmark = require('#plugins/postmark');
+
+module.exports = {
+  path: 'user',
+  collection: 'user',
+  fields: [...],
+  hooks: {
+    afterCreate: async ({ record, req }) => {
+      try {
+        await postmark.sendEmail({
+          to: record.email,
+          subject: 'Welcome!',
+          body: `Hi ${record.firstName}, glad you're here.`,
+        });
+      } catch (err) {
+        (req?.log || console).error({ err }, 'welcome email failed');
+      }
+    },
+  },
+};
+```
+
+Load ordering makes this safe: schema files are required at boot
+(so the `require('#plugins/postmark')` resolves the module
+exports immediately, with `client` still `null`); plugin `setup`
+runs after the schema pass (initialising `client`); hooks only
+fire on request handling, well after both. The `try/catch`
+matters — `afterCreate` is best-effort, so wrap any third-party
+call so a Postmark outage doesn't surface as a noisy
+unhandledRejection.
 
 ## Hooks and tenant isolation
 

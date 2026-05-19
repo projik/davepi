@@ -184,6 +184,25 @@ async function scaffold({ name, template, install, davepiVersion, port }) {
   }
 
   // 2. package.json — pin dAvePi as a runtime dep.
+  //
+  // The `imports` block declares Node's built-in subpath-import
+  // aliases (https://nodejs.org/api/packages.html#subpath-imports).
+  // Use them from any file in this project to require local code
+  // without `../../../` ladders:
+  //
+  //   const postmark = require('#plugins/postmark');           // → ./plugins/postmark.js
+  //   const { genCode } = require('#lib/codes');               // → ./lib/codes.js
+  //   const helper = require('#plugins/postmark/helpers');     // → ./plugins/postmark/helpers.js
+  //
+  // The `.js` suffix on the right-hand side is intentional: Node's
+  // subpath-import resolver does NOT fall back to CJS resolution
+  // (`.js` / `/index.js`) for bare-glob targets — without the
+  // explicit extension, `require('#plugins/postmark')` would crash
+  // with MODULE_NOT_FOUND. The `*` matches the path segment(s)
+  // between the alias and the trailing `.js`, so nested files work
+  // too. `#` is the standard prefix (not `@`, which Node reserves
+  // for npm-scoped packages). This is the convention every dAvePi
+  // project uses; the docs site and the agent.md guide expect it.
   writeJson(path.join(target, 'package.json'), {
     name,
     version: '0.1.0',
@@ -204,6 +223,11 @@ async function scaffold({ name, template, install, davepiVersion, port }) {
       test: 'node --test tests/*.test.js',
       'gen-client': 'davepi gen-client --out client/davepi.ts',
       'mcp:stdio': 'davepi mcp',
+    },
+    imports: {
+      '#plugins/*': './plugins/*.js',
+      '#lib/*':     './lib/*.js',
+      '#schema/*':  './schema/*.js',
     },
     dependencies: {
       davepi: davepiVersion || 'latest',

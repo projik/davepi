@@ -63,6 +63,14 @@ describe('create-davepi-app: scaffolder', () => {
       expect(pkg.scripts.start).toBe('node index.js');
       expect(pkg.scripts.seed).toBe('node seed.js');
       expect(pkg.scripts['gen-client']).toMatch(/davepi gen-client/);
+      // Subpath-import aliases — the convention every dAvePi
+      // project uses for local requires (see CLAUDE.md / agent.md).
+      // The `.js` suffix matters: Node's subpath-import resolver
+      // does not fall back to CJS resolution, so bare globs would
+      // crash MODULE_NOT_FOUND.
+      expect(pkg.imports['#plugins/*']).toBe('./plugins/*.js');
+      expect(pkg.imports['#lib/*']).toBe('./lib/*.js');
+      expect(pkg.imports['#schema/*']).toBe('./schema/*.js');
     } finally {
       cleanup('demo2');
     }
