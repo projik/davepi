@@ -1045,12 +1045,18 @@ function createSchemaLoader({ app, apiSpec, setApolloRouter, buildGraphqlContext
             { _id: existing._id },
             { $set: { deletedAt: now } }
           );
+          // Post-persist view of the record. Audit, the afterDelete
+          // hook, and any future consumer that needs the
+          // "as-committed" shape all build off the same projection
+          // so a hook author can rely on `record.deletedAt` being
+          // set to the actual tombstone timestamp.
+          const tombstoned = { ...existing, deletedAt: now };
           await audit({
             req,
             recordId: existing._id,
             action: 'delete',
             before: existing,
-            after: { ...existing, deletedAt: now },
+            after: tombstoned,
           });
           emitRecordEvent({
             type: `${path}.deleted`,
@@ -1062,7 +1068,7 @@ function createSchemaLoader({ app, apiSpec, setApolloRouter, buildGraphqlContext
             s,
             'afterDelete',
             {
-              record: projectByAcl(existing, s, req.user),
+              record: projectByAcl(tombstoned, s, req.user),
               user: req.user,
               req,
             },
