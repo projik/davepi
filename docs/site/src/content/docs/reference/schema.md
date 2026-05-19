@@ -40,6 +40,7 @@ Swagger fragments for `account`.
 | `audit` | boolean | no | Defaults to `true`. Set `false` to skip audit log writes for this schema. See [Audit log](/features/audit/). |
 | `acl` | object | no | Document-level role bypass slots (`list`, `delete`). See [ACL](/features/acl/). |
 | `webhooks` | object | no | Outbound webhook subscriptions for create / update / delete events on this schema. See [Webhooks](/features/webhooks/). |
+| `hooks` | object | no | Per-resource lifecycle hooks — `beforeCreate`, `afterCreate`, `beforeUpdate`, `afterUpdate`, `beforeDelete`, `afterDelete`. See [Lifecycle hooks](/features/hooks/). |
 | `softDelete` | object | no | `{ retentionDays: N }` to auto-purge tombstoned rows after N days. Without it, tombstones live forever. See [Backup & retention](/operations/backup/). |
 | `version` | string | no | Defaults to `v1`. Set when you want a single schema under a non-default version segment. |
 
@@ -184,6 +185,33 @@ The framework signs each delivery with HMAC-SHA256, retries with
 exponential backoff, and emits an audit row per attempt. See
 [Webhooks](/features/webhooks/).
 
+## `hooks`
+
+Per-resource lifecycle hooks — declare any subset:
+
+```js
+hooks: {
+  beforeCreate: async ({ input, user, req, schema }) => input,
+  afterCreate:  async ({ record, user, req, schema }) => {},
+  beforeUpdate: async ({ input, current, user, req, schema }) => input,
+  afterUpdate:  async ({ record, previous, user, req, schema }) => {},
+  beforeDelete: async ({ current, user, req, schema }) => {},
+  afterDelete:  async ({ record, user, req, schema }) => {},
+}
+```
+
+`before*` hooks run synchronously, can mutate the persisted input
+(return value replaces; `undefined` keeps), and throw to reject
+through the centralised `errorHandler`. `after*` hooks run after
+persistence and are best-effort — thrown errors are logged but
+never fail the response. Coverage: REST `POST` / `PUT /:id` /
+`DELETE /:id` and GraphQL `<path>CreateOne` / `<path>UpdateById` /
+`<path>RemoveById`. **Bulk paths do not invoke hooks** — subscribe
+a [plugin](/features/plugins/) to the event bus for bulk
+reactions.
+
+See [Lifecycle hooks](/features/hooks/).
+
 ## `softDelete: { retentionDays }`
 
 ```js
@@ -203,10 +231,14 @@ See [Backup & retention](/operations/backup/).
 These are deliberate gaps — the schema file describes *data*, not
 *runtime*:
 
-- **Custom routes**: add them in `app.js` after the `schemas.forEach` loop.
+- **Cross-cutting routes**: a route that spans schemas belongs in a [plugin](/features/plugins/) (or in `app.js` after the `schemas.forEach` loop for one-off framework-level routes).
 - **Auth flows**: `routes/auth/` is hand-written.
 - **Custom middleware**: `middleware/`.
 - **Non-Mongo backends**: not supported. dAvePi is Mongo-only by design.
+
+Per-resource side effects (validate before save, fire on create,
+refuse delete) **do** belong on the schema — declare a `hooks`
+block. See [Lifecycle hooks](/features/hooks/).
 
 ## See also
 

@@ -53,7 +53,9 @@ etc. — anything other than `userId` / `accountId`.
 | You're adding... | Go here |
 |------------------|---------|
 | A new auto-generated resource | `schema/versions/v1/<name>.js` (one file, schema vocabulary only). |
-| A custom REST handler for an existing resource | After the `schemas.forEach` loop in `app.js`, with `auth(true)` and `asyncHandler`. |
+| A per-resource invariant or side effect (validate before save, fire on create, refuse delete) | A `hooks` block on the schema file. See [Lifecycle hooks](/features/hooks/). |
+| A cross-cutting extension (audit export, integration, scheduled job, route per resource) | A [plugin](/features/plugins/) — register it in `package.json` → `davepi.plugins`. |
+| A custom REST handler that lives in framework source | After the `schemas.forEach` loop in `app.js`, with `auth(true)` and `asyncHandler`. (Prefer a plugin if davepi is installed as a dep.) |
 | Cross-cutting middleware | `middleware/`. Mount in `app.js` between the existing layers. |
 | A typed error class | Add to `utils/errors.js`. The terminal error handler in `middleware/errorHandler.js` already maps anything that extends the base. |
 | A shared helper / framework feature | `utils/`. Wire it into the schema loader if it needs to participate in load / unload. |
