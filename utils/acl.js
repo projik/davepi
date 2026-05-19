@@ -62,10 +62,15 @@ function projectListByAcl(records, schema, user) {
 }
 
 /**
- * Fields the server controls itself (stamped from the JWT) and that
- * ACL must never strip — even if a schema mistakenly declares an
- * `acl` block on them. Tenant isolation depends on these being
- * present in every write payload.
+ * Fields the server controls itself (stamped from the JWT). Tenant
+ * isolation depends on these never being writable from the client —
+ * a request that changes `userId` would move the record into another
+ * tenant's scope, and a request that changes `accountId` would
+ * similarly break the (single-tenant) ownership contract.
+ *
+ * Exported so the schema loader / scope resolver can call
+ * `stampTenantFields` and `stripTenantFields` at every persist site,
+ * forming a defense-in-depth pair with `filterWritable`'s strip.
  */
 const PROTECTED_WRITE_FIELDS = ['userId', 'accountId'];
 
@@ -74,10 +79,11 @@ const PROTECTED_WRITE_FIELDS = ['userId', 'accountId'];
  * cannot set for the given action ('create' | 'update'). Returns a
  * new shallow-copied object.
  *
- * Server-stamped fields (`userId`, `accountId`) are always kept,
- * regardless of any acl declared on them — those values come from
- * the JWT, not the client, and stripping them would either fail
- * insertion (required-field violation) or orphan the document.
+ * Server-stamped tenant fields (`userId`, `accountId`) are always
+ * stripped from inbound payloads — those values come from the JWT,
+ * not the client, and the framework stamps them post-filter at every
+ * persist site. Letting them through here would give a client (or a
+ * malicious hook return value) a path to rewrite ownership.
  *
  * `type: 'File'` fields are framework-owned: clients write to them
  * via the dedicated multipart route, never via JSON CRUD. We drop
@@ -91,10 +97,9 @@ function filterWritable(body, schema, user, action) {
   const out = {};
   const fieldByName = new Map(schema.fields.map((f) => [f.name, f]));
   for (const [k, v] of Object.entries(body)) {
-    if (PROTECTED_WRITE_FIELDS.includes(k)) {
-      out[k] = v;
-      continue;
-    }
+    // Tenant ownership is server-controlled — never accept from the
+    // wire. Stamping happens separately at the persist site.
+    if (PROTECTED_WRITE_FIELDS.includes(k)) continue;
     const f = fieldByName.get(k);
     if (f && f.type === 'File') continue; // framework-owned
     // Computed / virtual fields are read-only — drop any
@@ -107,6 +112,39 @@ function filterWritable(body, schema, user, action) {
     }
   }
   return out;
+}
+
+/**
+ * Force tenant ownership fields onto a create-time payload. Called
+ * at every pre-persist step on the create path, AFTER any hooks have
+ * run, so a third-party hook (or schema-level code that returned a
+ * rewritten payload) can't change ownership in its return value.
+ * Mutates `target` and returns it for chaining convenience.
+ */
+function stampTenantFields(target, user) {
+  if (!target || typeof target !== 'object') return target;
+  const userId = user && user.user_id;
+  if (!userId) return target;
+  target.userId = userId;
+  target.accountId = userId;
+  return target;
+}
+
+/**
+ * Remove tenant ownership fields from an update-time payload before
+ * it reaches `$set`. The record being updated already has the right
+ * `userId` / `accountId` (enforced by the ownership query that
+ * scoped the update); writing them again is either a no-op (when
+ * unchanged) or a tenant-rewrite attack (when a hook tried to
+ * change them). Either way, the safe move is to never include them
+ * in `$set`. Mutates `target` and returns it.
+ */
+function stripTenantFields(target) {
+  if (!target || typeof target !== 'object') return target;
+  for (const k of PROTECTED_WRITE_FIELDS) {
+    delete target[k];
+  }
+  return target;
 }
 
 /**
@@ -152,4 +190,7 @@ module.exports = {
   userRoles,
   hasOverlap,
   canReadField,
+  PROTECTED_WRITE_FIELDS,
+  stampTenantFields,
+  stripTenantFields,
 };

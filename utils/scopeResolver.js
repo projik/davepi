@@ -5,6 +5,8 @@ const {
   bypassUserScopeForList,
   bypassUserScopeForDelete,
   canReadField,
+  stampTenantFields,
+  stripTenantFields,
 } = require('./acl');
 const { emitRecordEvent } = require('./events');
 const { runBeforeHook, runAfterHook } = require('./hooks');
@@ -201,6 +203,11 @@ const wrapCreateOne = (resolver, { schema } = {}) => {
       input: stamped,
       user,
     });
+    // Re-stamp post-hook: a beforeCreate hook (including third-party
+    // plugin code that returned a rewritten payload) cannot change
+    // tenant ownership. The framework stamps userId/accountId from
+    // the JWT and that's the only source of truth.
+    stampTenantFields(stamped, user);
     rp.args.record = stamped;
     const result = await next(rp);
     emitForMutation(schema, 'created', user, result);
@@ -324,6 +331,14 @@ const wrapByIdMutation = (Model) => (resolver, { schema, action, kind = 'write' 
           user,
         });
       }
+      // Defense in depth: the record being updated is already scoped
+      // by ownership (the findOne above filters by `userId`), so
+      // including tenant fields in `$set` is at best a no-op and at
+      // worst a tenant-rewrite attack from a hook that returned
+      // `{ ...input, userId: 'attacker' }`. Strip both fields from
+      // the persisted payload — the existing values on the doc are
+      // already correct.
+      stripTenantFields(stamped);
       rp.args.record = stamped;
     } else if (isDelete && hookName && schema && schema.hooks && schema.hooks[hookName]) {
       await runBeforeHook(schema, hookName, {

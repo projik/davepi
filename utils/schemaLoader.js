@@ -85,6 +85,8 @@ const {
   filterWritable,
   bypassUserScopeForList,
   bypassUserScopeForDelete,
+  stampTenantFields,
+  stripTenantFields,
 } = require('./acl');
 const {
   wrapFilter,
@@ -798,6 +800,11 @@ function createSchemaLoader({ app, apiSpec, setApolloRouter, buildGraphqlContext
           user: req.user,
           req,
         });
+        // Re-stamp tenant fields after the hook so a beforeCreate
+        // that returned `{ ...input, userId: 'attacker' }` cannot
+        // move the new record into another tenant. Ownership is
+        // strictly server-controlled.
+        stampTenantFields(data, req.user);
         const record = await model.create(data);
         const plain = JSON.parse(JSON.stringify(record));
         await decorateFileUrls(plain, s, storage);
@@ -931,19 +938,37 @@ function createSchemaLoader({ app, apiSpec, setApolloRouter, buildGraphqlContext
         // keys). Filter the client-provided keys through
         // filterWritable('create') first so ACL-create-restricted
         // fields can't be smuggled in via the query string, THEN stamp
-        // userId so tenant isolation is non-bypassable.
+        // tenant fields so tenant isolation is non-bypassable.
         const rawQuery = qs.parse(req.query);
         const filteredQuery = filterWritable(rawQuery, s, req.user, 'create');
+        // Only stamp `accountId` when the schema declares it as a
+        // field — Mongoose's strict mode throws on upsert when the
+        // filter references a path the schema doesn't know about
+        // ("Path 'accountId' is not in schema, strict mode is true,
+        // and upsert is true"). `userId` is universal in dAvePi
+        // schemas by convention, so it's always stamped.
+        const schemaHasAccountId = Array.isArray(s.fields)
+          && s.fields.some((f) => f.name === 'accountId');
         const safeQuery = {
           ...filteredQuery,
           userId: req.user.user_id,
+          ...(schemaHasAccountId ? { accountId: req.user.user_id } : {}),
           // Bulk PUT must NOT touch tombstones — soft-deleted records
           // are read-only at the API layer until restored. Without
           // this constraint, an unsuspecting `?accountName=X` could
           // resurrect (or upsert via) a tombstoned doc.
           ...(softDeleteEnabled ? { deletedAt: null } : {}),
         };
-        const writable = filterWritable(req.body, s, req.user, 'update');
+        // `$set` must never include tenant fields. The matched docs
+        // are already owner-scoped, and upserted docs get ownership
+        // from `safeQuery`. Including userId/accountId in $set would
+        // either be a no-op (same values) or — if a malicious body
+        // somehow reintroduced them past filterWritable — a tenant
+        // rewrite. filterWritable already strips them; this is
+        // belt-and-suspenders.
+        const writable = stripTenantFields(
+          filterWritable(req.body, s, req.user, 'update')
+        );
         const record = await model.updateMany(
           safeQuery,
           { $set: writable },
@@ -1020,12 +1045,18 @@ function createSchemaLoader({ app, apiSpec, setApolloRouter, buildGraphqlContext
             { _id: existing._id },
             { $set: { deletedAt: now } }
           );
+          // Post-persist view of the record. Audit, the afterDelete
+          // hook, and any future consumer that needs the
+          // "as-committed" shape all build off the same projection
+          // so a hook author can rely on `record.deletedAt` being
+          // set to the actual tombstone timestamp.
+          const tombstoned = { ...existing, deletedAt: now };
           await audit({
             req,
             recordId: existing._id,
             action: 'delete',
             before: existing,
-            after: { ...existing, deletedAt: now },
+            after: tombstoned,
           });
           emitRecordEvent({
             type: `${path}.deleted`,
@@ -1037,7 +1068,7 @@ function createSchemaLoader({ app, apiSpec, setApolloRouter, buildGraphqlContext
             s,
             'afterDelete',
             {
-              record: projectByAcl(existing, s, req.user),
+              record: projectByAcl(tombstoned, s, req.user),
               user: req.user,
               req,
             },
@@ -1230,6 +1261,14 @@ function createSchemaLoader({ app, apiSpec, setApolloRouter, buildGraphqlContext
             req,
           });
         }
+        // `$set` must never include tenant fields. The record being
+        // updated is already ownership-scoped by `query` above, so
+        // userId/accountId are already correct on disk. Including
+        // them in $set is either a no-op (same values) or — if a
+        // hook returned `{ ...input, userId: 'attacker' }` — a
+        // tenant-rewrite attack. Strip them here, after the hook,
+        // as the canonical enforcement site.
+        stripTenantFields(writable);
 
         // Validate every state-machine transition the client is
         // attempting BEFORE we touch the record. An invalid

@@ -165,7 +165,7 @@ describe('Schema lifecycle hooks — REST', () => {
           if (!allow) throw new ForbiddenError(`refuse to delete ${current.title}`);
         },
         afterDelete: async ({ record }) => {
-          afterCalls.push(record.title);
+          afterCalls.push(record);
         },
       },
     });
@@ -198,7 +198,13 @@ describe('Schema lifecycle hooks — REST', () => {
       .delete(`/api/v1/hooktest_delete/${created.body._id}`)
       .set('Authorization', `Bearer ${user.token}`);
     expect(ok.status).toBe(200);
-    expect(afterCalls).toEqual(['precious']);
+    // afterDelete must see the post-persist tombstone shape so a
+    // hook that fans out to downstream systems can rely on
+    // `record.deletedAt` being the actual tombstone timestamp.
+    expect(afterCalls).toHaveLength(1);
+    expect(afterCalls[0].title).toBe('precious');
+    expect(afterCalls[0].deletedAt).toBeTruthy();
+    expect(new Date(afterCalls[0].deletedAt).getTime()).not.toBeNaN();
   });
 });
 

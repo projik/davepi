@@ -205,12 +205,16 @@ const postmark = require('#plugins/postmark');
 module.exports = {
   path: 'user',
   hooks: {
-    afterCreate: async ({ record }) => {
-      await postmark.sendEmail({
-        to: record.email,
-        subject: 'Welcome',
-        body: `Hi ${record.firstName}!`,
-      });
+    afterCreate: async ({ record, req }) => {
+      try {
+        await postmark.sendEmail({
+          to: record.email,
+          subject: 'Welcome',
+          body: `Hi ${record.firstName}!`,
+        });
+      } catch (err) {
+        (req?.log || console).error({ err }, 'welcome email failed');
+      }
     },
   },
   // ...
@@ -227,7 +231,10 @@ The framework doesn't impose anything here — it's plain Node
 module semantics. The convention is to (a) `require` plugins via
 `#plugins/*` (see [Conventions](/reference/conventions/#local-requires-subpath-imports))
 and (b) wrap third-party calls in the hook with `try/catch` so a
-remote outage doesn't crash an `afterCreate`.
+remote outage doesn't crash an `afterCreate`. `after*` hooks are
+best-effort — the framework logs throws and swallows them, but
+swallowing means you lose the chance to attach context (the
+record's id, the error code) unless you do it yourself.
 
 ### React to schema hot-reloads
 

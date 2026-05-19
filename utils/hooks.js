@@ -35,6 +35,8 @@
  * subscribe to the record event bus from `utils/events.js` instead.
  */
 
+const logger = require('./logger');
+
 const HOOK_NAMES = [
   'beforeCreate',
   'afterCreate',
@@ -65,9 +67,10 @@ async function runBeforeHook(schema, name, ctx) {
 
 /**
  * Run an `after*` hook. Always best-effort: a thrown error is logged
- * to the supplied logger (or the default `console.error`) and never
- * propagates. Returning a value is meaningless — the persisted record
- * is whatever the route already wrote.
+ * via the supplied logger (or the framework's default pino logger
+ * when none is passed) and never propagates. Returning a value is
+ * meaningless — the persisted record is whatever the route already
+ * wrote.
  */
 async function runAfterHook(schema, name, ctx, log) {
   const fn = getHook(schema, name);
@@ -75,21 +78,15 @@ async function runAfterHook(schema, name, ctx, log) {
   try {
     await fn({ ...ctx, schema });
   } catch (err) {
-    const sink = log && typeof log.warn === 'function' ? log : null;
-    if (sink) {
-      sink.warn(
-        { err, hook: name, schema: schema && schema.path },
-        'after-hook threw; mutation already committed'
-      );
-    } else {
-      // No logger supplied — surface enough to find in operator logs
-      // without crashing.
-      // eslint-disable-next-line no-console
-      console.error(
-        `[davepi] ${name} hook on ${schema && schema.path} threw:`,
-        err
-      );
-    }
+    // Fall back to the framework logger when the caller didn't pass
+    // one — keeps redaction, transports, and silenced-in-test
+    // posture consistent with the rest of the codebase. `console.*`
+    // would bypass all of that.
+    const sink = log && typeof log.warn === 'function' ? log : logger;
+    sink.warn(
+      { err, hook: name, schema: schema && schema.path },
+      'after-hook threw; mutation already committed'
+    );
   }
 }
 
