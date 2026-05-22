@@ -1,0 +1,40 @@
+{
+  "name": "davepi-plugin-slack",
+  "version": "0.1.0",
+  "description": "Slack notifications for dAvePi. Subscribes to the in-process record event bus and posts a message to a Slack incoming webhook for every CRUD event whose type matches a configured pattern. Also exposes `postMessage` for ad-hoc use from schema lifecycle hooks.",
+  "license": "ISC",
+  "homepage": "https://docs.davepi.dev/features/plugins/",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/projik/davepi.git",
+    "directory": "packages/davepi-plugin-slack"
+  },
+  "keywords": [
+    "davepi",
+    "davepi-plugin",
+    "slack",
+    "notifications",
+    "webhook",
+    "events"
+  ],
+  "main": "index.js",
+  "files": [
+    "index.js",
+    "lib",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "peerDependencies": {
+    "davepi": ">=1.0.4"
+  },
+  "peerDependenciesMeta": {
+    "davepi": {
+      "optional": false
+    }
+  },
+  "scripts": {
+    "test": "node --test test/*.test.js"
+  }
+}
