@@ -371,7 +371,19 @@ app.use(require('./routes/files'));
 app.get('/api-docs/swagger.json', (req, res) => {
   res.status(200).json(apiSpec);
 });
-app.use('/api-docs', swaggerUI.serve, swaggerUI.setup(apiSpec));
+// swagger-ui-express snapshots the spec inside setup() — it embeds it
+// in the page HTML once and serves that HTML on every request. Since
+// schemas (and therefore `apiSpec.paths`) populate asynchronously via
+// `app.locals.ready`, a plain `setup(apiSpec)` would lock the UI to the
+// empty boot-time snapshot. Setting `req.swaggerDoc` per request makes
+// the middleware re-render against the live spec, which also keeps the
+// UI in sync after hot-reload mutations.
+app.use(
+  '/api-docs',
+  (req, res, next) => { req.swaggerDoc = apiSpec; next(); },
+  swaggerUI.serve,
+  swaggerUI.setup(),
+);
 
 // Model Context Protocol endpoint. Per-request stateless transport:
 // each call builds a fresh McpServer bound to the JWT user and a
