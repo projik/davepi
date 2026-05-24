@@ -390,6 +390,18 @@ test('my plugin subscribes to order.created', async () => {
 See [`test/plugins.test.js`](https://github.com/projik/davepi/blob/main/test/plugins.test.js)
 in the repo for a complete example.
 
+## First-party plugins
+
+| Package | What it does |
+|---------|--------------|
+| [`davepi-plugin-slack`](https://github.com/projik/davepi/tree/main/packages/davepi-plugin-slack) | Subscribes to the record event bus and posts a formatted message to a Slack incoming webhook for every CRUD event whose type matches a configured pattern. Also exposes `postMessage(text)` for ad-hoc use from `after*` hooks. |
+
+These ship as their own npm packages (not bundled into the
+framework) so versions move independently and you only install what
+you actually use. Each one is a working reference implementation of
+the contract above — if you're writing your own, the
+`packages/davepi-plugin-slack/` source is the shortest example.
+
 ## What plugins do NOT do
 
 - **They don't gate schema loading.** A plugin can't reject a schema or rewrite it. If you need that, intercept at the schema-file level — plugins run after the registry is built.
