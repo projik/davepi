@@ -18,6 +18,11 @@ async function post(fetchImpl, url, body, { timeoutMs = 10000 } = {}) {
   }
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
+  // Don't pin the event loop alive: if the fetch resolves quickly the
+  // clearTimeout below handles it, but if a test (or short-running
+  // script) exits before then, an un-`unref`'d handle would keep the
+  // process up for the full timeout. Mirrors utils/webhookDispatcher.
+  if (timer && typeof timer.unref === 'function') timer.unref();
   let response;
   try {
     response = await fetchImpl(url, {

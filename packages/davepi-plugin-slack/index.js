@@ -121,13 +121,17 @@ function createPlugin(opts = {}) {
         '(SLACK_WEBHOOK_URL not set or setup not run yet)'
       );
     }
-    const body = { text, ...extras };
+    // Spreading `null` throws; callers occasionally pass it. Coerce
+    // anything non-object to an empty bag so the typo doesn't take
+    // down a request handler.
+    const safeExtras = (extras && typeof extras === 'object') ? extras : {};
+    const body = { text, ...safeExtras };
     if (state.username && !body.username) body.username = state.username;
     if (state.iconEmoji && !body.icon_emoji) body.icon_emoji = state.iconEmoji;
     return post(fetchImpl, state.url, body, { timeoutMs });
   }
 
-  async function setup({ bus, log, appName }) {
+  async function setup({ app, schemaLoader, bus, log, appName }) {
     if (!config.webhookUrl) {
       // Don't crash — operators may not have configured Slack yet,
       // and a missing env var shouldn't fail boot. Dormant mode

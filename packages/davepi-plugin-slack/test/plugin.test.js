@@ -347,6 +347,26 @@ test('postMessage accepts extras (e.g. blocks) and merges them into the body', a
   assert.deepEqual(fetch.calls[0].body.blocks, blocks);
 });
 
+test('postMessage tolerates null / non-object extras without crashing', async () => {
+  const fetch = recordingFetch();
+  const plugin = createPlugin({
+    env: { SLACK_WEBHOOK_URL: WEBHOOK },
+    fetch,
+  });
+  await plugin.setup({ bus: new EventEmitter(), log: silentLog(), appName: 'shop' });
+
+  // `{ ...null }` throws TypeError in strict mode; the plugin must
+  // not. Same posture for accidental string / number arguments.
+  await plugin.postMessage('one', null);
+  await plugin.postMessage('two', 'oops');
+  await plugin.postMessage('three', 42);
+
+  assert.equal(fetch.calls.length, 3);
+  assert.equal(fetch.calls[0].body.text, 'one');
+  assert.equal(fetch.calls[1].body.text, 'two');
+  assert.equal(fetch.calls[2].body.text, 'three');
+});
+
 test('defaultFormatter handles a record event with no recordId and no numAffected', () => {
   const out = defaultFormatter({ type: 'webhook.test' }, { appName: 'shop' });
   assert.match(out, /\*shop\*/);
