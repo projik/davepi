@@ -150,6 +150,39 @@ describe('CORS middleware', () => {
     expect(res.status).toBe(200);
   });
 
+  test('Apollo Studio Sandbox is allowed in dev (Playground works out of the box)', async () => {
+    // Apollo Server v3's playground=true redirects to studio.apollographql.com,
+    // which then XHRs the local /graphql endpoint. Allow it when we serve
+    // the Playground (i.e. outside production).
+    const prev = process.env.NODE_ENV;
+    process.env.NODE_ENV = 'development';
+    try {
+      const app = buildAppWithCors('http://localhost:3000');
+      const res = await supertest(app)
+        .get('/ping')
+        .set('Origin', 'https://studio.apollographql.com');
+      expect(res.status).toBe(200);
+      expect(res.headers['access-control-allow-origin']).toBe('https://studio.apollographql.com');
+    } finally {
+      process.env.NODE_ENV = prev;
+    }
+  });
+
+  test('Apollo Studio Sandbox is NOT allowed in production', async () => {
+    const prev = process.env.NODE_ENV;
+    process.env.NODE_ENV = 'production';
+    try {
+      const app = buildAppWithCors('http://localhost:3000');
+      const res = await supertest(app)
+        .get('/ping')
+        .set('Origin', 'https://studio.apollographql.com');
+      expect(res.status).toBe(403);
+      expect(res.body.error.code).toBe('CORS_NOT_ALLOWED');
+    } finally {
+      process.env.NODE_ENV = prev;
+    }
+  });
+
   test('unset CORS_ORIGINS falls back to http://localhost:3000', async () => {
     const app = buildAppWithCors('');
     const ok = await supertest(app)
