@@ -162,20 +162,183 @@ Both transports respond to schema changes live:
 
 See [Hot reload](/concepts/hot-reload/) for the underlying mechanism.
 
-## Worked example
+## Worked examples (CRM template)
 
-Once wired, an agent can plan against the API directly:
+The examples below assume a project scaffolded from the CRM starter
+(`npx create-davepi-app my-crm --template crm`). That template ships
+four resources — `account`, `contact`, `deal`, `activity` — plus two
+aggregations on `deal` (`pipelineByStage`, `wonByMonth`) and a
+state-machine `stage` field on `deal`. The scaffolder drops a working
+`.mcp.json` at the project root, so opening the directory in Claude
+Code lights up the full tool surface listed above.
 
-> "Create an account named 'Acme', then add a contact 'Jane' tied to it, then list contacts."
+These transcripts elide the agent's natural-language reasoning and
+show only the tool calls the model issues — that's the part you can
+reproduce verbatim against any CRM-template install.
 
-Behind the scenes, the model calls:
+### 1. Onboard a new account end-to-end
 
-1. `create_account({ record: { accountName: "Acme" } })` → `{ _id: "abc" }`
-2. `create_contact({ record: { name: "Jane", accountId: "abc" } })` → `{ _id: "xyz" }`
-3. `list_contact({ filter: { accountId: "abc" } })` → `{ results: [...], totalResults: 1 }`
+> "Add Acme Inc as a new account (manufacturing, ~250 employees), put
+> Jane Doe down as the primary contact at jane@acme.com, and open a
+> $50k Q1 expansion deal against it."
 
-— all under the JWT user's tenant scope, with ACL projection and
-soft-delete filtering applied automatically.
+```jsonc
+// 1. Create the account
+create_account({
+  record: { name: "Acme Inc", industry: "manufacturing", employees: 250 }
+})
+// → { _id: "acc_01H...", name: "Acme Inc", ... }
+
+// 2. Primary contact, joined via parentAccountId
+create_contact({
+  record: {
+    parentAccountId: "acc_01H...",
+    firstName: "Jane",
+    lastName:  "Doe",
+    email:     "jane@acme.com",
+    isPrimary: true
+  }
+})
+// → { _id: "con_01H...", fullName: "Jane Doe", ... }
+
+// 3. Deal — stage stamped "lead" by the state machine's initial state
+create_deal({
+  record: {
+    parentAccountId: "acc_01H...",
+    title:  "Q1 expansion",
+    amount: 50000
+  }
+})
+// → { _id: "dl_01H...", stage: "lead", availableTransitions: ["qualified", "lost"], ... }
+```
+
+Note the `availableTransitions` array on the deal response — the
+state machine surfaces the legal next moves on every read, so the
+agent doesn't have to memorise the diagram in `deal.js`.
+
+### 2. Move a deal through the pipeline
+
+> "Acme's Q1 deal had a good demo. Move it to proposal and log a
+> meeting note against it."
+
+```jsonc
+// 1. Find the deal by name
+search_deal({ q: "Q1 expansion" })
+// → { results: [{ _id: "dl_01H...", stage: "lead", ... }], totalResults: 1 }
+
+// 2. State-machine transition: lead → qualified
+update_deal({ id: "dl_01H...", record: { stage: "qualified" } })
+
+// 3. Then qualified → proposal
+update_deal({ id: "dl_01H...", record: { stage: "proposal" } })
+
+// 4. Log the activity
+create_activity({
+  record: {
+    type:    "meeting",
+    subject: "Acme demo — Q1 expansion",
+    body:    "Walked through pricing. Send proposal Friday.",
+    dealId:  "dl_01H..."
+  }
+})
+```
+
+If the agent skips a step and tries `lead → won`, the tool returns
+`isError: true` with `code: "INVALID_TRANSITION"` and
+`recoverable: true` — the model can read `availableTransitions` from
+a fresh `get_deal` and retry along a legal path.
+
+### 3. Build a weekly status answer with one aggregation call
+
+> "Show me the current pipeline by stage, and how much we closed-won
+> in the last three months."
+
+```jsonc
+aggregate_deal_pipelineByStage({})
+// → [
+//     { _id: "proposal",    total: 320000, count: 4 },
+//     { _id: "qualified",   total: 175000, count: 6 },
+//     { _id: "negotiation", total: 110000, count: 2 },
+//     ...
+//   ]
+
+aggregate_deal_wonByMonth({})
+// → [
+//     { _id: { year: 2026, month: 3 }, total: 180000, count: 3 },
+//     { _id: { year: 2026, month: 4 }, total: 240000, count: 5 },
+//     { _id: { year: 2026, month: 5 }, total:  90000, count: 1 }
+//   ]
+```
+
+The framework prepends `$match: { userId }` to both pipelines, so the
+numbers are scoped to the JWT holder automatically — the agent never
+has to thread a tenant filter through.
+
+### 4. Pull a full account view with relations populated
+
+> "Give me everything we know about Acme — contacts, open deals, and
+> the last few activities."
+
+```jsonc
+get_account({ id: "acc_01H...", include: ["contacts", "deals", "primaryContact"] })
+// → {
+//     _id: "acc_01H...", name: "Acme Inc",
+//     primaryContact: { _id: "con_01H...", fullName: "Jane Doe", ... },
+//     contacts: [ ... ],
+//     deals:    [ { _id: "dl_01H...", title: "Q1 expansion", stage: "proposal", ... } ]
+//   }
+
+list_activity({
+  filter: { dealId: "dl_01H..." },
+  sort:   "-occurredAt",
+  limit:  5
+})
+```
+
+One `get_account` call returns the joined object graph because the
+CRM schemas declare `contacts: hasMany`, `deals: hasMany`, and
+`primaryContact: hasOne` — the relation tool surface matches the
+shape an agent would naturally ask for.
+
+### 5. Audit who changed what
+
+> "Who moved the Acme deal to negotiation, and when?"
+
+```jsonc
+history_deal({ id: "dl_01H..." })
+// → [
+//     { action: "update", at: "2026-05-22T14:08:11Z", by: "usr_...",
+//       diff: { stage: { from: "proposal", to: "negotiation" } } },
+//     { action: "update", at: "2026-05-19T09:21:02Z", by: "usr_...",
+//       diff: { stage: { from: "qualified", to: "proposal" } } },
+//     { action: "create", at: "2026-05-12T17:44:00Z", by: "usr_...", ... }
+//   ]
+```
+
+`history_<path>` is available on every schema with `audit` enabled
+(the default), and field-level read-ACL is applied to the
+before/after payloads — a `viewer` role won't see diffs of fields
+they can't read live.
+
+### 6. Soft-delete and recover
+
+> "I accidentally deleted that meeting note — bring it back."
+
+```jsonc
+list_activity({ q: "Acme demo", includeDeleted: true })
+// → { results: [{ _id: "act_01H...", deletedAt: "2026-05-23T...", ... }], ... }
+
+restore_activity({ id: "act_01H..." })
+// → { _id: "act_01H...", deletedAt: null, ... }
+```
+
+`delete_activity` is a soft-delete by default; `restore_activity` is
+generated automatically and clears the tombstone.
+
+All six transcripts run under the JWT user's tenant scope, with ACL
+projection and soft-delete filtering applied by the same code that
+backs the REST and GraphQL surfaces — the agent never sees another
+tenant's rows, and never needs to learn a second authorization model.
 
 ## See also
 
