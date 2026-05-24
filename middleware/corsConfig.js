@@ -82,6 +82,14 @@ const isSameOrigin = (req) => {
   );
 };
 
+// Apollo Server v3 with `playground: true` (enabled outside production)
+// redirects the browser to https://studio.apollographql.com/sandbox,
+// which then issues XHRs back to the local /graphql endpoint. Without
+// this origin on the allowlist the Sandbox shows "Unable to reach
+// server". Scoped to non-production because production never serves
+// the Playground in the first place.
+const APOLLO_STUDIO_ORIGIN = 'https://studio.apollographql.com';
+
 const buildCorsMiddleware = (raw = process.env.CORS_ORIGINS) => {
   const allowedOrigins = parseOrigins(raw);
   const allowAll = allowedOrigins.includes('*');
@@ -91,6 +99,14 @@ const buildCorsMiddleware = (raw = process.env.CORS_ORIGINS) => {
       'CORS_ORIGINS is unset; defaulting to http://localhost:3000. Set CORS_ORIGINS to a comma-separated allowlist for production.'
     );
     allowedOrigins.push('http://localhost:3000');
+  }
+
+  if (
+    process.env.NODE_ENV !== 'production' &&
+    !allowAll &&
+    !allowedOrigins.includes(APOLLO_STUDIO_ORIGIN)
+  ) {
+    allowedOrigins.push(APOLLO_STUDIO_ORIGIN);
   }
 
   const allowlistCors = cors({
