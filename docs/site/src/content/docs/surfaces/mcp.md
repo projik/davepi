@@ -370,9 +370,12 @@ create_activity({
 ```
 
 If the agent skips a step and tries `lead → won`, the tool returns
-`isError: true` with `code: "INVALID_TRANSITION"` and
-`recoverable: true` — the model can read `availableTransitions` from
-a fresh `get_deal` and retry along a legal path.
+`isError: true` with payload
+`{ error: { code: "INVALID_TRANSITION", message: "..." } }` — note
+that `recoverable: true` only flags `VALIDATION` and `INVALID_ID`
+(the call-shape errors), so the model treats `INVALID_TRANSITION`
+as a state problem: re-read the deal via `get_deal`, check
+`availableTransitions`, and retry along a legal path.
 
 ### 3. Build a weekly status answer with one aggregation call
 
@@ -415,9 +418,10 @@ get_account({ id: "acc_01H...", include: ["contacts", "deals", "primaryContact"]
 //   }
 
 list_activity({
-  filter: { dealId: "dl_01H..." },
-  sort:   "-occurredAt",
-  limit:  5
+  filter:  { dealId: "dl_01H..." },
+  sort:    "occurredAt:desc",
+  page:    1,
+  perPage: 5
 })
 ```
 
@@ -431,14 +435,19 @@ shape an agent would naturally ask for.
 > "Who moved the Acme deal to negotiation, and when?"
 
 ```jsonc
-history_deal({ id: "dl_01H..." })
-// → [
-//     { action: "update", at: "2026-05-22T14:08:11Z", by: "usr_...",
-//       diff: { stage: { from: "proposal", to: "negotiation" } } },
-//     { action: "update", at: "2026-05-19T09:21:02Z", by: "usr_...",
-//       diff: { stage: { from: "qualified", to: "proposal" } } },
-//     { action: "create", at: "2026-05-12T17:44:00Z", by: "usr_...", ... }
-//   ]
+history_deal({ id: "dl_01H...", page: 1, perPage: 20 })
+// → {
+//     results: [
+//       { action: "update", at: "2026-05-22T14:08:11Z", by: "usr_...",
+//         diff: { stage: { from: "proposal", to: "negotiation" } } },
+//       { action: "update", at: "2026-05-19T09:21:02Z", by: "usr_...",
+//         diff: { stage: { from: "qualified", to: "proposal" } } },
+//       { action: "create", at: "2026-05-12T17:44:00Z", by: "usr_...", ... }
+//     ],
+//     totalResults: 3,
+//     page: 1,
+//     perPage: 20
+//   }
 ```
 
 `history_<path>` is available on every schema with `audit` enabled
@@ -455,6 +464,9 @@ list_activity({ q: "Acme demo", includeDeleted: true })
 // → { results: [{ _id: "act_01H...", deletedAt: "2026-05-23T...", ... }], ... }
 
 restore_activity({ id: "act_01H..." })
+// → { acknowledged: true, restored: true, _id: "act_01H..." }
+
+get_activity({ id: "act_01H..." })
 // → { _id: "act_01H...", deletedAt: null, ... }
 ```
 
