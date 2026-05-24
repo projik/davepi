@@ -137,6 +137,132 @@ pre-wired with `@davepi/mcp` in every generated project — the
 easiest path to a working setup is to scaffold a template and open
 it in Claude Code.
 
+## Embedding in your own chatbot
+
+The desktop/IDE wiring above is the right answer when a human is
+driving Claude Code or Claude Desktop. If you're building your own
+**hosted AI chatbot** — a web app, Slack bot, customer-facing
+assistant — you want to talk to `/mcp` server-to-server instead.
+There are three shapes, in order of how much glue you'll write.
+
+### The auth model, before the code
+
+Whichever path you pick, the JWT **is** the tenant identity. Every
+tool call runs under the `user_id` in the token, and dAvePi's
+generated routes scope by that field on every read and write. That
+means:
+
+- **Never** share a single JWT across chat sessions. If two users
+  share a token, they share a tenant — they'll see each other's
+  rows.
+- For each chat session, mint a short-lived JWT for the logged-in
+  user (same `jsonwebtoken.sign` recipe as the stdio token below,
+  but `expiresIn: "1h"` or shorter) and refresh it server-side as
+  needed. Hand that token to whichever path you choose.
+- If your chatbot's end-users aren't dAvePi users at all (e.g. an
+  internal assistant operating as a service account), provision one
+  dAvePi user per service identity and mint tokens for it — don't
+  invent a non-user token shape.
+
+### Path 1 — Anthropic's native MCP connector (recommended)
+
+The Messages API accepts an `mcp_servers` array. You hand Anthropic
+the `/mcp` URL plus the session's JWT and Claude executes tools
+server-side. Your backend stays "send message, get reply" — tool
+discovery, calls, retries, and result handling all happen inside
+the Anthropic call.
+
+```js
+import Anthropic from "@anthropic-ai/sdk";
+const anthropic = new Anthropic();
+
+async function chat(userMessage, session) {
+  return anthropic.messages.create({
+    model: "claude-opus-4-7",
+    max_tokens: 1024,
+    messages: [{ role: "user", content: userMessage }],
+    mcp_servers: [{
+      type: "url",
+      url:  "https://api.example.com/mcp",
+      name: "davepi",
+      authorization_token: session.davepiJwt, // per-user
+    }],
+  });
+}
+```
+
+OpenAI's Responses API has an equivalent
+(`tools: [{ type: "mcp", server_url, headers: { Authorization } }]`),
+and so do most agent frameworks shipping in 2026. Use this path if
+your model provider supports it — it's the least code and you
+inherit their tool-call telemetry for free.
+
+### Path 2 — Run an MCP client in your own backend
+
+Use the official `@modelcontextprotocol/sdk` Streamable HTTP client
+to list tools once per session and forward calls to whatever LLM
+you're using. This is the path when:
+
+- You need to log, filter, or rate-limit individual tool calls.
+- You want to mix dAvePi tools with your own non-MCP functions.
+- Your model API doesn't speak MCP natively.
+
+```js
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+
+async function buildToolBridge(session) {
+  const transport = new StreamableHTTPClientTransport(
+    new URL("https://api.example.com/mcp"),
+    { requestInit: { headers: { Authorization: `Bearer ${session.davepiJwt}` } } },
+  );
+  const client = new Client({ name: "my-chatbot", version: "1.0.0" });
+  await client.connect(transport);
+
+  const { tools } = await client.listTools();   // advertise to your LLM
+  const call = (name, args) => client.callTool({ name, arguments: args });
+
+  return { tools, call };
+}
+```
+
+Your tool-calling loop then advertises `tools` to the model and
+routes any function-call back through `call(name, args)`. The MCP
+server emits `notifications/tools/list_changed` when the schema
+hot-reloads, so you can refresh the advertised list mid-session.
+
+### Path 3 — Skip MCP, call REST directly
+
+You already have the user's JWT — you can advertise the REST
+endpoints as plain function-call tools to any LLM and bypass the
+protocol entirely. This is the simplest path if you already have a
+tool-calling loop wired up, and is sometimes the right answer for
+small, fixed tool surfaces. You give up:
+
+- Automatic tool-list refresh on schema change (you'll restart the
+  bot or rebuild the list manually).
+- The typed `{ code, message, recoverable, auth }` error envelope —
+  REST returns the same shape but inside an HTTP body that your
+  loop has to parse.
+- Per-tool descriptions from the schema-derived JSON Schemas — you
+  write the function specs yourself.
+
+For anything beyond a handful of endpoints, Path 1 or Path 2 pays
+for itself within a release or two.
+
+### Deployment notes
+
+- `/mcp` is **stateless** — every `POST` builds a fresh server from
+  the current registry — so it scales horizontally behind a load
+  balancer with no sticky sessions required.
+- The CORS allowlist (`CORS_ORIGINS`) does **not** apply to
+  server-to-server calls from your chatbot backend; it only matters
+  if a browser is hitting `/mcp` directly (rare — usually a
+  mistake).
+- The `apiLimiter` middleware runs on `/api/*` only, not `/mcp`.
+  Put your own per-tenant rate limiting in front of `/mcp` if your
+  chatbot may issue bursty tool sequences.
+
 ## Issuing a long-lived token for stdio
 
 ```bash
