@@ -110,8 +110,12 @@ jobs:
           fi
           git commit -m "Release $PKG@$VERSION"
           git tag "$PKG@$VERSION"
-          git push origin main
-          git push origin "$PKG@$VERSION"
+          # Atomic push so main and the tag update together or not at
+          # all. Without --atomic, a failure on the tag push (tag
+          # protection, transient error) would leave the bump commit on
+          # main with no tag — the publish workflow only triggers on
+          # tag pushes, so the release would silently stall.
+          git push --atomic origin main "$PKG@$VERSION"
           echo "Pushed $PKG@$VERSION — publish workflow will run on the tag push."
 
       - name: Summary
