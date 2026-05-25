@@ -1,0 +1,40 @@
+{
+  "name": "davepi-plugin-postmark",
+  "version": "0.1.0",
+  "description": "Transactional email for dAvePi via Postmark. Exposes sendEmail / sendTemplate for use in schema lifecycle hooks, and can subscribe to the in-process record event bus so a configured event pattern auto-sends a templated message.",
+  "license": "ISC",
+  "homepage": "https://docs.davepi.dev/features/plugins/",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/projik/davepi.git",
+    "directory": "packages/davepi-plugin-postmark"
+  },
+  "keywords": [
+    "davepi",
+    "davepi-plugin",
+    "postmark",
+    "email",
+    "transactional",
+    "smtp"
+  ],
+  "main": "index.js",
+  "files": [
+    "index.js",
+    "lib",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "peerDependencies": {
+    "davepi": ">=1.0.4"
+  },
+  "peerDependenciesMeta": {
+    "davepi": {
+      "optional": false
+    }
+  },
+  "scripts": {
+    "test": "node --test test/*.test.js"
+  }
+}
