@@ -48,6 +48,12 @@ jobs:
           fi
           echo "Publishing davepi-plugin-audit@$pkg_version"
 
+      - name: Install package dependencies
+        # fast-json-patch is a runtime dep (the RFC 6902 diff
+        # implementation). The slack/postmark publish workflows skip
+        # this step because those packages are zero-dep; audit can't.
+        run: npm install --no-audit --no-fund
+
       - name: Run package tests before publish
         run: npm test
 
