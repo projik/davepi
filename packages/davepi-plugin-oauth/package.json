@@ -1,0 +1,46 @@
+{
+  "name": "davepi-plugin-oauth",
+  "version": "0.1.0",
+  "description": "Social login for dAvePi (Google, GitHub, Microsoft, Apple, Discord). Mounts /auth/{provider} + /auth/{provider}/callback routes, handles the OAuth2 / OIDC dance with state-HMAC CSRF defence and PKCE where supported, upserts the local User, and issues the framework's standard JWT.",
+  "license": "ISC",
+  "homepage": "https://docs.davepi.dev/features/plugins/",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/projik/davepi.git",
+    "directory": "packages/davepi-plugin-oauth"
+  },
+  "keywords": [
+    "davepi",
+    "davepi-plugin",
+    "oauth",
+    "oauth2",
+    "oidc",
+    "auth",
+    "social-login",
+    "google",
+    "github",
+    "microsoft",
+    "apple",
+    "discord"
+  ],
+  "main": "index.js",
+  "files": [
+    "index.js",
+    "lib",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "peerDependencies": {
+    "davepi": ">=1.0.4"
+  },
+  "peerDependenciesMeta": {
+    "davepi": {
+      "optional": false
+    }
+  },
+  "scripts": {
+    "test": "node --test test/*.test.js"
+  }
+}
