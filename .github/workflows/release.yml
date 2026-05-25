@@ -45,6 +45,16 @@ on:
 permissions:
   contents: write
 
+# Serialize ALL release runs — not just per-package — because every run
+# pushes a commit to `main`, and two overlapping runs would race there
+# regardless of which packages they're bumping (the second would hit a
+# non-fast-forward and fail mid-release, leaving the lock files in an
+# odd state). cancel-in-progress: false so a queued run waits for the
+# first to finish instead of being thrown away.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
 jobs:
   release:
     runs-on: ubuntu-latest
