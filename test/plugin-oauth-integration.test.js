@@ -146,4 +146,41 @@ describe('davepi-plugin-oauth — end-to-end via pluginLoader', () => {
     // The plugin throws UnauthorizedError → errorHandler → 401.
     expect(res.status).toBe(401);
   });
+
+  test('POST callback parses application/x-www-form-urlencoded (Apple form_post)', async () => {
+    // We don't have Apple's signed-JWT machinery here, so we drive
+    // the parser-only path: the callback should receive a state we
+    // build and then fail in a way that proves it READ the state
+    // from the urlencoded body. If the parser weren't mounted, the
+    // call would 401 with "missing code" or similar — wrong code
+    // path; with the parser, it gets through to state verification.
+    const { sealState } = require(require('path').resolve(
+      __dirname, '..', 'packages', 'davepi-plugin-oauth', 'lib', 'state'
+    ));
+    const stateToken = sealState({ provider: 'google' }, { secret: 's'.repeat(32) });
+    const res = await ctx.request(ctx.app)
+      .post('/auth/google/callback')
+      .set('Content-Type', 'application/x-www-form-urlencoded')
+      .send(`code=APPLE-FAKE&state=${encodeURIComponent(stateToken)}`);
+    // We expect a successful parse-then-downstream flow. The
+    // downstream fetch mock returns Google's userinfo (see top of
+    // file), so this lands as a real login and 200s with tokens.
+    expect(res.status).toBe(200);
+    expect(res.body.accessToken).toBeTruthy();
+  }, 30000);
+
+  test('open-redirect defence: malicious returnTo never becomes the redirect destination', async () => {
+    // Drive /auth/google with a malicious returnTo and decrypt the
+    // resulting state to confirm the absolute URL was dropped.
+    const malicious = 'https://evil.example/steal';
+    const r = await ctx.request(ctx.app)
+      .get(`/auth/google?returnTo=${encodeURIComponent(malicious)}`);
+    expect(r.status).toBe(302);
+    const stateToken = new URL(r.headers.location).searchParams.get('state');
+    const { openState } = require(require('path').resolve(
+      __dirname, '..', 'packages', 'davepi-plugin-oauth', 'lib', 'state'
+    ));
+    const parsed = openState(stateToken, { secret: 's'.repeat(32) });
+    expect(parsed.returnTo).toBeNull();
+  });
 });

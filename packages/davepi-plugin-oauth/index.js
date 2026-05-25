@@ -35,7 +35,7 @@
 const path = require('path');
 
 const providersBuiltIn = require('./lib/providers');
-const { signState, verifyState } = require('./lib/state');
+const { sealState, openState, signState, verifyState } = require('./lib/state');
 const { generatePair } = require('./lib/pkce');
 const { findOrCreateUser, linkIdentityToUser } = require('./lib/link');
 const { getOAuthIdentityModel } = require('./lib/identity');
@@ -64,14 +64,91 @@ function joinUrl(base, p) {
   return `${base.replace(/\/+$/, '')}${p.startsWith('/') ? p : `/${p}`}`;
 }
 
-function appendTokenToRedirect(redirect, accessToken, refreshToken) {
+/**
+ * `returnTo` is a caller-supplied hint at /auth/{provider}?returnTo=...
+ * that travels in the (now encrypted) state and is appended to the
+ * success-redirect URL after the tokens, so the SPA at the
+ * success-redirect origin can route the user to the page they came
+ * from. Crucially, returnTo is NEVER used as the redirect destination
+ * itself — that would be an open-redirect-with-JWT exfiltration sink
+ * (an attacker initiates a real flow with `returnTo=https://evil/`,
+ * tricks a victim into clicking, tokens land on evil.example).
+ *
+ * This validator accepts ONLY safe relative paths: must start with
+ * `/`, must not be protocol-relative (`//foo` is rejected), must not
+ * contain `://`, must be ≤ 1024 chars. Anything else returns null —
+ * the caller should drop it silently.
+ */
+function safeReturnTo(value) {
+  if (typeof value !== 'string' || !value.length) return null;
+  if (value.length > 1024) return null;
+  if (!value.startsWith('/')) return null;
+  if (value.startsWith('//')) return null;
+  if (value.includes('://')) return null;
+  return value;
+}
+
+function appendTokenToRedirect(redirect, accessToken, refreshToken, returnTo) {
   // Two supported posters:
   //   - URL ending in `=` (e.g. `https://app/auth/success?token=`):
   //     just concatenate, so the value is URL-safe.
   //   - URL not ending in `=`: append as `?token=...` or `&token=...`.
-  if (redirect.endsWith('=')) return `${redirect}${encodeURIComponent(accessToken)}&refreshToken=${encodeURIComponent(refreshToken)}`;
-  const sep = redirect.includes('?') ? '&' : '?';
-  return `${redirect}${sep}token=${encodeURIComponent(accessToken)}&refreshToken=${encodeURIComponent(refreshToken)}`;
+  let out;
+  if (redirect.endsWith('=')) {
+    out = `${redirect}${encodeURIComponent(accessToken)}&refreshToken=${encodeURIComponent(refreshToken)}`;
+  } else {
+    const sep = redirect.includes('?') ? '&' : '?';
+    out = `${redirect}${sep}token=${encodeURIComponent(accessToken)}&refreshToken=${encodeURIComponent(refreshToken)}`;
+  }
+  if (returnTo) {
+    out += `&returnTo=${encodeURIComponent(returnTo)}`;
+  }
+  return out;
+}
+
+/**
+ * Plugin-local body parser for `application/x-www-form-urlencoded`.
+ * The framework's main app only mounts `express.json()`, so Apple's
+ * `response_mode=form_post` callbacks would otherwise arrive with an
+ * empty body. We avoid pulling `express` (peer-dep-only) by writing
+ * a tiny parser around Node's built-in `URLSearchParams`.
+ *
+ * Skip-on-already-parsed: a host app that mounts `express.urlencoded`
+ * globally is honoured — we don't double-parse.
+ *
+ * 1MB cap mirrors express's default urlencoded limit; oversized
+ * bodies are aborted with a 413 via `next(err)`.
+ */
+function parseUrlEncodedBody(req, res, next) {
+  if (req.method !== 'POST') return next();
+  if (req.body && Object.keys(req.body).length) return next();
+  const ct = String(req.headers['content-type'] || '').toLowerCase();
+  if (!ct.includes('application/x-www-form-urlencoded')) return next();
+  let data = '';
+  let aborted = false;
+  req.setEncoding('utf8');
+  req.on('data', (chunk) => {
+    if (aborted) return;
+    data += chunk;
+    if (data.length > 1_000_000) {
+      aborted = true;
+      const err = new Error('request entity too large');
+      err.status = 413;
+      next(err);
+    }
+  });
+  req.on('end', () => {
+    if (aborted) return;
+    try {
+      const body = {};
+      for (const [k, v] of new URLSearchParams(data)) body[k] = v;
+      req.body = body;
+      next();
+    } catch (err) {
+      next(err);
+    }
+  });
+  req.on('error', (err) => { if (!aborted) next(err); });
 }
 
 function pickProviders(env, providerSet) {
@@ -133,10 +210,14 @@ function createPlugin(opts = {}) {
     }
     const { adapter, config } = entry;
     const pair = adapter.supportsPkce ? generatePair() : null;
-    const stateToken = signState({
+    // `returnTo` is path-only — see safeReturnTo above. Defence in
+    // depth: even if a caller hands us junk programmatically, drop
+    // it here rather than at the route boundary alone.
+    const safeRT = safeReturnTo(returnTo);
+    const stateToken = sealState({
       provider: providerId,
       linkedUserId: linkedUserId || null,
-      returnTo: returnTo || null,
+      returnTo: safeRT,
       verifier: pair ? pair.verifier : null,
     }, { secret: globalCfg.stateSecret });
     const redirectUri = linkedUserId ? linkCallbackUrlFor(providerId) : callbackUrlFor(providerId);
@@ -160,7 +241,7 @@ function createPlugin(opts = {}) {
     }
     let parsed;
     try {
-      parsed = verifyState(stateToken, { secret: globalCfg.stateSecret });
+      parsed = openState(stateToken, { secret: globalCfg.stateSecret });
     } catch (err) {
       throw new state.errors.UnauthorizedError(`state verification failed: ${err.message}`);
     }
@@ -222,28 +303,41 @@ function createPlugin(opts = {}) {
     for (const id of Object.keys(state.providers)) {
       app.get(`/auth/${id}`, async (req, res, next) => {
         try {
-          const { url } = buildAuthorizeRedirect(id, { returnTo: req.query.returnTo || null });
+          // returnTo is sanitised at the route boundary AND inside
+          // buildAuthorizeRedirect — defence in depth. Junk values
+          // become null and are simply dropped.
+          const { url } = buildAuthorizeRedirect(id, {
+            returnTo: safeReturnTo(req.query && req.query.returnTo) || null,
+          });
           res.redirect(302, url);
         } catch (err) { next(err); }
       });
 
       // Apple sends the callback as POST form-urlencoded when
       // response_mode=form_post; the others as GET. Mount both
-      // verbs so the same handler covers both.
+      // verbs so the same handler covers both, and run the
+      // urlencoded parser on POSTs (the framework only mounts
+      // express.json() globally).
       const cbHandler = async (req, res, next) => {
         try {
           const params = req.method === 'POST' ? (req.body || {}) : (req.query || {});
           const code = params.code;
           const stateToken = params.state;
           if (params.error) {
-            return failureResponse(res, `${id} returned error: ${params.error}`);
+            return failureResponse(res, next, `${id} returned error: ${params.error}`);
           }
           const result = await handleCallback(id, { code, stateToken, extraParams: params });
           if (result.mode === 'login') {
             const { accessToken, refreshToken } = result.tokens;
-            const redirect = result.returnTo || globalCfg.successRedirect;
-            if (redirect) {
-              return res.redirect(302, appendTokenToRedirect(redirect, accessToken, refreshToken));
+            const rt = safeReturnTo(result.returnTo);
+            // The redirect destination is ALWAYS env-configured.
+            // result.returnTo (validated) is appended as a query
+            // param so the SPA at the success-redirect origin can
+            // route the user — but it never overrides the origin.
+            if (globalCfg.successRedirect) {
+              return res.redirect(302, appendTokenToRedirect(
+                globalCfg.successRedirect, accessToken, refreshToken, rt
+              ));
             }
             return res.status(200).json({
               accessToken,
@@ -251,6 +345,7 @@ function createPlugin(opts = {}) {
               user: serialiseUser(result.user),
               provider: id,
               created: result.created,
+              returnTo: rt,
             });
           }
           // link mode
@@ -265,7 +360,7 @@ function createPlugin(opts = {}) {
         }
       };
       app.get(`/auth/${id}/callback`, cbHandler);
-      app.post(`/auth/${id}/callback`, cbHandler);
+      app.post(`/auth/${id}/callback`, parseUrlEncodedBody, cbHandler);
 
       // Link flow: require an existing JWT, then re-enter the dance
       // with `linkedUserId` baked into the signed state. The
@@ -280,23 +375,29 @@ function createPlugin(opts = {}) {
             if (!userId) return next(new state.errors.UnauthorizedError('not authenticated'));
             const { url } = buildAuthorizeRedirect(id, {
               linkedUserId: String(userId),
-              returnTo: req.query.returnTo || null,
+              returnTo: safeReturnTo(req.query && req.query.returnTo) || null,
             });
             res.redirect(302, url);
           } catch (err) { next(err); }
         });
       });
       app.get(`/auth/${id}/link/callback`, cbHandler);
-      app.post(`/auth/${id}/link/callback`, cbHandler);
+      app.post(`/auth/${id}/link/callback`, parseUrlEncodedBody, cbHandler);
     }
   }
 
-  function failureResponse(res, message) {
+  // Provider-returned errors take one of two shapes: redirect the
+  // browser to the configured failure URL (a normal response, not
+  // an error), or — when no failure URL is configured — surface
+  // through the framework's centralised errorHandler via next(err)
+  // so the response shape matches every other 4xx the framework
+  // emits. No inline `res.status(400).json(...)`.
+  function failureResponse(res, next, message) {
     if (globalCfg.failureRedirect) {
       const sep = globalCfg.failureRedirect.includes('?') ? '&' : '?';
       return res.redirect(302, `${globalCfg.failureRedirect}${sep}error=${encodeURIComponent(message)}`);
     }
-    return res.status(400).json({ error: { code: 'oauth_failure', message } });
+    return next(new state.errors.ValidationError(message));
   }
 
   function serialiseUser(user) {

@@ -148,15 +148,40 @@ Unique index on `(provider, providerUserId)`.
 
 ## Security notes
 
-- The provider's access_token is **not** persisted by default. The
+- **State is authenticated-encrypted (AES-256-GCM), not just signed.**
+  The PKCE `code_verifier` travels in the state payload so the
+  callback can recover it without server-side session storage; an
+  HMAC-only state would leak the verifier to anyone observing the
+  authorize URL, defeating PKCE's interception-mitigation purpose.
+  The encryption key is derived from `OAUTH_STATE_SECRET` via
+  SHA-256.
+- **`returnTo` is path-only, never a destination.** When you pass
+  `/auth/{provider}?returnTo=...`, the value is validated as a safe
+  relative path (must start with `/`, must not be protocol-relative,
+  must not contain `://`). Validated paths travel through the
+  encrypted state and are appended to `OAUTH_SUCCESS_REDIRECT` as a
+  `returnTo` query param the SPA can consume. The browser's redirect
+  destination is **always** `OAUTH_SUCCESS_REDIRECT` — there is no
+  caller-supplied way to redirect somewhere else. This is the
+  open-redirect defence: an attacker can't initiate a real flow with
+  `returnTo=https://evil.example/...` to exfiltrate tokens.
+- **Provider error responses delegate to the framework's
+  `errorHandler`.** When the provider's callback URL carries
+  `?error=access_denied` (or similar) and `OAUTH_FAILURE_REDIRECT`
+  is unset, the plugin calls `next(new ValidationError(...))`
+  rather than `res.status(400).json(...)` so the response shape
+  matches every other 4xx the framework emits.
+- **The provider's access_token is not persisted by default.** The
   plugin only needs the profile to mint the framework's JWT.
-- `OAUTH_SUCCESS_REDIRECT` is read from env, not from a query
-  parameter, so it can't be used as an open redirect. To support
-  caller-supplied post-login URLs, carry them via the signed
-  `state.returnTo` (the plugin does this for you when you pass
-  `?returnTo=...` to `/auth/{provider}`).
-- PKCE is on by default for every provider that supports it, even
+- **PKCE on by default** for every provider that supports it, even
   with confidential clients (server-side secret).
+- **Apple form_post callbacks are parsed by a plugin-local
+  middleware.** The framework only mounts `express.json()`
+  globally; the plugin adds a tiny urlencoded parser in front of
+  the POST callback routes so Apple's `response_mode=form_post`
+  works out of the box. A host app that already mounts
+  `express.urlencoded()` globally is honoured (the parser is a
+  no-op when `req.body` is already populated).
 - The framework's `/api/v1/...` auth posture is unchanged: the JWT
   the plugin mints is identical to the one `/login` mints, so
   `verifyToken` accepts it without modification.

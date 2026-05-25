@@ -255,3 +255,235 @@ test('linking the SAME provider+sub twice is a no-op (idempotent)', async () => 
   await plugin.handleCallback('google', { code: 'C', stateToken: s });
   assert.equal(Identities.rows.length, 1);
 });
+
+// ---------------------------------------------------------------------
+// PR #121 review fixes — open-redirect, errorHandler delegation,
+// Apple form-post parser, and the PKCE-in-state confidentiality fix
+// (the state encryption itself is covered in state.test.js).
+// ---------------------------------------------------------------------
+
+test('returnTo: a malicious absolute URL is dropped (open-redirect defence)', async () => {
+  const { plugin } = makePluginWithGoogle({ fetch: async () => ({ ok: true, json: async () => ({}) }) });
+  await plugin.setup({ app: null, bus: new EventEmitter(), log: silentLog(), appName: 'demo' });
+  // Programmatic call is the second line of defence; we sanitise at
+  // route boundary AND inside buildAuthorizeRedirect.
+  const { url } = plugin.buildAuthorizeRedirect('google', { returnTo: 'https://evil.example/steal' });
+  const stateToken = new URL(url).searchParams.get('state');
+  const { openState } = require('../lib/state');
+  const parsed = openState(stateToken, { secret: SECRET });
+  assert.equal(parsed.returnTo, null, 'absolute-URL returnTo must not survive into state');
+});
+
+test('returnTo: a protocol-relative URL is dropped', async () => {
+  const { plugin } = makePluginWithGoogle({ fetch: async () => ({ ok: true, json: async () => ({}) }) });
+  await plugin.setup({ app: null, bus: new EventEmitter(), log: silentLog(), appName: 'demo' });
+  const { url } = plugin.buildAuthorizeRedirect('google', { returnTo: '//evil.example/foo' });
+  const stateToken = new URL(url).searchParams.get('state');
+  const { openState } = require('../lib/state');
+  const parsed = openState(stateToken, { secret: SECRET });
+  assert.equal(parsed.returnTo, null);
+});
+
+test('returnTo: a safe relative path survives the round-trip', async () => {
+  const { plugin } = makePluginWithGoogle({ fetch: async () => ({ ok: true, json: async () => ({}) }) });
+  await plugin.setup({ app: null, bus: new EventEmitter(), log: silentLog(), appName: 'demo' });
+  const { url } = plugin.buildAuthorizeRedirect('google', { returnTo: '/dashboard?tab=billing' });
+  const stateToken = new URL(url).searchParams.get('state');
+  const { openState } = require('../lib/state');
+  const parsed = openState(stateToken, { secret: SECRET });
+  assert.equal(parsed.returnTo, '/dashboard?tab=billing');
+});
+
+test('safeReturnTo rejects values containing :// even mid-string', () => {
+  // The exported sanitiser via the module is internal; re-implement
+  // the same predicate against the module's behaviour through
+  // buildAuthorizeRedirect.
+  const cases = [
+    '/foo://bar',          // contains :// — rejected
+    '/x' + 'a'.repeat(2000), // too long — rejected
+    'no-leading-slash',    // doesn't start with / — rejected
+    '',                    // empty — rejected
+  ];
+  // Each input that fails the predicate yields a state with
+  // returnTo === null.
+  const { plugin } = makePluginWithGoogle({ fetch: async () => ({ ok: true, json: async () => ({}) }) });
+  return plugin.setup({ app: null, bus: new EventEmitter(), log: silentLog(), appName: 'demo' }).then(() => {
+    const { openState } = require('../lib/state');
+    for (const rt of cases) {
+      const { url } = plugin.buildAuthorizeRedirect('google', { returnTo: rt });
+      const stateToken = new URL(url).searchParams.get('state');
+      const parsed = openState(stateToken, { secret: SECRET });
+      assert.equal(parsed.returnTo, null, `expected ${JSON.stringify(rt)} to be dropped`);
+    }
+  });
+});
+
+test('mountRoutes: GET /auth/google sanitises returnTo from req.query', async () => {
+  const routes = {};
+  const fakeApp = {
+    get: (p, ...handlers) => { routes[`GET ${p}`] = handlers[handlers.length - 1]; },
+    post: (p, ...handlers) => { routes[`POST ${p}`] = handlers[handlers.length - 1]; },
+  };
+  const { plugin } = makePluginWithGoogle({ fetch: async () => ({ ok: true, json: async () => ({}) }) });
+  await plugin.setup({ app: fakeApp, bus: new EventEmitter(), log: silentLog(), appName: 'demo' });
+  const handler = routes['GET /auth/google'];
+  assert.equal(typeof handler, 'function');
+
+  // Drive the route with a malicious returnTo and assert the
+  // resulting state has returnTo === null.
+  let redirected;
+  await handler(
+    { query: { returnTo: 'https://evil.example/steal' } },
+    { redirect: (status, loc) => { redirected = { status, loc }; } },
+    (err) => { throw err; }
+  );
+  assert.equal(redirected.status, 302);
+  const stateToken = new URL(redirected.loc).searchParams.get('state');
+  const { openState } = require('../lib/state');
+  assert.equal(openState(stateToken, { secret: SECRET }).returnTo, null);
+});
+
+test('callback (no successRedirect): provider error path calls next(err) (errorHandler delegation, not inline 400)', async () => {
+  const routes = {};
+  const fakeApp = {
+    get: (p, ...h) => { routes[`GET ${p}`] = h[h.length - 1]; },
+    post: (p, ...h) => { routes[`POST ${p}`] = h[h.length - 1]; },
+  };
+  const { plugin } = makePluginWithGoogle({
+    fetch: async () => ({ ok: true, json: async () => ({}) }),
+    env: { OAUTH_SUCCESS_REDIRECT: '' }, // force the no-redirect branch
+  });
+  await plugin.setup({ app: fakeApp, bus: new EventEmitter(), log: silentLog(), appName: 'demo' });
+  const cb = routes['GET /auth/google/callback'];
+  let nextErr = null;
+  let resWrote = false;
+  await cb(
+    { method: 'GET', query: { error: 'access_denied' } },
+    { status: () => ({ json: () => { resWrote = true; } }), redirect: () => { resWrote = true; } },
+    (err) => { nextErr = err; }
+  );
+  assert.equal(resWrote, false, 'no inline response was written');
+  assert.ok(nextErr, 'next(err) was called');
+  assert.equal(nextErr.name, 'ValidationError');
+  assert.match(nextErr.message, /access_denied/);
+});
+
+test('callback (with failureRedirect): provider error redirects 302, no next(err)', async () => {
+  const routes = {};
+  const fakeApp = {
+    get: (p, ...h) => { routes[`GET ${p}`] = h[h.length - 1]; },
+    post: (p, ...h) => { routes[`POST ${p}`] = h[h.length - 1]; },
+  };
+  const { plugin } = makePluginWithGoogle({
+    fetch: async () => ({ ok: true, json: async () => ({}) }),
+    env: { OAUTH_FAILURE_REDIRECT: 'https://app.example.com/login?failed=1' },
+  });
+  await plugin.setup({ app: fakeApp, bus: new EventEmitter(), log: silentLog(), appName: 'demo' });
+  const cb = routes['GET /auth/google/callback'];
+  let redirected = null;
+  let nextCalled = false;
+  await cb(
+    { method: 'GET', query: { error: 'access_denied' } },
+    { redirect: (status, loc) => { redirected = { status, loc }; } },
+    (_err) => { nextCalled = true; }
+  );
+  assert.equal(nextCalled, false);
+  assert.equal(redirected.status, 302);
+  assert.match(redirected.loc, /https:\/\/app\.example\.com\/login\?failed=1&error=/);
+});
+
+test('login redirect appends safe returnTo as a query param to OAUTH_SUCCESS_REDIRECT (never as the destination)', async () => {
+  const routes = {};
+  const fakeApp = {
+    get: (p, ...h) => { routes[`GET ${p}`] = h[h.length - 1]; },
+    post: (p, ...h) => { routes[`POST ${p}`] = h[h.length - 1]; },
+  };
+  const fetch = async (url) => {
+    if (url === 'https://oauth2.googleapis.com/token') {
+      return { ok: true, json: async () => ({ access_token: 'AT' }) };
+    }
+    if (url === 'https://openidconnect.googleapis.com/v1/userinfo') {
+      return { ok: true, json: async () => ({ sub: 'X', email: 'r@x.com' }) };
+    }
+  };
+  const { plugin } = makePluginWithGoogle({ fetch });
+  await plugin.setup({ app: fakeApp, bus: new EventEmitter(), log: silentLog(), appName: 'demo' });
+  const stateToken = signState(
+    { provider: 'google', returnTo: '/dashboard?tab=bills' },
+    { secret: SECRET }
+  );
+  let redirected;
+  const cb = routes['GET /auth/google/callback'];
+  await cb(
+    { method: 'GET', query: { code: 'C', state: stateToken } },
+    { redirect: (status, loc) => { redirected = { status, loc }; }, status: () => ({ json: () => {} }) },
+    (err) => { throw err; }
+  );
+  assert.equal(redirected.status, 302);
+  // Destination is ALWAYS the env-configured success origin.
+  assert.match(redirected.loc, /^https:\/\/app\.example\.com\/auth\/success\?token=/);
+  // returnTo is a query param the SPA can read.
+  assert.match(redirected.loc, /&returnTo=%2Fdashboard%3Ftab%3Dbills/);
+});
+
+test('Apple form-post POST callback: urlencoded body parser fills req.body', async () => {
+  const routes = {};
+  const middlewares = {};
+  const fakeApp = {
+    get: (p, ...h) => { routes[`GET ${p}`] = h; },
+    post: (p, ...h) => {
+      routes[`POST ${p}`] = h[h.length - 1];
+      middlewares[`POST ${p}`] = h.slice(0, -1);
+    },
+  };
+  const { plugin } = makePluginWithGoogle({ fetch: async () => ({ ok: true, json: async () => ({}) }) });
+  await plugin.setup({ app: fakeApp, bus: new EventEmitter(), log: silentLog(), appName: 'demo' });
+
+  // The POST callback should have at least one middleware (the
+  // urlencoded parser) in front of the handler.
+  assert.ok(middlewares['POST /auth/google/callback'].length >= 1);
+  const parser = middlewares['POST /auth/google/callback'][0];
+
+  // Drive a synthetic form-post: an EventEmitter-shaped req with
+  // urlencoded body and Content-Type set. parser should populate
+  // req.body.
+  const req = new EventEmitter();
+  req.method = 'POST';
+  req.headers = { 'content-type': 'application/x-www-form-urlencoded' };
+  req.setEncoding = () => {};
+  const done = new Promise((resolve, reject) => {
+    parser(req, {}, (err) => err ? reject(err) : resolve());
+  });
+  // Drain after the listeners are attached.
+  setImmediate(() => {
+    req.emit('data', 'code=AAA&state=BBB');
+    req.emit('end');
+  });
+  await done;
+  assert.deepEqual(req.body, { code: 'AAA', state: 'BBB' });
+});
+
+test('urlencoded parser: skips when content-type is JSON (host parser handles it)', async () => {
+  const routes = {};
+  const middlewares = {};
+  const fakeApp = {
+    get: () => {},
+    post: (p, ...h) => {
+      routes[`POST ${p}`] = h[h.length - 1];
+      middlewares[`POST ${p}`] = h.slice(0, -1);
+    },
+  };
+  const { plugin } = makePluginWithGoogle({ fetch: async () => ({ ok: true, json: async () => ({}) }) });
+  await plugin.setup({ app: fakeApp, bus: new EventEmitter(), log: silentLog(), appName: 'demo' });
+  const parser = middlewares['POST /auth/google/callback'][0];
+
+  const req = {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: { code: 'pre-parsed-by-host' },
+  };
+  await new Promise((resolve, reject) => {
+    parser(req, {}, (err) => err ? reject(err) : resolve());
+  });
+  assert.deepEqual(req.body, { code: 'pre-parsed-by-host' }, 'parser must not clobber an existing body');
+});
