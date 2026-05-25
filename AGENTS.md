@@ -411,6 +411,10 @@ mutation {
 - API endpoints include version: `/api/v1/{resource}`
 - Multiple versions can coexist
 
+### Changelog requirement
+
+Every PR to `main` must update `CHANGELOG.md` or it will fail CI (`.github/workflows/changelog.yml`). The only escape hatch is the `skip-changelog` label, reserved for chores / internal refactors / doc-only fixes. Add a bullet under `## [Unreleased]` in one of the [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) sections — **Added**, **Changed**, **Deprecated**, **Removed**, **Fixed**, or **Security**. House style is one dense paragraph per bullet covering the root cause, the actual fix, and why this approach — read recent entries before writing yours to match tone and depth. Write the entry in the same commit as the behavior change so CI is green on first push.
+
 ---
 
 **Last Updated**: October 2025  

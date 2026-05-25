@@ -16,6 +16,8 @@ Tests use `mongodb-memory-server` (no external Mongo needed) and run with the in
 
 There is no lint/typecheck step; CommonJS, no TypeScript. Don't add one without being asked.
 
+**Every PR updates `CHANGELOG.md`.** `.github/workflows/changelog.yml` fails any PR to `main` that doesn't touch `CHANGELOG.md` unless the PR carries the `skip-changelog` label (reserved for chores, internal refactors, doc-only fixes). Add a bullet under `## [Unreleased]` in one of the [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) sections — **Added**, **Changed**, **Deprecated**, **Removed**, **Fixed**, or **Security** — describing the user-visible change. The repo's house style is one dense paragraph per bullet (root cause + the actual fix + why this approach), not a terse "added X" — read the most recent entries before writing yours to match tone and depth. Whenever you commit a behavior change, write the changelog entry in the same commit so the workflow is green on first push.
+
 ## Big-picture architecture
 
 **Schema-driven core.** `app.js` walks `schema/versions/*` at boot, and for every schema file it generates: a Mongoose model, a Mongoose-derived GraphQL type with all standard resolvers, a Swagger fragment, and seven REST routes (POST, GET list, PUT bulk, GET/PUT/DELETE by id, plus a `{path}-schema` introspection route). The whole thing is **one big `schemas.forEach` loop in app.js**. To "add a feature to every resource" you almost always edit that loop, not individual schema files.

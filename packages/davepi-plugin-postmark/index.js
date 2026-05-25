@@ -90,6 +90,12 @@ const FROM_RE = /^[^\s@<>]+@[^\s@<>]+\.[^\s@<>]+$|^.+<[^\s@<>]+@[^\s@<>]+\.[^\s@
  *                string or array of patterns (see lib/matcher) and
  *                `build(event, { appName })` returns either a
  *                sendTemplate input, or `null` to skip.
+ *   - errors:    object — `{ UnauthorizedError, ValidationError }`
+ *                framework error constructors used by the inbound
+ *                webhook handler. Defaults to a lazy
+ *                `require('davepi/utils/errors')` at setup time. The
+ *                package's own unit tests inject stubs because they
+ *                run without `davepi` installed.
  */
 function createPlugin(opts = {}) {
   const env = opts.env || process.env;
@@ -98,6 +104,7 @@ function createPlugin(opts = {}) {
   const baseUrl = (opts.baseUrl || POSTMARK_BASE_URL).replace(/\/+$/, '');
   const rules = Array.isArray(opts.rules) ? opts.rules : [];
   const config = readConfigFromEnv(env);
+  const injectedErrors = opts.errors || null;
 
   // Runtime state captured in a closure so the exported `sendEmail`
   // and the bus subscriber both see the same view. Pre-setup
@@ -237,16 +244,37 @@ function createPlugin(opts = {}) {
           'inbound webhook requested but no Express app was provided to setup(); skipping route'
         );
       } else {
-        const handler = buildInboundHandler({
-          auth:     config.inboundAuth,
-          emitter:  inboundEmitter,
-          log,
-        });
-        app.post(config.inboundPath, handler);
-        log.info(
-          { plugin: 'postmark', path: config.inboundPath },
-          'davepi-plugin-postmark inbound webhook mounted'
-        );
+        // Resolve the framework's typed error constructors via the
+        // peerDep here, not at module load time, so the package's
+        // own unit tests (which don't install `davepi`) still load.
+        // If the peer dep isn't on the require path at runtime the
+        // operator already has a deeper setup problem — log it and
+        // refuse to mount the route rather than respond with junk.
+        // `createPlugin({ errors })` lets tests inject stubs.
+        let errors = injectedErrors;
+        if (!errors) {
+          try {
+            errors = require('davepi/utils/errors');
+          } catch (err) {
+            log.error(
+              { err, plugin: 'postmark' },
+              "could not require 'davepi/utils/errors' to mount inbound webhook; skipping route"
+            );
+          }
+        }
+        if (errors) {
+          const handler = buildInboundHandler({
+            auth:    config.inboundAuth,
+            emitter: inboundEmitter,
+            log,
+            errors,
+          });
+          app.post(config.inboundPath, handler);
+          log.info(
+            { plugin: 'postmark', path: config.inboundPath },
+            'davepi-plugin-postmark inbound webhook mounted'
+          );
+        }
       }
     }
 

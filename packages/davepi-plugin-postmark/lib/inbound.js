@@ -16,16 +16,23 @@ const crypto = require('crypto');
  * This handler:
  *   1. Validates the basic-auth header against the configured pair
  *      with a constant-time compare (prevents trivial timing leaks).
+ *      A mismatch is dispatched to the framework's centralized
+ *      `errorHandler` via `next(new UnauthorizedError(...))` so the
+ *      response shape matches every other 4xx the framework emits.
  *   2. Validates that the body looks like a Postmark InboundMessage
- *      (`MessageID` present, From/To present). A malformed body is
- *      a 400, not a 200 — Postmark will retry, and the operator can
- *      see the bad attempts in their dashboard.
+ *      (`MessageID` and `From` present). A malformed body is a 400
+ *      via `next(new ValidationError(...))` — same reason.
  *   3. ACKs Postmark with 200 immediately, then fans out to
  *      registered handlers via setImmediate. A slow handler must not
  *      cause Postmark to retry — Postmark retries are for transport,
  *      not application failures.
  *   4. Wraps each handler call in try/catch so one bad subscriber
  *      doesn't starve the others.
+ *
+ * The framework's typed error constructors (`UnauthorizedError`,
+ * `ValidationError` from `davepi/utils/errors`) are injected via the
+ * `errors` option rather than required directly here so the
+ * package's own zero-runtime-dep unit tests can pass in stubs.
  */
 
 function timingSafeStringEqual(a, b) {
@@ -47,17 +54,23 @@ function isInboundShape(body) {
   return true;
 }
 
-function buildInboundHandler({ auth, emitter, log }) {
+function buildInboundHandler({ auth, emitter, log, errors }) {
+  if (!errors || typeof errors.UnauthorizedError !== 'function' || typeof errors.ValidationError !== 'function') {
+    throw new Error(
+      'davepi-plugin-postmark: buildInboundHandler requires errors.{UnauthorizedError,ValidationError}'
+    );
+  }
+  const { UnauthorizedError, ValidationError } = errors;
   const expectedHeader = 'Basic ' + Buffer.from(auth, 'utf8').toString('base64');
-  return function postmarkInboundHandler(req, res) {
+  return function postmarkInboundHandler(req, res, next) {
     const header = (req.headers && req.headers.authorization) || '';
     if (!timingSafeStringEqual(header, expectedHeader)) {
       log.warn({ plugin: 'postmark' }, 'inbound webhook auth failed');
-      return res.status(401).json({ error: { code: 'unauthorized', message: 'invalid credentials' } });
+      return next(new UnauthorizedError('invalid credentials'));
     }
     if (!isInboundShape(req.body)) {
       log.warn({ plugin: 'postmark' }, 'inbound webhook body did not look like a Postmark message');
-      return res.status(400).json({ error: { code: 'invalid_payload', message: 'expected Postmark InboundMessage' } });
+      return next(new ValidationError('expected Postmark InboundMessage'));
     }
 
     const payload = req.body;

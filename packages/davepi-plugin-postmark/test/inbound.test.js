@@ -46,8 +46,34 @@ function fakeRes() {
   return res;
 }
 
+function captureNext() {
+  const captured = { err: null };
+  const next = (err) => { captured.err = err; };
+  return { next, captured };
+}
+
 function basicAuthHeader(pair) {
   return 'Basic ' + Buffer.from(pair, 'utf8').toString('base64');
+}
+
+// Stub framework error constructors. The real ones come from
+// `davepi/utils/errors`, which the plugin requires lazily at setup
+// time so tests can pass in stubs and skip the peer-dep install.
+class StubUnauthorizedError extends Error {
+  constructor(message) { super(message); this.status = 401; this.code = 'UNAUTHORIZED'; this.isOperational = true; }
+}
+class StubValidationError extends Error {
+  constructor(message) { super(message); this.status = 400; this.code = 'VALIDATION'; this.isOperational = true; }
+}
+const stubErrors = { UnauthorizedError: StubUnauthorizedError, ValidationError: StubValidationError };
+
+function buildHandler({ auth = 'user:pass', emitter, log = silentLog() } = {}) {
+  return buildInboundHandler({
+    auth,
+    emitter: emitter || new EventEmitter(),
+    log,
+    errors: stubErrors,
+  });
 }
 
 const VALID_INBOUND = {
@@ -64,57 +90,64 @@ const VALID_INBOUND = {
 
 // ----- handler unit tests -----
 
-test('inbound handler returns 401 when Authorization header missing', () => {
-  const emitter = new EventEmitter();
-  const handler = buildInboundHandler({ auth: 'user:pass', emitter, log: silentLog() });
+test('inbound handler delegates to next(UnauthorizedError) when Authorization header missing', () => {
+  const handler = buildHandler();
   const req = { headers: {}, body: VALID_INBOUND };
   const res = fakeRes();
-  handler(req, res);
-  assert.equal(res.statusCode, 401);
-  assert.equal(res.body.error.code, 'unauthorized');
+  const { next, captured } = captureNext();
+  handler(req, res, next);
+  assert.equal(res.statusCode, null);
+  assert.ok(captured.err instanceof StubUnauthorizedError);
+  assert.equal(captured.err.status, 401);
+  assert.equal(captured.err.code, 'UNAUTHORIZED');
 });
 
-test('inbound handler returns 401 on wrong basic-auth credentials', () => {
-  const emitter = new EventEmitter();
-  const handler = buildInboundHandler({ auth: 'user:pass', emitter, log: silentLog() });
+test('inbound handler delegates to next(UnauthorizedError) on wrong basic-auth credentials', () => {
+  const handler = buildHandler();
   const req = {
     headers: { authorization: basicAuthHeader('user:wrong') },
     body: VALID_INBOUND,
   };
   const res = fakeRes();
-  handler(req, res);
-  assert.equal(res.statusCode, 401);
+  const { next, captured } = captureNext();
+  handler(req, res, next);
+  assert.equal(res.statusCode, null);
+  assert.ok(captured.err instanceof StubUnauthorizedError);
 });
 
-test('inbound handler returns 400 on a body that is not a Postmark message', () => {
-  const emitter = new EventEmitter();
-  const handler = buildInboundHandler({ auth: 'user:pass', emitter, log: silentLog() });
+test('inbound handler delegates to next(ValidationError) on a body that is not a Postmark message', () => {
+  const handler = buildHandler();
   const req = {
     headers: { authorization: basicAuthHeader('user:pass') },
     body: { hello: 'world' },
   };
   const res = fakeRes();
-  handler(req, res);
-  assert.equal(res.statusCode, 400);
-  assert.equal(res.body.error.code, 'invalid_payload');
+  const { next, captured } = captureNext();
+  handler(req, res, next);
+  assert.equal(res.statusCode, null);
+  assert.ok(captured.err instanceof StubValidationError);
+  assert.equal(captured.err.status, 400);
+  assert.equal(captured.err.code, 'VALIDATION');
 });
 
-test('inbound handler ACKs 200 with MessageID and emits to subscribers', async () => {
+test('inbound handler ACKs 200 with MessageID and emits to subscribers; next is not called', async () => {
   const emitter = new EventEmitter();
   const received = [];
   emitter.on('email', (msg) => { received.push(msg); });
 
-  const handler = buildInboundHandler({ auth: 'user:pass', emitter, log: silentLog() });
+  const handler = buildHandler({ emitter });
   const req = {
     headers: { authorization: basicAuthHeader('user:pass') },
     body: VALID_INBOUND,
   };
   const res = fakeRes();
-  handler(req, res);
+  const { next, captured } = captureNext();
+  handler(req, res, next);
 
-  // ACK is synchronous.
+  // ACK is synchronous, next() never called on the happy path.
   assert.equal(res.statusCode, 200);
   assert.equal(res.body.MessageID, VALID_INBOUND.MessageID);
+  assert.equal(captured.err, null);
 
   // Fan-out is on setImmediate.
   await new Promise((r) => setImmediate(r));
@@ -129,9 +162,10 @@ test('one throwing subscriber does not starve the others; error is logged', asyn
   emitter.on('email', () => { throw new Error('boom'); });
   emitter.on('email', (msg) => { secondCalled.push(msg.MessageID); });
 
-  const handler = buildInboundHandler({ auth: 'user:pass', emitter, log });
+  const handler = buildHandler({ emitter, log });
   const req = { headers: { authorization: basicAuthHeader('user:pass') }, body: VALID_INBOUND };
-  handler(req, fakeRes());
+  const { next } = captureNext();
+  handler(req, fakeRes(), next);
 
   await new Promise((r) => setImmediate(r));
   await new Promise((r) => setImmediate(r));
@@ -139,6 +173,22 @@ test('one throwing subscriber does not starve the others; error is logged', asyn
   assert.equal(secondCalled.length, 1);
   assert.equal(log.records.error.length, 1);
   assert.match(log.records.error[0].msg, /inbound email handler threw/);
+});
+
+test('buildInboundHandler throws if errors option is missing or malformed', () => {
+  assert.throws(
+    () => buildInboundHandler({ auth: 'user:pass', emitter: new EventEmitter(), log: silentLog() }),
+    /requires errors/
+  );
+  assert.throws(
+    () => buildInboundHandler({
+      auth: 'user:pass',
+      emitter: new EventEmitter(),
+      log: silentLog(),
+      errors: { UnauthorizedError: function () {} }, // missing ValidationError
+    }),
+    /requires errors/
+  );
 });
 
 test('isInboundShape: requires MessageID and From', () => {
@@ -178,6 +228,7 @@ test('setup() mounts inbound route when both env vars are set', async () => {
       POSTMARK_INBOUND_AUTH: 'inbound-user:inbound-pass',
     },
     fetch: async () => ({ ok: true, status: 200, text: async () => '{}' }),
+    errors: stubErrors,
   });
   await plugin.setup({ app, bus: new EventEmitter(), log, appName: 'shop' });
 
@@ -195,6 +246,7 @@ test('setup() refuses to mount inbound when only PATH is set (half-config)', asy
       POSTMARK_INBOUND_PATH: '/webhooks/postmark/inbound',
     },
     fetch: async () => ({ ok: true, status: 200, text: async () => '{}' }),
+    errors: stubErrors,
   });
   await plugin.setup({ app, bus: new EventEmitter(), log, appName: 'shop' });
 
@@ -213,6 +265,7 @@ test('setup() refuses to mount inbound when AUTH is not user:pass shape', async 
       POSTMARK_INBOUND_AUTH: 'just-a-token', // no colon
     },
     fetch: async () => ({ ok: true, status: 200, text: async () => '{}' }),
+    errors: stubErrors,
   });
   await plugin.setup({ app, bus: new EventEmitter(), log, appName: 'shop' });
 
@@ -231,6 +284,7 @@ test('onInboundEmail registers and unregisters handlers via the returned functio
       POSTMARK_INBOUND_AUTH: 'u:p',
     },
     fetch: async () => ({ ok: true, status: 200, text: async () => '{}' }),
+    errors: stubErrors,
   });
   await plugin.setup({ app, bus: new EventEmitter(), log: silentLog(), appName: 'shop' });
 
@@ -242,13 +296,13 @@ test('onInboundEmail registers and unregisters handlers via the returned functio
     headers: { authorization: basicAuthHeader('u:p') },
     body: VALID_INBOUND,
   };
-  mountedHandler(req, fakeRes());
+  mountedHandler(req, fakeRes(), () => {});
   await new Promise((r) => setImmediate(r));
   assert.equal(seen.length, 1);
 
   off(); // unsubscribe
 
-  mountedHandler(req, fakeRes());
+  mountedHandler(req, fakeRes(), () => {});
   await new Promise((r) => setImmediate(r));
   assert.equal(seen.length, 1);
 });
@@ -257,6 +311,7 @@ test('onInboundEmail throws on a non-function argument', async () => {
   const plugin = createPlugin({
     env: { POSTMARK_SERVER_TOKEN: 'tok', POSTMARK_FROM: 'team@example.com' },
     fetch: async () => ({ ok: true, status: 200, text: async () => '{}' }),
+    errors: stubErrors,
   });
   await plugin.setup({ app: spyApp(), bus: new EventEmitter(), log: silentLog(), appName: 'shop' });
   assert.throws(() => plugin.onInboundEmail('not a function'), /must be a function/);
