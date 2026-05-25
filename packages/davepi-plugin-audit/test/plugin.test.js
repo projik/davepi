@@ -1,9 +1,8 @@
 'use strict';
 
 /**
- * Unit tests for davepi-plugin-audit. Uses node:test so the package
- * stays zero-runtime-dep (Jest is the framework's main test runner
- * but isn't a dep of this package).
+ * Unit tests for davepi-plugin-audit. Uses node:test (Jest is the
+ * framework's main test runner but isn't a dep of this package).
  *
  * Strategy: build a fresh plugin via createPlugin() with an injected
  * env, drive a stub EventEmitter as the bus, and assert what the
@@ -588,10 +587,27 @@ test('compare descends into nested plain objects and reports per-leaf changes', 
   assert.deepEqual(ops[0], { op: 'replace', path: '/user/name', value: 'new' });
 });
 
-test('compare treats arrays as opaque values (whole replace)', () => {
+test('compare diffs arrays per RFC 6902 (fast-json-patch produces per-index ops)', () => {
   const ops = compare({ tags: ['a', 'b'] }, { tags: ['a', 'c'] });
-  assert.equal(ops.length, 1);
-  assert.deepEqual(ops[0], { op: 'replace', path: '/tags', value: ['a', 'c'] });
+  // fast-json-patch's array diff emits the minimal per-index ops
+  // rather than a whole-array replace. The audit UI can render either
+  // shape; what matters is that the patch round-trips via
+  // applyPatch({tags: ['a','b']}, ops) back to {tags: ['a','c']}.
+  const jsonpatch = require('fast-json-patch');
+  const applied = jsonpatch.applyPatch({ tags: ['a', 'b'] }, ops).newDocument;
+  assert.deepEqual(applied, { tags: ['a', 'c'] });
+});
+
+test('compare produces a JSON-Patch that round-trips through fast-json-patch.applyPatch', () => {
+  const jsonpatch = require('fast-json-patch');
+  const before = { user: { name: 'old', email: 'a@b.com' }, count: 1 };
+  const after  = { user: { name: 'new', email: 'a@b.com' }, count: 2 };
+  const ops = compare(before, after);
+  // Deep-clone the start state so applyPatch doesn't mutate our
+  // local before; round-trip applicability is the RFC 6902
+  // correctness guarantee the audit row promises.
+  const applied = jsonpatch.applyPatch(JSON.parse(JSON.stringify(before)), ops).newDocument;
+  assert.deepEqual(applied, after);
 });
 
 test('compare(obj, obj) returns [] when snapshots are deeply equal', () => {

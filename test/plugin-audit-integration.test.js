@@ -135,6 +135,20 @@ describe('davepi-plugin-audit — end-to-end via pluginLoader', () => {
     expect(amountReplace).toBeDefined();
     expect(amountReplace.op).toBe('replace');
     expect(amountReplace.value).toBe(250);
+    // RFC 6902 round-trip applicability — applying the audit row's
+    // `diff` to its `before` snapshot must reconstruct its `after`.
+    // The plugin's own unit tests cover this directly against the
+    // in-package `compare`; here we run it on the end-to-end shape
+    // landed by a real REST PUT. fast-json-patch lives under the
+    // plugin's own node_modules, not the framework root, so we
+    // resolve it through the package path so this assertion works
+    // for the framework-repo test runner.
+    const jsonpatch = require('../packages/davepi-plugin-audit/node_modules/fast-json-patch');
+    const reconstructed = jsonpatch.applyPatch(
+      JSON.parse(JSON.stringify(byAction.updated.before)),
+      JSON.parse(JSON.stringify(byAction.updated.diff))
+    ).newDocument;
+    expect(reconstructed).toEqual(byAction.updated.after);
 
     // --- deleted row ---
     // Soft-delete: before has deletedAt: null, after has deletedAt set.

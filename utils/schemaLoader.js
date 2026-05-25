@@ -1068,6 +1068,13 @@ function createSchemaLoader({ app, apiSpec, setApolloRouter, buildGraphqlContext
             version: s.version,
             userId: req.user.user_id,
             recordId: String(req.params.id),
+            // `record` is the legacy payload key the webhook dispatcher
+            // serializes onto outbound deliveries; it stayed undefined
+            // when we added `before` / `after`, which broke webhook
+            // consumers (their payload's `record` came through as
+            // `undefined`). The tombstoned projection is the right
+            // shape — same as the audit row's `after`.
+            record: projectByAcl(tombstoned, s, req.user),
             before: projectByAcl(existing, s, req.user),
             after: projectByAcl(tombstoned, s, req.user),
             req: buildReqMeta(req),
@@ -1120,6 +1127,11 @@ function createSchemaLoader({ app, apiSpec, setApolloRouter, buildGraphqlContext
           version: s.version,
           userId: req.user.user_id,
           recordId: String(req.params.id),
+          // Legacy `record` payload key for the webhook dispatcher.
+          // Hard-delete has no post-state, so the pre-delete projection
+          // is the most useful snapshot to deliver — consumers expect
+          // SOMETHING under `record` on a delete event.
+          record: existing ? projectByAcl(existing, s, req.user) : null,
           before: existing ? projectByAcl(existing, s, req.user) : null,
           after: null,
           req: buildReqMeta(req),
@@ -1339,22 +1351,33 @@ function createSchemaLoader({ app, apiSpec, setApolloRouter, buildGraphqlContext
             after: afterDoc,
           });
         }
+        // Project once and reuse: the bus event, the webhook dispatcher
+        // (via `record`), and the afterUpdate hook all want the same
+        // ACL-filtered shape — `projectByAcl` is the single source of
+        // truth for "what's safe to deliver via a side channel".
+        const projectedAfter = afterDoc ? projectByAcl(afterDoc, s, req.user) : null;
+        const projectedBefore = before ? projectByAcl(before, s, req.user) : null;
         emitRecordEvent({
           type: `${path}.updated`,
           version: s.version,
           userId: req.user.user_id,
           recordId: String(req.params.id),
-          before: before ? projectByAcl(before, s, req.user) : undefined,
-          after: afterDoc ? projectByAcl(afterDoc, s, req.user) : undefined,
+          // Legacy `record` payload key for the webhook dispatcher.
+          // `record` was unset on update events while `before`/`after`
+          // were introduced for the audit plugin; that turned every
+          // outbound updated-event delivery's `record` into JSON
+          // `undefined`. Restored — same projection as `after`.
+          record: projectedAfter,
+          before: projectedBefore,
+          after: projectedAfter,
           req: buildReqMeta(req),
         });
         if (s.hooks && s.hooks.afterUpdate) {
-          const projected = afterDoc ? projectByAcl(afterDoc, s, req.user) : null;
           await runAfterHook(
             s,
             'afterUpdate',
             {
-              record: projected,
+              record: projectedAfter,
               previous: before,
               user: req.user,
               req,
@@ -1387,8 +1410,19 @@ function createSchemaLoader({ app, apiSpec, setApolloRouter, buildGraphqlContext
               field: t.field.name,
               from: t.current,
               to: t.next,
-              before: { ...(before || {}), [t.field.name]: t.current },
-              after: { ...(fresh || {}), [t.field.name]: t.next },
+              // `record` / `before` / `after` ride the same projection
+              // contract every other single-record event uses — raw DB
+              // snapshots here would leak ACL-restricted fields (e.g.
+              // `salary`) to webhook subscribers and the audit plugin.
+              // We deliberately don't re-stamp `[t.field.name]` after
+              // projection: if projectByAcl stripped the state field
+              // because the caller can't read it, re-injecting the
+              // value would reintroduce the leak it just guarded.
+              // Consumers that need the transition value still have
+              // `field` / `from` / `to` on the event.
+              record: projectedAfter,
+              before: projectedBefore,
+              after: projectedAfter,
               req: buildReqMeta(req),
             });
             const onEnterHooks =

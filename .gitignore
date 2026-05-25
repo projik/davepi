@@ -2,6 +2,8 @@
 /node_modules
 /admin/node_modules
 /admin/dist
+/packages/*/node_modules
+/packages/*/package-lock.json
 # Local file-storage driver writes blobs here in dev / tests.
 /uploads
 .vscode/settings.json
