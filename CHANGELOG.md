@@ -8,6 +8,8 @@ from v1.0.0 onward (see [Stability commitments](https://docs.davepi.dev/referenc
 
 ## [Unreleased]
 
+## [1.0.5] - 2026-05-25
+
 ### Fixed
 
 - **`davepi gen-client` creates the output directory if it doesn't exist.** `bin/davepi.js` called `fs.writeFileSync(path.resolve(outPath), ts)` directly, so the documented one-liner from the guide — `npx davepi gen-client --out ./client/davepi.ts --base-url ...` — crashed with `ENOENT: no such file or directory` when `./client/` didn't already exist in the consumer's project. Wrapped the write with `fs.mkdirSync(path.dirname(resolvedOut), { recursive: true })`. No-op when the directory exists; creates it (and any intermediate dirs) when it doesn't.
