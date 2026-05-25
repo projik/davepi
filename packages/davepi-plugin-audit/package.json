@@ -1,0 +1,40 @@
+{
+  "name": "davepi-plugin-audit",
+  "version": "0.1.0",
+  "description": "Immutable append-only audit log for dAvePi. Subscribes to the in-process record event bus and writes one row per CRUD mutation (with before/after, JSON-patch diff, actor, IP, user-agent, and request ID) into an auto-registered `audit` collection that's queryable through the standard REST + GraphQL surface. Admin-only list bypass, no API-level writes, optional TTL retention, redaction, and per-resource allow/deny lists.",
+  "license": "ISC",
+  "homepage": "https://docs.davepi.dev/features/plugins/",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/projik/davepi.git",
+    "directory": "packages/davepi-plugin-audit"
+  },
+  "keywords": [
+    "davepi",
+    "davepi-plugin",
+    "audit",
+    "audit-log",
+    "compliance",
+    "events"
+  ],
+  "main": "index.js",
+  "files": [
+    "index.js",
+    "lib",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "peerDependencies": {
+    "davepi": ">=1.0.5"
+  },
+  "peerDependenciesMeta": {
+    "davepi": {
+      "optional": false
+    }
+  },
+  "scripts": {
+    "test": "node --test test/*.test.js"
+  }
+}

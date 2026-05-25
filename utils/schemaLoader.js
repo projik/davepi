@@ -12,7 +12,7 @@ const auth = require('../middleware/auth');
 const asyncHandler = require('./asyncHandler');
 const logger = require('./logger');
 const { NotFoundError, ValidationError, InvalidTransitionError } = require('./errors');
-const { emitRecordEvent } = require('./events');
+const { emitRecordEvent, buildReqMeta } = require('./events');
 const { recordAudit } = require('./audit');
 const AuditLog = require('../model/auditLog');
 const {
@@ -701,6 +701,7 @@ function createSchemaLoader({ app, apiSpec, setApolloRouter, buildGraphqlContext
             userId: String(req.user.user_id),
             recordId: String(record._id),
             record: projectByAcl(decorated, s, req.user),
+            req: buildReqMeta(req),
           });
           res.status(201).json(decorated[fieldName]);
         })
@@ -827,6 +828,9 @@ function createSchemaLoader({ app, apiSpec, setApolloRouter, buildGraphqlContext
           userId: req.user.user_id,
           recordId: String(record._id),
           record: projected,
+          before: null,
+          after: projected,
+          req: buildReqMeta(req),
         });
         await runAfterHook(
           s,
@@ -980,6 +984,7 @@ function createSchemaLoader({ app, apiSpec, setApolloRouter, buildGraphqlContext
           userId: req.user.user_id,
           filter: safeQuery,
           numAffected: record.modifiedCount + (record.upsertedCount || 0),
+          req: buildReqMeta(req),
         });
         res.status(200).json(record);
       })
@@ -1063,6 +1068,9 @@ function createSchemaLoader({ app, apiSpec, setApolloRouter, buildGraphqlContext
             version: s.version,
             userId: req.user.user_id,
             recordId: String(req.params.id),
+            before: projectByAcl(existing, s, req.user),
+            after: projectByAcl(tombstoned, s, req.user),
+            req: buildReqMeta(req),
           });
           await runAfterHook(
             s,
@@ -1112,6 +1120,9 @@ function createSchemaLoader({ app, apiSpec, setApolloRouter, buildGraphqlContext
           version: s.version,
           userId: req.user.user_id,
           recordId: String(req.params.id),
+          before: existing ? projectByAcl(existing, s, req.user) : null,
+          after: null,
+          req: buildReqMeta(req),
         });
         await runAfterHook(
           s,
@@ -1313,14 +1324,19 @@ function createSchemaLoader({ app, apiSpec, setApolloRouter, buildGraphqlContext
           result = await model.updateOne(query, { $set: writable });
           if (!result.matchedCount) throw new NotFoundError(path);
         }
+        // Fetch the post-update snapshot once and re-use it for audit,
+        // the bus event, and afterUpdate. Three consumers all wanted
+        // their own findById; one read is enough.
+        const afterDoc = before
+          ? await model.findById(req.params.id).lean()
+          : null;
         if (auditEnabled && before) {
-          const after = await model.findById(req.params.id).lean();
           await audit({
             req,
             recordId: req.params.id,
             action: 'update',
             before,
-            after,
+            after: afterDoc,
           });
         }
         emitRecordEvent({
@@ -1328,10 +1344,12 @@ function createSchemaLoader({ app, apiSpec, setApolloRouter, buildGraphqlContext
           version: s.version,
           userId: req.user.user_id,
           recordId: String(req.params.id),
+          before: before ? projectByAcl(before, s, req.user) : undefined,
+          after: afterDoc ? projectByAcl(afterDoc, s, req.user) : undefined,
+          req: buildReqMeta(req),
         });
         if (s.hooks && s.hooks.afterUpdate) {
-          const after = await model.findById(req.params.id).lean();
-          const projected = after ? projectByAcl(after, s, req.user) : null;
+          const projected = afterDoc ? projectByAcl(afterDoc, s, req.user) : null;
           await runAfterHook(
             s,
             'afterUpdate',
@@ -1350,7 +1368,7 @@ function createSchemaLoader({ app, apiSpec, setApolloRouter, buildGraphqlContext
         // failed audit / hook / event must not roll back a
         // successful state change.
         if (transitions.length) {
-          const fresh = before ? await model.findById(req.params.id).lean() : null;
+          const fresh = afterDoc;
           for (const t of transitions) {
             if (auditEnabled) {
               await audit({
@@ -1369,6 +1387,9 @@ function createSchemaLoader({ app, apiSpec, setApolloRouter, buildGraphqlContext
               field: t.field.name,
               from: t.current,
               to: t.next,
+              before: { ...(before || {}), [t.field.name]: t.current },
+              after: { ...(fresh || {}), [t.field.name]: t.next },
+              req: buildReqMeta(req),
             });
             const onEnterHooks =
               (t.field.stateMachine && t.field.stateMachine.onEnter) || {};
