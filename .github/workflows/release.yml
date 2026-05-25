@@ -1,0 +1,127 @@
+name: 'Release'
+
+# One-click release for any of the three published packages in this repo:
+#
+#   - davepi               (root)
+#   - create-davepi-app    (create-davepi-app/)
+#   - davepi-plugin-slack  (packages/davepi-plugin-slack/)
+#
+# What it does:
+#   1. Bumps the selected package's `package.json` (and `package-lock.json`
+#      if present) using `npm version`.
+#   2. Commits the bump directly to `main` as the github-actions bot.
+#   3. Tags the new commit with `<package>@<version>` and pushes the tag.
+#   4. The tag push triggers the matching `*-publish.yml` workflow, which
+#      runs the existing test/pack/publish pipeline.
+#
+# We deliberately skip the "open a release PR" step. The bump is a
+# mechanical version change; reviewing it adds friction without catching
+# anything the publish workflow's tag-vs-package.json check won't.
+# Substantive changes still flow through normal PRs before they land on
+# main, so this only touches code that's already been reviewed.
+#
+# Permissions: needs `contents: write` so the bot can push the bump
+# commit and the tag. If branch protection on `main` requires PRs from
+# everyone, add the github-actions bot to the bypass list, or switch
+# this workflow to open a release PR (see commented-out branch below).
+
+on:
+  workflow_dispatch:
+    inputs:
+      package:
+        description: 'Which package to release'
+        required: true
+        type: choice
+        options:
+          - davepi
+          - create-davepi-app
+          - davepi-plugin-slack
+      version:
+        description: "Bump kind (patch/minor/major) or explicit x.y.z"
+        required: true
+        default: 'patch'
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          # Full history so `git tag` can resolve, and a token with
+          # write scope so the bump commit + tag can push back.
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20.x
+
+      - name: Resolve package directory
+        id: resolve
+        env:
+          PKG: ${{ inputs.package }}
+        run: |
+          set -euo pipefail
+          case "$PKG" in
+            davepi)              dir="." ;;
+            create-davepi-app)   dir="create-davepi-app" ;;
+            davepi-plugin-slack) dir="packages/davepi-plugin-slack" ;;
+            *) echo "::error::unknown package: $PKG"; exit 1 ;;
+          esac
+          echo "dir=$dir" >> "$GITHUB_OUTPUT"
+
+      - name: Configure git author
+        run: |
+          git config user.name  'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+
+      - name: Bump version
+        id: bump
+        env:
+          DIR: ${{ steps.resolve.outputs.dir }}
+          BUMP: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          cd "$DIR"
+          # --no-git-tag-version: we'll commit + tag ourselves with our
+          # custom `<pkg>@<ver>` tag prefix instead of npm's default `v<ver>`.
+          npm version "$BUMP" --no-git-tag-version
+          new_version=$(node -p "require('./package.json').version")
+          echo "version=$new_version" >> "$GITHUB_OUTPUT"
+          echo "Bumped to $new_version"
+
+      - name: Commit, tag, and push
+        env:
+          PKG: ${{ inputs.package }}
+          DIR: ${{ steps.resolve.outputs.dir }}
+          VERSION: ${{ steps.bump.outputs.version }}
+        run: |
+          set -euo pipefail
+          # Stage package.json + the lock file IF the bump touched one.
+          # Some packages (like davepi-plugin-slack) don't ship a lock.
+          git add "$DIR/package.json"
+          if [ -f "$DIR/package-lock.json" ]; then
+            git add "$DIR/package-lock.json"
+          fi
+          git commit -m "Release $PKG@$VERSION"
+          git tag "$PKG@$VERSION"
+          git push origin main
+          git push origin "$PKG@$VERSION"
+          echo "Pushed $PKG@$VERSION — publish workflow will run on the tag push."
+
+      - name: Summary
+        env:
+          PKG: ${{ inputs.package }}
+          VERSION: ${{ steps.bump.outputs.version }}
+        run: |
+          {
+            echo "## Released $PKG@$VERSION"
+            echo
+            echo "- Bump commit pushed to \`main\`."
+            echo "- Tag \`$PKG@$VERSION\` pushed — see the matching publish workflow run."
+          } >> "$GITHUB_STEP_SUMMARY"
