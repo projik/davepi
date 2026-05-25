@@ -165,9 +165,11 @@ async function main() {
         if (e && e.schema) entries.push({ s: e.schema });
       }
       const ts = generateClient(entries, { baseUrl });
-      require('fs').writeFileSync(path.resolve(outPath), ts);
+      const resolvedOut = path.resolve(outPath);
+      require('fs').mkdirSync(path.dirname(resolvedOut), { recursive: true });
+      require('fs').writeFileSync(resolvedOut, ts);
       out(
-        `Wrote ${path.relative(process.cwd(), path.resolve(outPath))} (${entries.length} schemas)`
+        `Wrote ${path.relative(process.cwd(), resolvedOut)} (${entries.length} schemas)`
       );
     } finally {
       // Cleanup runs on success AND failure so the process exits

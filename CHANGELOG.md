@@ -8,6 +8,10 @@ from v1.0.0 onward (see [Stability commitments](https://docs.davepi.dev/referenc
 
 ## [Unreleased]
 
+### Fixed
+
+- **`davepi gen-client` creates the output directory if it doesn't exist.** `bin/davepi.js` called `fs.writeFileSync(path.resolve(outPath), ts)` directly, so the documented one-liner from the guide — `npx davepi gen-client --out ./client/davepi.ts --base-url ...` — crashed with `ENOENT: no such file or directory` when `./client/` didn't already exist in the consumer's project. Wrapped the write with `fs.mkdirSync(path.dirname(resolvedOut), { recursive: true })`. No-op when the directory exists; creates it (and any intermediate dirs) when it doesn't.
+
 ### Added
 
 - **`davepi-plugin-slack@0.1.0` published.** First-party plugin under `packages/davepi-plugin-slack/`, distributed as its own npm package (separate from the framework). Lists itself under `davepi.plugins` in the consumer's `package.json` and subscribes to the in-process record event bus; for every CRUD event whose type matches `SLACK_EVENTS` (`order.created`, `order.*`, `*` — same patterns as in-tree webhooks), posts a formatted message to `SLACK_WEBHOOK_URL`. Also exports `postMessage(text, extras)` so a schema lifecycle hook can fire ad-hoc Slack messages inline (the documented `afterCreate` → Slack pattern). Failure-isolated: the bus subscriber wraps each POST in `try/catch` and routes errors through the framework's pino instance via the logger handed to `setup`; a Slack outage never blocks the request loop. Boot stays soft when `SLACK_WEBHOOK_URL` is unset — the plugin logs a warning and stays dormant rather than failing the process. Released via `.github/workflows/davepi-plugin-slack-publish.yml` (mirrors the `@davepi/mcp` publish posture: tag-triggered, NPM_TOKEN gated behind the `npm-publish` GitHub Environment, tag-vs-package.json version check, package tests run before publish). 18 unit tests via `node --test` keep the package zero-runtime-dep; one integration test under the framework's Jest suite (`test/plugin-slack-integration.test.js`) drives a real REST POST through the framework's pluginLoader and asserts Slack receives the event.
