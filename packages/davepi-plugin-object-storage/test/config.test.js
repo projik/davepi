@@ -10,8 +10,14 @@ const {
   parseInteger,
   parseList,
   normalizePrefix,
+  validateUploadRequest,
   DEFAULTS,
 } = require('../lib/config');
+
+class FakeValidationError extends Error {
+  constructor(m) { super(m); this.code = 'VALIDATION'; }
+}
+const fakeErrors = { ValidationError: FakeValidationError };
 
 test('readConfig: empty env yields defaults + null bucket (dormant signal)', () => {
   const c = readConfig({});
@@ -113,4 +119,75 @@ test('normalizePrefix: handles missing leading slash + trailing slash', () => {
   assert.equal(normalizePrefix('/files'), '/files');
   assert.equal(normalizePrefix('/files/'), '/files');
   assert.equal(normalizePrefix(''), '/api/files');
+});
+
+// Shared validator — same policy the REST route and the programmatic
+// createUploadUrl both route through. PR #122 review fix.
+
+test('validateUploadRequest: accepts a well-formed request', () => {
+  validateUploadRequest({
+    contentType: 'image/png',
+    size:        1024,
+    config:      { allowedMime: ['image/png'], maxBytes: 5000 },
+    errors:      fakeErrors,
+  });
+  // No size is also OK — clients can omit it; the /complete HEAD check
+  // catches the actual size against maxBytes server-side.
+  validateUploadRequest({
+    contentType: 'image/png',
+    config:      { allowedMime: [], maxBytes: 5000 },
+    errors:      fakeErrors,
+  });
+});
+
+test('validateUploadRequest: requires non-empty contentType', () => {
+  for (const bad of [undefined, null, '', 123, {}]) {
+    assert.throws(
+      () => validateUploadRequest({
+        contentType: bad,
+        config:      { allowedMime: [], maxBytes: 5000 },
+        errors:      fakeErrors,
+      }),
+      /contentType is required/,
+      `expected throw for contentType=${JSON.stringify(bad)}`
+    );
+  }
+});
+
+test('validateUploadRequest: enforces MIME allowlist', () => {
+  assert.throws(
+    () => validateUploadRequest({
+      contentType: 'video/mp4',
+      config:      { allowedMime: ['image/png', 'application/pdf'], maxBytes: 5000 },
+      errors:      fakeErrors,
+    }),
+    /S3_ALLOWED_MIME/
+  );
+});
+
+test('validateUploadRequest: enforces maxBytes when size declared', () => {
+  assert.throws(
+    () => validateUploadRequest({
+      contentType: 'image/png',
+      size:        10_000,
+      config:      { allowedMime: [], maxBytes: 5000 },
+      errors:      fakeErrors,
+    }),
+    /S3_MAX_BYTES/
+  );
+});
+
+test('validateUploadRequest: rejects bogus size values', () => {
+  for (const bad of ['abc', 0, -5, NaN, Infinity]) {
+    assert.throws(
+      () => validateUploadRequest({
+        contentType: 'image/png',
+        size:        bad,
+        config:      { allowedMime: [], maxBytes: 5000 },
+        errors:      fakeErrors,
+      }),
+      /size must be a positive number/,
+      `expected throw for size=${bad}`
+    );
+  }
 });

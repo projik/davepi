@@ -39,12 +39,32 @@
  * `user` parameter (the JWT payload) so tenant scoping is explicit.
  */
 
-const { readConfig } = require('./lib/config');
+const { readConfig, validateUploadRequest } = require('./lib/config');
 const { createAdapter } = require('./lib/adapters');
 const { buildFileSchema } = require('./lib/schema');
 const { buildRouter } = require('./lib/routes');
 const { createReaper } = require('./lib/reaper');
 const { buildKey } = require('./lib/keys');
+
+/**
+ * Resolve a framework / peer-dep module by name, wrapping a MODULE_NOT_FOUND
+ * with a message that points the operator at the broken peer dep
+ * instead of leaving them with a bare require stack. The package's own
+ * unit tests bypass this entirely by injecting stubs at `createPlugin`
+ * time — so this only fires for the dep-resolution path that real
+ * consumers walk.
+ */
+function requireOrFail(name) {
+  try {
+    return require(name);
+  } catch (err) {
+    throw new Error(
+      `davepi-plugin-object-storage: failed to load required module '${name}'. ` +
+      'Ensure the davepi peer dependency is installed (>= 1.0.5). ' +
+      `Underlying error: ${err && err.message}`
+    );
+  }
+}
 
 function createPlugin(opts = {}) {
   const env = opts.env || process.env;
@@ -63,6 +83,11 @@ function createPlugin(opts = {}) {
     Model: null,
     reaper: null,
     log: null,
+    // Captured at setup() so the programmatic API can route its
+    // ValidationError throws through the same constructors the REST
+    // layer uses. Lets `createUploadUrl` share `validateUploadRequest`
+    // with the route handler — the reviewer's footgun fix on PR #122.
+    errors: null,
   };
 
   function ensureEnabled(call) {
@@ -79,6 +104,10 @@ function createPlugin(opts = {}) {
     if (!user || !user.user_id) {
       throw new Error('davepi-plugin-object-storage: createUploadUrl requires { user: { user_id } }');
     }
+    // Same policy enforcement the REST `POST /upload-url` route runs —
+    // a hook author can't bypass S3_ALLOWED_MIME / S3_MAX_BYTES by
+    // reaching for the programmatic API instead of the HTTP route.
+    validateUploadRequest({ contentType, size, config, errors: state.errors });
     const userId = String(user.user_id);
     const key = buildKey({ userId, originalName });
     const doc = await state.Model.create({
@@ -147,6 +176,15 @@ function createPlugin(opts = {}) {
   async function setup({ app, schemaLoader, bus, log, appName }) {
     state.log = log;
 
+    // The ONLY soft-fail path: an unconfigured `S3_BUCKET` is the
+    // documented dormancy signal so an operator can ship the plugin
+    // in a project before turning S3 on (matches slack / postmark /
+    // audit dormancy semantics for their respective top-level config
+    // env vars). Everything below this point treats real failures as
+    // fail-fast — the pluginLoader contract is explicit that
+    // "Errors during plugin setup propagate — a broken plugin fails
+    // the boot. Silently dropping a plugin would hide
+    // misconfiguration from operators." (utils/pluginLoader.js)
     if (!config.bucket) {
       log.warn(
         { plugin: 'object-storage' },
@@ -155,84 +193,39 @@ function createPlugin(opts = {}) {
       return;
     }
     if (!schemaLoader || typeof schemaLoader.loadSchema !== 'function') {
-      log.error(
-        { plugin: 'object-storage' },
-        'davepi-plugin-object-storage setup({ schemaLoader }) is required; staying dormant'
+      throw new Error(
+        'davepi-plugin-object-storage: setup({ schemaLoader }) is required'
       );
-      return;
     }
     if (!app || typeof app.use !== 'function') {
-      log.error(
-        { plugin: 'object-storage' },
-        'davepi-plugin-object-storage setup({ app }) is required; staying dormant'
+      throw new Error(
+        'davepi-plugin-object-storage: setup({ app }) is required'
       );
-      return;
     }
 
     // Lazy-resolve framework deps so the package's own unit tests
-    // (which don't install `davepi`) can run standalone.
-    let mongoose = injectedMongoose;
-    if (!mongoose) {
-      try {
-        mongoose = require('mongoose');
-      } catch (err) {
-        log.error(
-          { err, plugin: 'object-storage' },
-          "could not require 'mongoose' to register file schema; staying dormant"
-        );
-        return;
-      }
-    }
-    let errors = injectedErrors;
-    if (!errors) {
-      try {
-        errors = require('davepi/utils/errors');
-      } catch (err) {
-        log.error(
-          { err, plugin: 'object-storage' },
-          "could not require 'davepi/utils/errors'; staying dormant"
-        );
-        return;
-      }
-    }
-    let auth = injectedAuth;
-    if (!auth) {
-      try {
-        auth = require('davepi/middleware/auth');
-      } catch (err) {
-        log.error(
-          { err, plugin: 'object-storage' },
-          "could not require 'davepi/middleware/auth'; staying dormant"
-        );
-        return;
-      }
-    }
-    let asyncHandler = injectedAsyncHandler;
-    if (!asyncHandler) {
-      try {
-        asyncHandler = require('davepi/utils/asyncHandler');
-      } catch (err) {
-        log.error(
-          { err, plugin: 'object-storage' },
-          "could not require 'davepi/utils/asyncHandler'; staying dormant"
-        );
-        return;
-      }
-    }
+    // (which don't install `davepi`) can run standalone. A failure
+    // here means the operator's runtime environment is broken — the
+    // peer dep on `davepi` should have made these available, so a
+    // miss is misconfiguration we fail loud on.
+    const mongoose     = injectedMongoose     || requireOrFail('mongoose');
+    const errors       = injectedErrors       || requireOrFail('davepi/utils/errors');
+    const auth         = injectedAuth         || requireOrFail('davepi/middleware/auth');
+    const asyncHandler = injectedAsyncHandler || requireOrFail('davepi/utils/asyncHandler');
+    const expressMod   = injectedExpress      || requireOrFail('express');
 
-    // Adapter. A throw here (e.g. missing @google-cloud/storage when
-    // S3_BACKEND=gcs) is logged and the plugin stays dormant rather
-    // than crashing boot — same posture as the postmark inbound
-    // half-config branch.
-    try {
-      state.adapter = adapterOverride || createAdapter(config, { sdkOverrides });
-    } catch (err) {
-      log.error(
-        { err, plugin: 'object-storage', backend: config.backend },
-        'davepi-plugin-object-storage: adapter construction failed; staying dormant'
-      );
-      return;
-    }
+    // Capture errors on state BEFORE adapter / schema steps so the
+    // programmatic API can route ValidationError through the same
+    // constructors the REST layer uses even if setup throws partway
+    // through.
+    state.errors = errors;
+
+    // Adapter construction can throw — most commonly when the operator
+    // set `S3_BACKEND=gcs` but didn't install `@google-cloud/storage`
+    // (the optionalDependency wasn't pulled in). That's misconfiguration,
+    // not a soft case: fail-fast so the operator sees it at boot, not
+    // when the first upload request lands.
+    state.adapter = adapterOverride || createAdapter(config, { sdkOverrides });
 
     // Register the file schema. The afterDelete hook needs the live
     // adapter, so we pass a thunk rather than the adapter itself —
@@ -246,41 +239,15 @@ function createPlugin(opts = {}) {
       getAdapter:    () => state.adapter,
       log,
     });
-    try {
-      await schemaLoader.loadSchema(schema);
-    } catch (err) {
-      log.error(
-        { err, plugin: 'object-storage' },
-        'davepi-plugin-object-storage: failed to register file schema; staying dormant'
-      );
-      return;
-    }
+    await schemaLoader.loadSchema(schema);
     const entry = schemaLoader.getEntry(`${config.fileVersion}/${config.filePath}`);
     if (!entry || !entry.model) {
-      log.error(
-        { plugin: 'object-storage' },
-        'davepi-plugin-object-storage: file schema registered but model is missing; staying dormant'
+      throw new Error(
+        'davepi-plugin-object-storage: file schema registered but ' +
+        'schemaLoader.getEntry returned no model — framework contract violation'
       );
-      return;
     }
     state.Model = entry.model;
-
-    // Mount routes on the live Express app. The framework's plugin
-    // loader re-asserts the terminal errorHandler after every plugin
-    // returns, so the per-route asyncHandler-wrapped throws land on
-    // the centralised response shape.
-    let expressMod = injectedExpress;
-    if (!expressMod) {
-      try {
-        expressMod = require('express');
-      } catch (err) {
-        log.error(
-          { err, plugin: 'object-storage' },
-          "could not require 'express' to build router; staying dormant"
-        );
-        return;
-      }
-    }
     const router = expressMod.Router();
     buildRouter({
       router,
@@ -317,7 +284,7 @@ function createPlugin(opts = {}) {
 
     log.info(
       {
-        plugin:        's3',
+        plugin:        'object-storage',
         backend:       config.backend,
         bucket:        config.bucket,
         filePath:      `${config.fileVersion}/${config.filePath}`,

@@ -27,7 +27,7 @@
  */
 
 const { buildKey } = require('./keys');
-const { mimeAllowed } = require('./config');
+const { validateUploadRequest } = require('./config');
 
 function buildRouter({
   router,
@@ -56,24 +56,10 @@ function buildRouter({
       if (!userId) throw new ForbiddenError('auth required');
 
       const { contentType, originalName, size, metadata } = req.body || {};
-      if (!contentType || typeof contentType !== 'string') {
-        throw new ValidationError('contentType is required');
-      }
-      if (!mimeAllowed(contentType, config.allowedMime)) {
-        throw new ValidationError(
-          `contentType ${contentType} is not in S3_ALLOWED_MIME`
-        );
-      }
-      if (size !== undefined && size !== null) {
-        if (typeof size !== 'number' || size <= 0 || !Number.isFinite(size)) {
-          throw new ValidationError('size must be a positive number');
-        }
-        if (size > config.maxBytes) {
-          throw new ValidationError(
-            `size ${size} exceeds S3_MAX_BYTES (${config.maxBytes})`
-          );
-        }
-      }
+      // Single source of truth for upload-policy validation — shared
+      // with the programmatic `createUploadUrl` API so a hook author
+      // can't bypass MIME / size checks by reaching for the JS surface.
+      validateUploadRequest({ contentType, size, config, errors });
 
       const key = buildKey({ userId, originalName });
       const Model = getModel();

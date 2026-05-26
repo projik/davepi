@@ -113,6 +113,41 @@ function mimeAllowed(contentType, allowedMime) {
   return false;
 }
 
+/**
+ * Validate a presigned-upload request against the configured policy.
+ * Throws via the supplied `errors.ValidationError` on first failure;
+ * returns void on success. Both the REST `POST /upload-url` handler
+ * and the programmatic `createUploadUrl` route their input through
+ * this so the policy is enforced uniformly — a consumer who calls the
+ * programmatic API from a hook can't bypass the MIME allowlist or the
+ * max-bytes gate that the route enforces.
+ *
+ * `errors` is the framework's `utils/errors` module (or a stub with
+ * the same shape); passed in rather than required at module scope so
+ * the package's own unit tests can run without `davepi` installed.
+ */
+function validateUploadRequest({ contentType, size, config, errors }) {
+  const { ValidationError } = errors;
+  if (typeof contentType !== 'string' || !contentType) {
+    throw new ValidationError('contentType is required');
+  }
+  if (!mimeAllowed(contentType, config.allowedMime)) {
+    throw new ValidationError(
+      `contentType ${contentType} is not in S3_ALLOWED_MIME`
+    );
+  }
+  if (size !== undefined && size !== null) {
+    if (typeof size !== 'number' || size <= 0 || !Number.isFinite(size)) {
+      throw new ValidationError('size must be a positive number');
+    }
+    if (size > config.maxBytes) {
+      throw new ValidationError(
+        `size ${size} exceeds S3_MAX_BYTES (${config.maxBytes})`
+      );
+    }
+  }
+}
+
 module.exports = {
   DEFAULTS,
   BACKENDS,
@@ -122,4 +157,5 @@ module.exports = {
   parseList,
   mimeAllowed,
   normalizePrefix,
+  validateUploadRequest,
 };
