@@ -62,7 +62,7 @@ const {
   stampInitialStates,
   listTransitionsToValidate,
 } = require('./stateMachine');
-const { emitRecordEvent } = require('./events');
+const { emitRecordEvent, buildReqMeta } = require('./events');
 
 /**
  * Map a thrown error onto the canonical `{ code, message, ... }`
@@ -187,7 +187,21 @@ const makeGetResource = (schemaLoader) => (p) => {
  * `RegisteredTool` instances so the caller can `.remove()` them on
  * hot-reload.
  */
-function registerSchemaTools(server, entry, { schemaLoader, getUser }) {
+/**
+ * Resolve the active Express `req` for the current tool call (HTTP
+ * transport only). `getReq` is called fresh per invocation so the
+ * HTTP transport always sees the live request. The stdio transport
+ * has no req, so callers either omit `getReq` or pass a function that
+ * returns `null` — `buildReqMeta(null)` returns `null` and the event
+ * subscriber treats a missing `req` field as "non-HTTP producer".
+ */
+const reqMetaFrom = async (getReq) => {
+  if (typeof getReq !== 'function') return null;
+  const req = await Promise.resolve(getReq());
+  return buildReqMeta(req);
+};
+
+function registerSchemaTools(server, entry, { schemaLoader, getUser, getReq }) {
   const s = entry.schema;
   const Model = entry.model;
   const path = s.path;
@@ -389,6 +403,25 @@ function registerSchemaTools(server, entry, { schemaLoader, getUser }) {
           });
         } catch (_) { /* best-effort */ }
       }
+      // Emit a record-bus event so the same subscribers REST and
+      // GraphQL feed (webhook dispatcher, davepi-plugin-audit, future
+      // GraphQL subscriptions) see MCP-driven mutations too. The MCP
+      // path previously emitted only state-machine transitions — that
+      // meant an MCP create/update/delete landed in the in-tree
+      // audit_log collection but was invisible to bus subscribers.
+      try {
+        emitRecordEvent({
+          type: `${path}.created`,
+          version: s.version,
+          userId: user.user_id,
+          recordId: String(record._id),
+          record: projected,
+          before: null,
+          after: projected,
+          req: (await reqMetaFrom(getReq)) || undefined,
+        });
+      } catch (_) { /* best-effort: a misbehaving subscriber must not
+        fail a successful create */ }
       if (claimed) {
         try {
           await idempotency.completeIdempotency({
@@ -478,19 +511,31 @@ function registerSchemaTools(server, entry, { schemaLoader, getUser }) {
           after: fresh,
         });
       }
-      // Per-transition tail (matches REST PUT). Audit row,
-      // dedicated event, optional onEnter — all best-effort.
-      // The `updated` event also fires once for the operation as a
-      // whole (matches both the REST PUT contract and the
-      // standalone GraphQL transition mutation).
-      if (transitions.length) {
+      // Project once and reuse across the bus emit sites — same
+      // posture as REST PUT/:id. Raw DB snapshots on the bus would
+      // leak ACL-restricted fields to webhook subscribers; the
+      // projection IS the single enforcement site.
+      const projectedBefore = before ? projectByAcl(before, s, user) : null;
+      const projectedAfter = fresh ? projectByAcl(fresh, s, user) : null;
+      const reqMeta = await reqMetaFrom(getReq);
+      // Always emit the `${path}.updated` event (the MCP tool
+      // previously did this only when state-machine transitions
+      // landed). Without it, an MCP-driven field-only update was
+      // invisible to the webhook dispatcher and the audit plugin.
+      try {
         emitRecordEvent({
           type: `${path}.updated`,
           version: s.version,
           userId: user.user_id,
           recordId: String(args.id),
+          record: projectedAfter,
+          before: projectedBefore,
+          after: projectedAfter,
+          req: reqMeta || undefined,
         });
-      }
+      } catch (_) { /* best-effort */ }
+      // Per-transition tail (matches REST PUT). Audit row,
+      // dedicated event, optional onEnter — all best-effort.
       for (const t of transitions) {
         if (auditEnabled) {
           try {
@@ -504,15 +549,33 @@ function registerSchemaTools(server, entry, { schemaLoader, getUser }) {
             });
           } catch (_) { /* best-effort */ }
         }
-        emitRecordEvent({
-          type: `${path}.transitioned`,
-          version: s.version,
-          userId: user.user_id,
-          recordId: String(args.id),
-          field: t.field.name,
-          from: t.current,
-          to: t.next,
-        });
+        // Transition events ride the same projection contract: the
+        // snapshots on the bus must not carry ACL-restricted fields.
+        const transitionBefore = projectByAcl(
+          { ...(before || {}), [t.field.name]: t.current },
+          s,
+          user
+        );
+        const transitionAfter = projectByAcl(
+          { ...(fresh || {}), [t.field.name]: t.next },
+          s,
+          user
+        );
+        try {
+          emitRecordEvent({
+            type: `${path}.transitioned`,
+            version: s.version,
+            userId: user.user_id,
+            recordId: String(args.id),
+            field: t.field.name,
+            from: t.current,
+            to: t.next,
+            record: transitionAfter,
+            before: transitionBefore,
+            after: transitionAfter,
+            req: reqMeta || undefined,
+          });
+        } catch (_) { /* best-effort */ }
         const hook = (t.field.stateMachine.onEnter || {})[t.next];
         if (typeof hook === 'function') {
           try {
@@ -545,11 +608,13 @@ function registerSchemaTools(server, entry, { schemaLoader, getUser }) {
       const baseQuery = bypassUserScopeForDelete(s, user)
         ? { _id: args.id }
         : { _id: args.id, userId: user.user_id };
+      const reqMeta = await reqMetaFrom(getReq);
       if (softDelete) {
         const existing = await Model.findOne({ ...baseQuery, deletedAt: null }).lean();
         if (!existing) throw new NotFoundError(path);
         const now = new Date();
         await Model.updateOne({ _id: existing._id }, { $set: { deletedAt: now } });
+        const tombstoned = { ...existing, deletedAt: now };
         if (auditEnabled) {
           await recordAudit({
             req: { user },
@@ -557,12 +622,28 @@ function registerSchemaTools(server, entry, { schemaLoader, getUser }) {
             recordId: existing._id,
             action: 'delete',
             before: existing,
-            after: { ...existing, deletedAt: now },
+            after: tombstoned,
           });
         }
+        // Bus event — same shape REST's soft-delete emits.
+        try {
+          emitRecordEvent({
+            type: `${path}.deleted`,
+            version: s.version,
+            userId: user.user_id,
+            recordId: String(existing._id),
+            record: projectByAcl(tombstoned, s, user),
+            before: projectByAcl(existing, s, user),
+            after: projectByAcl(tombstoned, s, user),
+            req: reqMeta || undefined,
+          });
+        } catch (_) { /* best-effort */ }
         return { acknowledged: true, softDeleted: true, _id: String(existing._id) };
       }
-      const existing = auditEnabled ? await Model.findOne(baseQuery).lean() : null;
+      // Hard-delete path. Need `existing` regardless of audit so the
+      // bus event carries the pre-delete snapshot; the audit-gated
+      // fetch was a savings that the bus event makes obsolete.
+      const existing = await Model.findOne(baseQuery).lean();
       const result = await Model.deleteOne(baseQuery);
       if (!result.deletedCount) throw new NotFoundError(path);
       if (auditEnabled && existing) {
@@ -574,6 +655,25 @@ function registerSchemaTools(server, entry, { schemaLoader, getUser }) {
           before: existing,
           after: null,
         });
+      }
+      if (existing) {
+        try {
+          // Hard-delete has no post-state; `record` carries the
+          // pre-delete projection so webhook consumers see SOMETHING
+          // under the legacy key, with `after: null` to make the
+          // delete-semantics explicit on the new bus shape.
+          const projectedExisting = projectByAcl(existing, s, user);
+          emitRecordEvent({
+            type: `${path}.deleted`,
+            version: s.version,
+            userId: user.user_id,
+            recordId: String(existing._id),
+            record: projectedExisting,
+            before: projectedExisting,
+            after: null,
+            req: reqMeta || undefined,
+          });
+        } catch (_) { /* best-effort */ }
       }
       return { acknowledged: true, deletedCount: result.deletedCount };
     })
@@ -939,6 +1039,12 @@ function registerSchemaTools(server, entry, { schemaLoader, getUser }) {
 function buildMcpServer({
   schemaLoader,
   getUser,
+  // Optional: resolve the active Express `req` for HTTP-transport
+  // callers so tool handlers can stamp `{ ip, userAgent, reqId }`
+  // onto record-bus events. Called fresh per tool invocation —
+  // stdio transports leave this undefined and the bus event simply
+  // omits `req`.
+  getReq,
   name = 'davepi',
   version = '1.0.0',
   liveReload = false,
@@ -954,7 +1060,7 @@ function buildMcpServer({
       if (!entry || !entry.schema || !entry.model) continue;
       registeredByKey.set(
         key,
-        registerSchemaTools(server, entry, { schemaLoader, getUser })
+        registerSchemaTools(server, entry, { schemaLoader, getUser, getReq })
       );
     }
   };

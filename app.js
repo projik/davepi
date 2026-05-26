@@ -113,12 +113,17 @@ app.use((req, res, next) => {
 const buildGraphqlContext = ({ req }) => {
   const header = req.headers.authorization || '';
   const token = header.replace(/^bearer\s+/i, '').trim();
-  if (!token) return { user: null };
+  // `req` is threaded through so resolver wrappers in
+  // utils/scopeResolver.js can pull `{ ip, userAgent, reqId }` onto
+  // record-bus events (parity with REST). Only the narrow metadata
+  // shape leaves the wrapper via `buildReqMeta(req)` — the full req
+  // never reaches a bus subscriber.
+  if (!token) return { user: null, req };
   try {
     const decoded = jwt.verify(token, process.env.TOKEN_KEY);
-    return { user: decoded };
+    return { user: decoded, req };
   } catch (err) {
-    return { user: null };
+    return { user: null, req };
   }
 };
 
@@ -405,6 +410,10 @@ app.post('/mcp', mcpAuth, asyncHandler(async (req, res) => {
   const server = buildMcpServer({
     schemaLoader,
     getUser: () => req.user,
+    // Thread req through so MCP-driven CRUD events carry
+    // `{ ip, userAgent, reqId }` on the record bus — parity with
+    // REST and GraphQL.
+    getReq: () => req,
     name: appName,
   });
   const transport = new StreamableHTTPServerTransport({

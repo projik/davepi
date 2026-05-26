@@ -8,7 +8,7 @@ const {
   stampTenantFields,
   stripTenantFields,
 } = require('./acl');
-const { emitRecordEvent } = require('./events');
+const { emitRecordEvent, buildReqMeta } = require('./events');
 const { runBeforeHook, runAfterHook } = require('./hooks');
 const logger = require('./logger');
 
@@ -18,6 +18,15 @@ const requireUser = (rp) => {
   const userId = rp.context && rp.context.user && rp.context.user.user_id;
   if (!userId) throw new AuthenticationError('Authentication required');
   return userId;
+};
+
+// Pull the narrow `{ ip, userAgent, reqId }` shape off the GraphQL
+// context's `req`. Returns null when no req is present (the SDL
+// playground, in-process GraphQL calls) — bus subscribers already
+// tolerate a missing `req` per utils/events.js's documented shape.
+const reqMetaFromContext = (rp) => {
+  const req = rp && rp.context && rp.context.req;
+  return buildReqMeta(req);
 };
 
 const sameId = (a, b) => String(a) === String(b);
@@ -49,20 +58,46 @@ const userFromContext = (rp) =>
  * The emitted `record` is always projected through the actor's ACL.
  * Webhook delivery is a side channel; ACL-restricted fields visible
  * via the API response must not leak through it either.
+ *
+ * `extras` carries the request metadata + pre-mutation snapshot that
+ * the audit plugin (and any future bus subscriber needing the same)
+ * relies on. Keys:
+ *   - `req`:    `{ ip, userAgent, reqId }` — narrow shape from
+ *               buildReqMeta(rp.context.req). Null for non-HTTP
+ *               callers (in-process GraphQL execution, tests).
+ *   - `before`: projected pre-mutation snapshot for updates/deletes.
+ *               Omitted on creates (before is `null` and the bus
+ *               contract documents that). For removeById, the
+ *               resolver returns the deleted doc under `result.record`
+ *               which is naturally the `before` — we still pass it
+ *               separately so the event shape stays consistent.
+ *   - `after`:  projected post-mutation snapshot. Omitted on deletes
+ *               (after is `null`).
  */
-const emitForMutation = (schema, action, user, result) => {
+const emitForMutation = (schema, action, user, result, extras = {}) => {
   if (!schema || !result) return;
   const userId = user && user.user_id;
   const eventType = `${schema.path}.${action}`;
+  const { req: reqMeta, before, after } = extras;
   if (result.record) {
     const plain = toPlain(result.record);
     const projected = projectByAcl(plain, schema, user);
+    // For deletes, graphql-compose-mongoose's `record` envelope is the
+    // pre-delete document — that IS the `before` snapshot. We deliver
+    // it as `record` (webhook-dispatcher compat) and as `before`, with
+    // `after: null` to make the delete semantics explicit on the bus.
+    const isDelete = action === 'deleted';
     emitRecordEvent({
       type: eventType,
       version: schema.version,
       userId,
       recordId: plain && plain._id ? String(plain._id) : undefined,
       record: projected,
+      before: isDelete
+        ? projected
+        : (before !== undefined ? before : null),
+      after: isDelete ? null : (after !== undefined ? after : projected),
+      req: reqMeta || undefined,
     });
     return;
   }
@@ -70,12 +105,17 @@ const emitForMutation = (schema, action, user, result) => {
     result.records.forEach((rec) => {
       const plain = rec ? toPlain(rec) : null;
       const projected = plain ? projectByAcl(plain, schema, user) : null;
+      // createMany only — never delete or update, so before is always
+      // null and after equals the projected record.
       emitRecordEvent({
         type: eventType,
         version: schema.version,
         userId,
         recordId: plain && plain._id ? String(plain._id) : undefined,
         record: projected,
+        before: null,
+        after: projected,
+        req: reqMeta || undefined,
       });
     });
     return;
@@ -86,6 +126,8 @@ const emitForMutation = (schema, action, user, result) => {
       version: schema.version,
       userId,
       numAffected: result.numAffected,
+      filter: extras.filter,
+      req: reqMeta || undefined,
     });
   }
 };
@@ -186,8 +228,22 @@ const wrapFilter = (resolver, { schema, action, kind = 'write' } = {}) => {
     }
 
     const result = await next(rp);
-    if (action === 'update') emitForMutation(schema, 'updated', user, result);
-    else if (kind === 'delete') emitForMutation(schema, 'deleted', user, result);
+    const reqMeta = reqMetaFromContext(rp);
+    // Bulk update/delete (updateMany/removeMany) result envelopes only
+    // carry `numAffected` — no per-record before/after is available.
+    // The `filter` we just composed is the most useful breadcrumb for
+    // a subscriber trying to reconstruct what the bulk hit.
+    if (action === 'update') {
+      emitForMutation(schema, 'updated', user, result, {
+        req: reqMeta,
+        filter: rp.args.filter,
+      });
+    } else if (kind === 'delete') {
+      emitForMutation(schema, 'deleted', user, result, {
+        req: reqMeta,
+        filter: rp.args.filter,
+      });
+    }
     return projectResult(result, schema, user);
   });
 };
@@ -210,7 +266,9 @@ const wrapCreateOne = (resolver, { schema } = {}) => {
     stampTenantFields(stamped, user);
     rp.args.record = stamped;
     const result = await next(rp);
-    emitForMutation(schema, 'created', user, result);
+    emitForMutation(schema, 'created', user, result, {
+      req: reqMetaFromContext(rp),
+    });
     const projected = projectResult(result, schema, user);
     if (projected && projected.record) {
       await runAfterHook(
@@ -234,7 +292,9 @@ const wrapCreateMany = (resolver, { schema } = {}) => {
       return { ...filtered, ...stampedValues(userId) };
     });
     const result = await next(rp);
-    emitForMutation(schema, 'created', user, result);
+    emitForMutation(schema, 'created', user, result, {
+      req: reqMetaFromContext(rp),
+    });
     return projectResult(result, schema, user);
   });
 };
@@ -294,16 +354,22 @@ const wrapByIdMutation = (Model) => (resolver, { schema, action, kind = 'write' 
       ? { _id: rp.args._id }
       : { _id: rp.args._id, userId };
 
-    // Update/delete hooks may want the `current` document. Pull the
-    // full lean copy when a relevant hook is declared; otherwise keep
-    // the cheap _id-only existence check.
+    // Update/delete hooks may want the `current` document. We also
+    // want a `before` snapshot on bus events so the audit plugin can
+    // diff before→after — same posture REST PUT/:id has had since the
+    // initial plugin landed (auditEnabled defaults to true, so the
+    // fetch happens by default and a schema can opt out via
+    // `audit: false`). One read covers all three consumers.
     const isUpdate = action === 'update';
     const isDelete = kind === 'delete';
     const hookName = isUpdate
       ? (isDelete ? null : 'beforeUpdate')
       : (isDelete ? 'beforeDelete' : null);
     const afterHookName = isUpdate ? 'afterUpdate' : (isDelete ? 'afterDelete' : null);
+    const auditEnabled = !schema || schema.audit !== false;
     const needsCurrent = Boolean(
+      auditEnabled && (isUpdate || isDelete)
+    ) || Boolean(
       schema && schema.hooks && (
         (hookName && schema.hooks[hookName]) ||
         (afterHookName && schema.hooks[afterHookName])
@@ -349,8 +415,28 @@ const wrapByIdMutation = (Model) => (resolver, { schema, action, kind = 'write' 
     }
 
     const result = await next(rp);
-    if (isUpdate) emitForMutation(schema, 'updated', user, result);
-    else if (isDelete) emitForMutation(schema, 'deleted', user, result);
+    const reqMeta = reqMetaFromContext(rp);
+    // `before` is `current` projected through the actor's ACL —
+    // same enforcement site as the result projection, so a webhook
+    // subscriber whose roles can't read a field can't see it in the
+    // event's `before` snapshot either.
+    const projectedBefore = current ? projectByAcl(current, schema, user) : null;
+    if (isUpdate) {
+      emitForMutation(schema, 'updated', user, result, {
+        req: reqMeta,
+        before: projectedBefore,
+      });
+    } else if (isDelete) {
+      // For deletes, emitForMutation infers `before` from the result's
+      // record envelope (graphql-compose-mongoose returns the deleted
+      // doc). We pass the pre-fetched `projectedBefore` only as a
+      // belt-and-suspenders fallback when the result envelope is
+      // missing — same defensive posture as the create-event path.
+      emitForMutation(schema, 'deleted', user, result, {
+        req: reqMeta,
+        before: projectedBefore,
+      });
+    }
     const projected = projectResult(result, schema, user);
     if (afterHookName && schema && schema.hooks && schema.hooks[afterHookName]) {
       const recordOut = projected && projected.record ? projected.record : null;
@@ -495,7 +581,18 @@ const wrapStateTransition = ({
     const ownership = { _id: params._id, userId: ctx.user.user_id };
     const before = await Model.findOne(ownership).lean();
     if (!before) throw new ForbiddenError('Record not found');
-    const result = await runner({ user: ctx.user, before, to: params.to });
+    // Thread `req` (and its narrow `buildReqMeta` shape) into the
+    // runner so the schema-loader's transition emit sites can stamp
+    // ip/userAgent/reqId onto the record-bus event — same audit-trail
+    // parity REST PUT/:id and the auto-generated CRUD GraphQL
+    // resolvers already provide.
+    const result = await runner({
+      user: ctx.user,
+      before,
+      to: params.to,
+      req: ctx && ctx.req,
+      reqMeta: buildReqMeta(ctx && ctx.req),
+    });
     // Apply field-level read ACL on the way out — same contract
     // wrapFilter / wrapByIdMutation enforce so the Transition
     // mutation can't be used as a side channel to read fields the

@@ -354,4 +354,219 @@ describe('davepi-plugin-audit — end-to-end via pluginLoader', () => {
       }
     }
   });
+
+  test('GraphQL createOne / updateById / removeById produce audit rows with before/after/diff', async () => {
+    // GraphQL parity check: a CreateOne + UpdateById + RemoveById on
+    // the same record should produce three audit rows whose
+    // before/after/diff match what REST produces — proves the
+    // scopeResolver wrappers thread req metadata and pre-mutation
+    // snapshots through `emitForMutation` (the follow-up to PR #120).
+    await ctx.app.locals.schemaLoader.loadSchema({
+      path: 'plugin_audit_gql_target',
+      collection: 'plugin_audit_gql_target',
+      version: 'v1',
+      fields: [
+        { name: 'userId', type: String, required: true },
+        { name: 'title', type: String, required: true },
+        { name: 'amount', type: Number },
+      ],
+    });
+
+    const user = await registerUser(ctx.request, ctx.app);
+    const gql = (query, variables) =>
+      ctx
+        .request(ctx.app)
+        .post('/graphql/')
+        .set('Authorization', `Bearer ${user.token}`)
+        .send({ query, variables });
+
+    // CreateOne
+    const createRes = await gql(`
+      mutation Create($r: CreateOneplugin_audit_gql_targetInput!) {
+        plugin_audit_gql_targetCreateOne(record: $r) {
+          recordId
+          record { _id title amount }
+        }
+      }
+    `, { r: { title: 'gql-first', amount: 50 } });
+    expect(createRes.body.errors).toBeUndefined();
+    const id = createRes.body.data.plugin_audit_gql_targetCreateOne.recordId;
+
+    // UpdateById
+    const updateRes = await gql(`
+      mutation Upd($id: MongoID!, $r: UpdateByIdplugin_audit_gql_targetInput!) {
+        plugin_audit_gql_targetUpdateById(_id: $id, record: $r) {
+          record { _id title amount }
+        }
+      }
+    `, { id, r: { amount: 175 } });
+    expect(updateRes.body.errors).toBeUndefined();
+
+    // RemoveById
+    const removeRes = await gql(`
+      mutation Rm($id: MongoID!) {
+        plugin_audit_gql_targetRemoveById(_id: $id) {
+          recordId
+        }
+      }
+    `, { id });
+    expect(removeRes.body.errors).toBeUndefined();
+
+    await new Promise((r) => setImmediate(r));
+
+    const list = await ctx
+      .request(ctx.app)
+      .get('/api/v1/audit?resource=plugin_audit_gql_target')
+      .set('Authorization', `Bearer ${user.token}`);
+    expect(list.status).toBe(200);
+    const rows = list.body.results.filter(
+      (r) => r.resource === 'plugin_audit_gql_target' && r.resourceId === id
+    );
+    expect(rows).toHaveLength(3);
+    const byAction = Object.fromEntries(rows.map((r) => [r.action, r]));
+    expect(Object.keys(byAction).sort()).toEqual(['created', 'deleted', 'updated']);
+
+    // created: after carries the new payload, before is null.
+    expect(byAction.created.before).toBeNull();
+    expect(byAction.created.after.title).toBe('gql-first');
+    expect(byAction.created.after.amount).toBe(50);
+    expect(byAction.created.userId).toBe(String(user._id));
+
+    // updated: before = pre-update, after = post-update — proves
+    // `wrapByIdMutation` now fetches `current` even without hooks
+    // declared (audit-on-by-default posture, matching REST).
+    expect(byAction.updated.before).toBeTruthy();
+    expect(byAction.updated.before.amount).toBe(50);
+    expect(byAction.updated.after.amount).toBe(175);
+    const amountReplace = byAction.updated.diff.find(
+      (op) => op.path === '/amount'
+    );
+    expect(amountReplace).toBeDefined();
+    expect(amountReplace.op).toBe('replace');
+    expect(amountReplace.value).toBe(175);
+
+    // deleted: before is the pre-delete projection (the
+    // graphql-compose-mongoose `removeById` returns the deleted doc
+    // under `record`, which IS the before snapshot — the plugin
+    // pre-fill maps it correctly), after is null.
+    expect(byAction.deleted.before).toBeTruthy();
+    expect(byAction.deleted.after).toBeNull();
+  });
+
+  test('MCP create_/update_/delete_ tool calls produce audit rows with before/after/diff', async () => {
+    // MCP parity check: the tool handlers in utils/mcpServer.js now
+    // emit record-bus events (the follow-up to PR #120 — before this
+    // change MCP CRUD was invisible to the audit plugin). We drive
+    // the in-process MCP server directly so the test asserts the
+    // emit path without needing to round-trip JSON-RPC over HTTP.
+    const jwt = require('jsonwebtoken');
+    const { buildMcpServer } = require('../utils/mcpServer');
+    const { Client } = require('@modelcontextprotocol/sdk/client/index.js');
+    const { InMemoryTransport } = require('@modelcontextprotocol/sdk/inMemory.js');
+
+    await ctx.app.locals.schemaLoader.loadSchema({
+      path: 'plugin_audit_mcp_target',
+      collection: 'plugin_audit_mcp_target',
+      version: 'v1',
+      fields: [
+        { name: 'userId', type: String, required: true },
+        { name: 'title', type: String, required: true },
+        { name: 'amount', type: Number },
+      ],
+    });
+
+    const user = await registerUser(ctx.request, ctx.app);
+    const decodedUser = jwt.decode(user.token);
+    // `getReq` simulates the HTTP transport's per-request `req` shape
+    // — buildReqMeta needs `req.ip`, `req.get('user-agent')`, and
+    // `req.id`. The MCP-driven audit row should carry those three.
+    const fakeReq = {
+      ip: '10.0.0.42',
+      headers: { 'user-agent': 'mcp-integration-test/1.0' },
+      get: (h) =>
+        h.toLowerCase() === 'user-agent' ? 'mcp-integration-test/1.0' : null,
+      id: 'mcp-test-req-id',
+    };
+    const server = buildMcpServer({
+      schemaLoader: ctx.app.locals.schemaLoader,
+      getUser: () => decodedUser,
+      getReq: () => fakeReq,
+      name: 'audit-mcp-test',
+    });
+    const [transA, transB] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: 'audit-mcp-client', version: '0.0.1' });
+    await Promise.all([server.connect(transB), client.connect(transA)]);
+
+    const parse = (res) => {
+      if (res.structuredContent !== undefined) return res.structuredContent;
+      const txt = res.content && res.content[0] && res.content[0].text;
+      return txt ? JSON.parse(txt) : null;
+    };
+
+    let id;
+    try {
+      // create_
+      const createRes = await client.callTool({
+        name: 'create_plugin_audit_mcp_target',
+        arguments: { record: { title: 'mcp-first', amount: 7 } },
+      });
+      const created = parse(createRes);
+      expect(created._id).toBeDefined();
+      id = created._id;
+
+      // update_
+      const updateRes = await client.callTool({
+        name: 'update_plugin_audit_mcp_target',
+        arguments: { id, record: { amount: 42 } },
+      });
+      expect(parse(updateRes).amount).toBe(42);
+
+      // delete_
+      const deleteRes = await client.callTool({
+        name: 'delete_plugin_audit_mcp_target',
+        arguments: { id },
+      });
+      expect(parse(deleteRes).softDeleted).toBe(true);
+    } finally {
+      await client.close();
+      await server.close();
+    }
+
+    await new Promise((r) => setImmediate(r));
+
+    const list = await ctx
+      .request(ctx.app)
+      .get('/api/v1/audit?resource=plugin_audit_mcp_target')
+      .set('Authorization', `Bearer ${user.token}`);
+    expect(list.status).toBe(200);
+    const rows = list.body.results.filter(
+      (r) => r.resource === 'plugin_audit_mcp_target' && r.resourceId === id
+    );
+    expect(rows).toHaveLength(3);
+    const byAction = Object.fromEntries(rows.map((r) => [r.action, r]));
+    expect(Object.keys(byAction).sort()).toEqual(['created', 'deleted', 'updated']);
+
+    // created: before null, after carries the payload, req metadata
+    // populated from `getReq`.
+    expect(byAction.created.before).toBeNull();
+    expect(byAction.created.after.title).toBe('mcp-first');
+    expect(byAction.created.ip).toBe('10.0.0.42');
+    expect(byAction.created.userAgent).toBe('mcp-integration-test/1.0');
+    expect(byAction.created.reqId).toBe('mcp-test-req-id');
+
+    // updated: before = pre-update, after = post-update, diff has
+    // /amount replace.
+    expect(byAction.updated.before.amount).toBe(7);
+    expect(byAction.updated.after.amount).toBe(42);
+    const amountReplace = byAction.updated.diff.find(
+      (op) => op.path === '/amount'
+    );
+    expect(amountReplace).toBeDefined();
+    expect(amountReplace.value).toBe(42);
+
+    // deleted (soft): before has deletedAt null, after has deletedAt set.
+    expect(byAction.deleted.before).toBeTruthy();
+    expect(byAction.deleted.before.deletedAt).toBeNull();
+    expect(byAction.deleted.after.deletedAt).toBeTruthy();
+  });
 });

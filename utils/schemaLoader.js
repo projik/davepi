@@ -1765,7 +1765,7 @@ function createSchemaLoader({ app, apiSpec, setApolloRouter, buildGraphqlContext
           schema: s,
           kind: 'write',
           action: 'update',
-          runner: async ({ user, before, to }) => {
+          runner: async ({ user, before, to, reqMeta }) => {
             const v = validateTransition(f, before[f.name], to);
             if (!v.valid) {
               // Apollo Server v3 wraps unknown errors as
@@ -1802,6 +1802,16 @@ function createSchemaLoader({ app, apiSpec, setApolloRouter, buildGraphqlContext
                 });
               } catch (_) { /* best-effort */ }
             }
+            // Project before / after through the actor's ACL —
+            // raw DB snapshots would leak ACL-restricted fields onto
+            // the bus and into outbound webhooks. Mirrors the REST
+            // PUT/:id transition emit site posture.
+            const projectedBefore = projectByAcl(
+              { ...before, [f.name]: v.current },
+              s,
+              user
+            );
+            const projectedAfter = after ? projectByAcl(after, s, user) : null;
             emitRecordEvent({
               type: `${p}.transitioned`,
               version: s.version,
@@ -1810,6 +1820,10 @@ function createSchemaLoader({ app, apiSpec, setApolloRouter, buildGraphqlContext
               field: f.name,
               from: v.current,
               to,
+              record: projectedAfter,
+              before: projectedBefore,
+              after: projectedAfter,
+              req: reqMeta || undefined,
             });
             // Also emit the standard updated event so existing
             // webhook subscribers see the change.
@@ -1818,6 +1832,10 @@ function createSchemaLoader({ app, apiSpec, setApolloRouter, buildGraphqlContext
               version: s.version,
               userId: user.user_id,
               recordId: String(before._id),
+              record: projectedAfter,
+              before: projectedBefore,
+              after: projectedAfter,
+              req: reqMeta || undefined,
             });
             const hook = (f.stateMachine.onEnter || {})[to];
             if (typeof hook === 'function') {

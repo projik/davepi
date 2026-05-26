@@ -162,16 +162,29 @@ function startWebhookDispatcher({
 
   async function onRecord(event) {
     if (!event || !event.type) return;
-    const subs = await Webhook.find({
-      userId: event.userId,
-      active: true,
-    });
-    for (const sub of subs) {
-      if (eventMatches(sub.events, event.type)) {
-        deliver(sub._id, event, 0).catch((err) => {
-          log.error({ err, subId: String(sub._id) }, 'webhook initial dispatch threw');
-        });
+    // EventEmitter.emit() runs listeners synchronously and ignores
+    // their return values, so an async listener like this one becomes
+    // a detached promise the second it `await`s anything. Wrapping
+    // every awaited path in try/catch keeps a transient infra failure
+    // (Mongo disconnect, intermittent network blip, a test harness
+    // shutting down between an emit and the resulting `find`) from
+    // surfacing as an unhandledRejection that jest then attributes to
+    // an unrelated test. Same posture every plugin bus subscriber
+    // already follows.
+    try {
+      const subs = await Webhook.find({
+        userId: event.userId,
+        active: true,
+      });
+      for (const sub of subs) {
+        if (eventMatches(sub.events, event.type)) {
+          deliver(sub._id, event, 0).catch((err) => {
+            log.error({ err, subId: String(sub._id) }, 'webhook initial dispatch threw');
+          });
+        }
       }
+    } catch (err) {
+      log.error({ err, type: event.type }, 'webhook dispatcher onRecord failed');
     }
   }
 
