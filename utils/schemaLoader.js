@@ -12,7 +12,7 @@ const auth = require('../middleware/auth');
 const asyncHandler = require('./asyncHandler');
 const logger = require('./logger');
 const { NotFoundError, ValidationError, InvalidTransitionError } = require('./errors');
-const { emitRecordEvent } = require('./events');
+const { emitRecordEvent, buildReqMeta } = require('./events');
 const { recordAudit } = require('./audit');
 const AuditLog = require('../model/auditLog');
 const {
@@ -701,6 +701,7 @@ function createSchemaLoader({ app, apiSpec, setApolloRouter, buildGraphqlContext
             userId: String(req.user.user_id),
             recordId: String(record._id),
             record: projectByAcl(decorated, s, req.user),
+            req: buildReqMeta(req),
           });
           res.status(201).json(decorated[fieldName]);
         })
@@ -827,6 +828,9 @@ function createSchemaLoader({ app, apiSpec, setApolloRouter, buildGraphqlContext
           userId: req.user.user_id,
           recordId: String(record._id),
           record: projected,
+          before: null,
+          after: projected,
+          req: buildReqMeta(req),
         });
         await runAfterHook(
           s,
@@ -980,6 +984,7 @@ function createSchemaLoader({ app, apiSpec, setApolloRouter, buildGraphqlContext
           userId: req.user.user_id,
           filter: safeQuery,
           numAffected: record.modifiedCount + (record.upsertedCount || 0),
+          req: buildReqMeta(req),
         });
         res.status(200).json(record);
       })
@@ -1063,6 +1068,16 @@ function createSchemaLoader({ app, apiSpec, setApolloRouter, buildGraphqlContext
             version: s.version,
             userId: req.user.user_id,
             recordId: String(req.params.id),
+            // `record` is the legacy payload key the webhook dispatcher
+            // serializes onto outbound deliveries; it stayed undefined
+            // when we added `before` / `after`, which broke webhook
+            // consumers (their payload's `record` came through as
+            // `undefined`). The tombstoned projection is the right
+            // shape — same as the audit row's `after`.
+            record: projectByAcl(tombstoned, s, req.user),
+            before: projectByAcl(existing, s, req.user),
+            after: projectByAcl(tombstoned, s, req.user),
+            req: buildReqMeta(req),
           });
           await runAfterHook(
             s,
@@ -1112,6 +1127,14 @@ function createSchemaLoader({ app, apiSpec, setApolloRouter, buildGraphqlContext
           version: s.version,
           userId: req.user.user_id,
           recordId: String(req.params.id),
+          // Legacy `record` payload key for the webhook dispatcher.
+          // Hard-delete has no post-state, so the pre-delete projection
+          // is the most useful snapshot to deliver — consumers expect
+          // SOMETHING under `record` on a delete event.
+          record: existing ? projectByAcl(existing, s, req.user) : null,
+          before: existing ? projectByAcl(existing, s, req.user) : null,
+          after: null,
+          req: buildReqMeta(req),
         });
         await runAfterHook(
           s,
@@ -1313,30 +1336,48 @@ function createSchemaLoader({ app, apiSpec, setApolloRouter, buildGraphqlContext
           result = await model.updateOne(query, { $set: writable });
           if (!result.matchedCount) throw new NotFoundError(path);
         }
+        // Fetch the post-update snapshot once and re-use it for audit,
+        // the bus event, and afterUpdate. Three consumers all wanted
+        // their own findById; one read is enough.
+        const afterDoc = before
+          ? await model.findById(req.params.id).lean()
+          : null;
         if (auditEnabled && before) {
-          const after = await model.findById(req.params.id).lean();
           await audit({
             req,
             recordId: req.params.id,
             action: 'update',
             before,
-            after,
+            after: afterDoc,
           });
         }
+        // Project once and reuse: the bus event, the webhook dispatcher
+        // (via `record`), and the afterUpdate hook all want the same
+        // ACL-filtered shape — `projectByAcl` is the single source of
+        // truth for "what's safe to deliver via a side channel".
+        const projectedAfter = afterDoc ? projectByAcl(afterDoc, s, req.user) : null;
+        const projectedBefore = before ? projectByAcl(before, s, req.user) : null;
         emitRecordEvent({
           type: `${path}.updated`,
           version: s.version,
           userId: req.user.user_id,
           recordId: String(req.params.id),
+          // Legacy `record` payload key for the webhook dispatcher.
+          // `record` was unset on update events while `before`/`after`
+          // were introduced for the audit plugin; that turned every
+          // outbound updated-event delivery's `record` into JSON
+          // `undefined`. Restored — same projection as `after`.
+          record: projectedAfter,
+          before: projectedBefore,
+          after: projectedAfter,
+          req: buildReqMeta(req),
         });
         if (s.hooks && s.hooks.afterUpdate) {
-          const after = await model.findById(req.params.id).lean();
-          const projected = after ? projectByAcl(after, s, req.user) : null;
           await runAfterHook(
             s,
             'afterUpdate',
             {
-              record: projected,
+              record: projectedAfter,
               previous: before,
               user: req.user,
               req,
@@ -1350,7 +1391,7 @@ function createSchemaLoader({ app, apiSpec, setApolloRouter, buildGraphqlContext
         // failed audit / hook / event must not roll back a
         // successful state change.
         if (transitions.length) {
-          const fresh = before ? await model.findById(req.params.id).lean() : null;
+          const fresh = afterDoc;
           for (const t of transitions) {
             if (auditEnabled) {
               await audit({
@@ -1369,6 +1410,20 @@ function createSchemaLoader({ app, apiSpec, setApolloRouter, buildGraphqlContext
               field: t.field.name,
               from: t.current,
               to: t.next,
+              // `record` / `before` / `after` ride the same projection
+              // contract every other single-record event uses — raw DB
+              // snapshots here would leak ACL-restricted fields (e.g.
+              // `salary`) to webhook subscribers and the audit plugin.
+              // We deliberately don't re-stamp `[t.field.name]` after
+              // projection: if projectByAcl stripped the state field
+              // because the caller can't read it, re-injecting the
+              // value would reintroduce the leak it just guarded.
+              // Consumers that need the transition value still have
+              // `field` / `from` / `to` on the event.
+              record: projectedAfter,
+              before: projectedBefore,
+              after: projectedAfter,
+              req: buildReqMeta(req),
             });
             const onEnterHooks =
               (t.field.stateMachine && t.field.stateMachine.onEnter) || {};

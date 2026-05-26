@@ -287,10 +287,16 @@ describe('Event bus + webhook dispatcher', () => {
       for (let i = 0; i < 30 && received.length === 0; i++) {
         await new Promise((r) => setTimeout(r, 50));
       }
-      // wh_emp.updated for a single record path emits no `record` body
-      // (only recordId), so the salary leak is naturally absent on PUT.
-      // Switch to GraphQL createOne where the resolver returns the
-      // populated record envelope and ACL projection matters.
+      // wh_emp.updated DOES carry a `record` payload (added so the
+      // davepi-plugin-audit's downstream consumers and existing webhook
+      // subscribers both see the post-update snapshot). The plain user
+      // has neither `hr` nor `admin`, so ACL projection should strip
+      // `salary` before the payload reaches the wire.
+      expect(received.length).toBe(1);
+      const putPayload = JSON.parse(received[0].body);
+      expect(putPayload.record).toBeDefined();
+      expect(putPayload.record.name).toBe('Touched');
+      expect(putPayload.record.salary).toBeUndefined();
       received = [];
       const created = await ctx
         .request(ctx.app)
