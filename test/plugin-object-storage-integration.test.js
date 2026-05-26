@@ -1,5 +1,5 @@
 /**
- * Integration test for davepi-plugin-s3. Drives the plugin through the
+ * Integration test for davepi-plugin-object-storage. Drives the plugin through the
  * real pluginLoader against a live Express app + bus + Mongo (via
  * `mongodb-memory-server`), with a fake S3 adapter injected so the
  * test doesn't need a real bucket. The fake adapter records every call
@@ -47,15 +47,15 @@ function buildFakeAdapter() {
 
 const ctx = setupTestApp();
 
-describe('davepi-plugin-s3 — end-to-end via pluginLoader', () => {
+describe('davepi-plugin-object-storage — end-to-end via pluginLoader', () => {
   let adapter;
   let plugin;
 
   beforeAll(async () => {
     const { loadPlugins } = require('../utils/pluginLoader');
     const { bus } = require('../utils/events');
-    const s3ModulePath = path.resolve(__dirname, '..', 'packages', 'davepi-plugin-s3');
-    const { createPlugin } = require(s3ModulePath);
+    const pluginPath = path.resolve(__dirname, '..', 'packages', 'davepi-plugin-object-storage');
+    const { createPlugin } = require(pluginPath);
 
     adapter = buildFakeAdapter();
     plugin = createPlugin({

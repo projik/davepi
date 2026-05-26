@@ -1,4 +1,4 @@
-# davepi-plugin-s3
+# davepi-plugin-object-storage
 
 Presigned-URL file uploads for [dAvePi][davepi]. Auto-registers a generic `file` schema, mounts upload-url / complete / download-url routes that hand the client a presigned URL so bytes travel **client → bucket** without proxying through the API server. Pluggable backend supports AWS S3, Cloudflare R2, MinIO, and Google Cloud Storage.
 
@@ -18,7 +18,7 @@ Both pipelines coexist in the same app. Use whichever fits.
 ## Install
 
 ```bash
-npm install davepi-plugin-s3
+npm install davepi-plugin-object-storage
 ```
 
 Add it to your project's `package.json` under `davepi.plugins`:
@@ -26,7 +26,7 @@ Add it to your project's `package.json` under `davepi.plugins`:
 ```json
 {
   "davepi": {
-    "plugins": ["davepi-plugin-s3"]
+    "plugins": ["davepi-plugin-object-storage"]
   }
 }
 ```
@@ -155,10 +155,10 @@ GraphQL: `file`, `files`, `fileFilter`, `fileUpdateById`, `fileRemoveById` — s
 For schema lifecycle hooks and custom routes:
 
 ```js
-const s3 = require('davepi-plugin-s3');
+const storage = require('davepi-plugin-object-storage');
 
 // Issue a presigned PUT URL from inside a hook.
-const { url, fileId } = await s3.createUploadUrl({
+const { url, fileId } = await storage.createUploadUrl({
   user: req.user,
   contentType: 'image/png',
   originalName: 'avatar.png',
@@ -168,13 +168,13 @@ const { url, fileId } = await s3.createUploadUrl({
 
 // Sign a short-lived GET URL. Returns null if the file isn't owned by
 // the caller — same tenant-isolation posture as the REST route.
-const dl = await s3.createDownloadUrl({ user: req.user, fileId });
+const dl = await storage.createDownloadUrl({ user: req.user, fileId });
 
 // Server-side delete (both the blob and the record).
-await s3.deleteFile({ user: req.user, fileId });
+await storage.deleteFile({ user: req.user, fileId });
 
 // Adapter escape hatch — call provider-specific APIs directly.
-const head = await s3.adapter.headObject({ key });
+const head = await storage.adapter.headObject({ key });
 ```
 
 ## Bucket CORS
@@ -256,11 +256,11 @@ The same rules as every other dAvePi resource:
 ## Tests
 
 ```bash
-cd packages/davepi-plugin-s3
+cd packages/davepi-plugin-object-storage
 npm test
 ```
 
-67 unit tests via `node --test` (config, key generation, AWS adapter, GCS adapter, routes, reaper, plugin setup). Plus an integration test under the framework's Jest suite (`test/plugin-s3-integration.test.js`) that drives a real `loadPlugins` → REST upload-url → complete → download-url flow against `mongodb-memory-server` with a mock adapter, asserting tenant isolation, mime/size allowlists, and cascade-delete behaviour.
+67 unit tests via `node --test` (config, key generation, AWS adapter, GCS adapter, routes, reaper, plugin setup). Plus an integration test under the framework's Jest suite (`test/plugin-object-storage-integration.test.js`) that drives a real `loadPlugins` → REST upload-url → complete → download-url flow against `mongodb-memory-server` with a mock adapter, asserting tenant isolation, mime/size allowlists, and cascade-delete behaviour.
 
 ## License
 

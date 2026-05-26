@@ -34,7 +34,7 @@ function buildFileSchema({
   log,
 }) {
   const Mixed = mongoose.Schema.Types.Mixed;
-  const NO_ONE = ['__davepi_plugin_s3_only__'];
+  const NO_ONE = ['__davepi_plugin_object_storage_only__'];
   const withWriteLock = (field) => ({
     ...field,
     acl: { ...(field.acl || {}), create: NO_ONE, update: NO_ONE },
@@ -53,8 +53,8 @@ function buildFileSchema({
       // the framework's pino instance and move on.
       if (log && typeof log.error === 'function') {
         log.error(
-          { err, plugin: 's3', key: record.key },
-          'davepi-plugin-s3: cascade-delete of storage object failed'
+          { err, plugin: 'object-storage', key: record.key },
+          'davepi-plugin-object-storage: cascade-delete of storage object failed'
         );
       }
     }

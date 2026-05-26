@@ -59,8 +59,8 @@ function createReaper({ getModel, adapter, config, log }) {
           // — no lost work.
           if (log && typeof log.warn === 'function') {
             log.warn(
-              { err, plugin: 's3', key: doc.key },
-              'davepi-plugin-s3: reaper failed to delete storage object; will retry'
+              { err, plugin: 'object-storage', key: doc.key },
+              'davepi-plugin-object-storage: reaper failed to delete storage object; will retry'
             );
           }
           continue;
@@ -71,8 +71,8 @@ function createReaper({ getModel, adapter, config, log }) {
         } catch (err) {
           if (log && typeof log.warn === 'function') {
             log.warn(
-              { err, plugin: 's3', fileId: String(doc._id) },
-              'davepi-plugin-s3: reaper failed to delete pending record; will retry'
+              { err, plugin: 'object-storage', fileId: String(doc._id) },
+              'davepi-plugin-object-storage: reaper failed to delete pending record; will retry'
             );
           }
         }
@@ -92,8 +92,8 @@ function createReaper({ getModel, adapter, config, log }) {
         // setInterval task on older Node versions. Belt-and-suspenders.
         if (log && typeof log.error === 'function') {
           log.error(
-            { err, plugin: 's3' },
-            'davepi-plugin-s3: reaper sweep threw unexpectedly'
+            { err, plugin: 'object-storage' },
+            'davepi-plugin-object-storage: reaper sweep threw unexpectedly'
           );
         }
       });

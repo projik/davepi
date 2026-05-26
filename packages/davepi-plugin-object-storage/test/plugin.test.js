@@ -168,7 +168,7 @@ test('setup: with bucket + injected deps → registers schema, mounts routes', a
   assert.equal(schema.softDelete, false);
   // Write-locked fields must declare a sentinel ACL role.
   const keyField = schema.fields.find((f) => f.name === 'key');
-  assert.ok(keyField.acl.create.length === 1 && keyField.acl.create[0].includes('plugin_s3'));
+  assert.ok(keyField.acl.create.length === 1 && keyField.acl.create[0].includes('plugin_object_storage'));
 
   assert.equal(args.app.mounted.length, 1);
   assert.equal(args.app.mounted[0].prefix, '/api/files');

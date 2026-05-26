@@ -1,13 +1,13 @@
 'use strict';
 
 /**
- * davepi-plugin-s3
+ * davepi-plugin-object-storage
  *
  * Presigned-URL file uploads for dAvePi. Mounted by listing the package
  * under the consumer project's `package.json -> davepi.plugins`:
  *
  *   {
- *     "davepi": { "plugins": ["davepi-plugin-s3"] }
+ *     "davepi": { "plugins": ["davepi-plugin-object-storage"] }
  *   }
  *
  * Where this fits in the framework: the in-tree `type: 'File'` field
@@ -68,7 +68,7 @@ function createPlugin(opts = {}) {
   function ensureEnabled(call) {
     if (!state.enabled) {
       throw new Error(
-        `davepi-plugin-s3: ${call} called but plugin is dormant ` +
+        `davepi-plugin-object-storage: ${call} called but plugin is dormant ` +
         '(S3_BUCKET not set, or setup has not run yet)'
       );
     }
@@ -77,7 +77,7 @@ function createPlugin(opts = {}) {
   async function createUploadUrl({ user, contentType, originalName, size, metadata }) {
     ensureEnabled('createUploadUrl');
     if (!user || !user.user_id) {
-      throw new Error('davepi-plugin-s3: createUploadUrl requires { user: { user_id } }');
+      throw new Error('davepi-plugin-object-storage: createUploadUrl requires { user: { user_id } }');
     }
     const userId = String(user.user_id);
     const key = buildKey({ userId, originalName });
@@ -103,7 +103,7 @@ function createPlugin(opts = {}) {
   async function createDownloadUrl({ user, fileId }) {
     ensureEnabled('createDownloadUrl');
     if (!user || !user.user_id) {
-      throw new Error('davepi-plugin-s3: createDownloadUrl requires { user: { user_id } }');
+      throw new Error('davepi-plugin-object-storage: createDownloadUrl requires { user: { user_id } }');
     }
     const doc = await state.Model.findById(fileId);
     if (!doc || String(doc.userId) !== String(user.user_id)) {
@@ -122,7 +122,7 @@ function createPlugin(opts = {}) {
   async function deleteFile({ user, fileId }) {
     ensureEnabled('deleteFile');
     if (!user || !user.user_id) {
-      throw new Error('davepi-plugin-s3: deleteFile requires { user: { user_id } }');
+      throw new Error('davepi-plugin-object-storage: deleteFile requires { user: { user_id } }');
     }
     const doc = await state.Model.findById(fileId);
     if (!doc || String(doc.userId) !== String(user.user_id)) return false;
@@ -131,8 +131,8 @@ function createPlugin(opts = {}) {
     } catch (err) {
       if (state.log && typeof state.log.warn === 'function') {
         state.log.warn(
-          { err, plugin: 's3', key: doc.key },
-          'davepi-plugin-s3: deleteFile failed to remove storage object'
+          { err, plugin: 'object-storage', key: doc.key },
+          'davepi-plugin-object-storage: deleteFile failed to remove storage object'
         );
       }
       // Don't bail — caller asked to delete the record, so we remove
@@ -149,22 +149,22 @@ function createPlugin(opts = {}) {
 
     if (!config.bucket) {
       log.warn(
-        { plugin: 's3' },
-        'S3_BUCKET not set; davepi-plugin-s3 is dormant'
+        { plugin: 'object-storage' },
+        'S3_BUCKET not set; davepi-plugin-object-storage is dormant'
       );
       return;
     }
     if (!schemaLoader || typeof schemaLoader.loadSchema !== 'function') {
       log.error(
-        { plugin: 's3' },
-        'davepi-plugin-s3 setup({ schemaLoader }) is required; staying dormant'
+        { plugin: 'object-storage' },
+        'davepi-plugin-object-storage setup({ schemaLoader }) is required; staying dormant'
       );
       return;
     }
     if (!app || typeof app.use !== 'function') {
       log.error(
-        { plugin: 's3' },
-        'davepi-plugin-s3 setup({ app }) is required; staying dormant'
+        { plugin: 'object-storage' },
+        'davepi-plugin-object-storage setup({ app }) is required; staying dormant'
       );
       return;
     }
@@ -177,7 +177,7 @@ function createPlugin(opts = {}) {
         mongoose = require('mongoose');
       } catch (err) {
         log.error(
-          { err, plugin: 's3' },
+          { err, plugin: 'object-storage' },
           "could not require 'mongoose' to register file schema; staying dormant"
         );
         return;
@@ -189,7 +189,7 @@ function createPlugin(opts = {}) {
         errors = require('davepi/utils/errors');
       } catch (err) {
         log.error(
-          { err, plugin: 's3' },
+          { err, plugin: 'object-storage' },
           "could not require 'davepi/utils/errors'; staying dormant"
         );
         return;
@@ -201,7 +201,7 @@ function createPlugin(opts = {}) {
         auth = require('davepi/middleware/auth');
       } catch (err) {
         log.error(
-          { err, plugin: 's3' },
+          { err, plugin: 'object-storage' },
           "could not require 'davepi/middleware/auth'; staying dormant"
         );
         return;
@@ -213,7 +213,7 @@ function createPlugin(opts = {}) {
         asyncHandler = require('davepi/utils/asyncHandler');
       } catch (err) {
         log.error(
-          { err, plugin: 's3' },
+          { err, plugin: 'object-storage' },
           "could not require 'davepi/utils/asyncHandler'; staying dormant"
         );
         return;
@@ -228,8 +228,8 @@ function createPlugin(opts = {}) {
       state.adapter = adapterOverride || createAdapter(config, { sdkOverrides });
     } catch (err) {
       log.error(
-        { err, plugin: 's3', backend: config.backend },
-        'davepi-plugin-s3: adapter construction failed; staying dormant'
+        { err, plugin: 'object-storage', backend: config.backend },
+        'davepi-plugin-object-storage: adapter construction failed; staying dormant'
       );
       return;
     }
@@ -250,16 +250,16 @@ function createPlugin(opts = {}) {
       await schemaLoader.loadSchema(schema);
     } catch (err) {
       log.error(
-        { err, plugin: 's3' },
-        'davepi-plugin-s3: failed to register file schema; staying dormant'
+        { err, plugin: 'object-storage' },
+        'davepi-plugin-object-storage: failed to register file schema; staying dormant'
       );
       return;
     }
     const entry = schemaLoader.getEntry(`${config.fileVersion}/${config.filePath}`);
     if (!entry || !entry.model) {
       log.error(
-        { plugin: 's3' },
-        'davepi-plugin-s3: file schema registered but model is missing; staying dormant'
+        { plugin: 'object-storage' },
+        'davepi-plugin-object-storage: file schema registered but model is missing; staying dormant'
       );
       return;
     }
@@ -275,7 +275,7 @@ function createPlugin(opts = {}) {
         expressMod = require('express');
       } catch (err) {
         log.error(
-          { err, plugin: 's3' },
+          { err, plugin: 'object-storage' },
           "could not require 'express' to build router; staying dormant"
         );
         return;
@@ -325,7 +325,7 @@ function createPlugin(opts = {}) {
         cascadeDelete: config.cascadeDelete,
         reapEnabled:   config.reapEnabled,
       },
-      'davepi-plugin-s3 ready'
+      'davepi-plugin-object-storage ready'
     );
 
     // Keep references the contract guarantees we receive even when we
@@ -336,7 +336,7 @@ function createPlugin(opts = {}) {
   }
 
   return {
-    name: 's3',
+    name: 'object-storage',
     setup,
     createUploadUrl,
     createDownloadUrl,

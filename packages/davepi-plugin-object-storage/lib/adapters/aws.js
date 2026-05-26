@@ -33,7 +33,7 @@ function createAwsAdapter(config, { sdkOverride } = {}) {
   const { getSignedUrl } = sdk.presigner;
 
   if (!config.bucket) {
-    throw new Error('davepi-plugin-s3 (aws adapter): S3_BUCKET is required');
+    throw new Error('davepi-plugin-object-storage (aws adapter): S3_BUCKET is required');
   }
 
   const region = config.region || 'us-east-1';

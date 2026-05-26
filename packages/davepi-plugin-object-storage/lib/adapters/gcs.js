@@ -19,14 +19,14 @@ function createGcsAdapter(config, { sdkOverride } = {}) {
   const sdk = sdkOverride || loadSdk();
   if (!sdk) {
     throw new Error(
-      'davepi-plugin-s3 (gcs adapter): @google-cloud/storage is not installed. ' +
+      'davepi-plugin-object-storage (gcs adapter): @google-cloud/storage is not installed. ' +
       'Add it to your dependencies, or set S3_BACKEND to aws / r2 / minio.'
     );
   }
   const { Storage } = sdk;
 
   if (!config.bucket) {
-    throw new Error('davepi-plugin-s3 (gcs adapter): S3_BUCKET is required');
+    throw new Error('davepi-plugin-object-storage (gcs adapter): S3_BUCKET is required');
   }
 
   const storageOpts = {};
