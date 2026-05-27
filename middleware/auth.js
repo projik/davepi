@@ -20,7 +20,7 @@ const verifyToken = (bool) => (req, res, next) => {
     return next(new ForbiddenError('A token is required for authentication'));
   }
   try {
-    req.user = jwt.verify(token, process.env.TOKEN_KEY);
+    req.user = jwt.verify(token, process.env.TOKEN_KEY, { algorithms: ['HS256'] });
   } catch (err) {
     return next(new UnauthorizedError('Invalid Token'));
   }

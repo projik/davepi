@@ -207,7 +207,7 @@ async function main() {
     }
     let user;
     try {
-      user = jwt.verify(token, process.env.TOKEN_KEY);
+      user = jwt.verify(token, process.env.TOKEN_KEY, { algorithms: ['HS256'] });
     } catch (verifyErr) {
       err(`mcp: DAVEPI_TOKEN is invalid (${verifyErr.message})`);
       process.exit(1);

@@ -1896,6 +1896,7 @@ function createSchemaLoader({ app, apiSpec, setApolloRouter, buildGraphqlContext
       tracing: true,
       path: '/',
       context: buildGraphqlContext,
+      csrfPrevention: true,
     });
     await newServer.start();
 

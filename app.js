@@ -115,7 +115,7 @@ const buildGraphqlContext = ({ req }) => {
   const token = header.replace(/^bearer\s+/i, '').trim();
   if (!token) return { user: null };
   try {
-    const decoded = jwt.verify(token, process.env.TOKEN_KEY);
+    const decoded = jwt.verify(token, process.env.TOKEN_KEY, { algorithms: ['HS256'] });
     return { user: decoded };
   } catch (err) {
     return { user: null };
