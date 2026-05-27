@@ -25,7 +25,12 @@ const apiClientSchema = new mongoose.Schema(
     accountId: { type: String },
     description: { type: String },
   },
-  { timestamps: true, collection: 'api_client' }
+  // Model name 'api_client' pluralizes to collection 'api_clients' —
+  // the same name the schema-loader produces from
+  // `schema/versions/v1/apiClient.js`. Both code paths must share a
+  // collection so admin CRUD via the auto-generated routes and the
+  // runtime lookup in `middleware/clientAuth.js` see the same docs.
+  { timestamps: true }
 );
 
 module.exports =

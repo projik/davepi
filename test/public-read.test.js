@@ -232,4 +232,82 @@ describe('apiClient admin surface', () => {
     // Plain user is owner-scoped; they own nothing.
     expect(res.body.results).toEqual([]);
   });
+
+  test('non-admin POST is refused (privilege-escalation defence)', async () => {
+    const u = await registerUser(ctx.request, ctx.app, { email: 'attacker@x.com' });
+    const res = await post(
+      '/api/v1/apiClient',
+      {
+        _id: 'pk_pwned',
+        name: 'pwned',
+        role: 'admin',
+      },
+      u.accessToken
+    );
+    expect(res.status).toBeGreaterThanOrEqual(400);
+    expect(res.status).toBeLessThan(500);
+    // And the row must not exist — even if the response were a 201,
+    // the synthetic admin via X-Client-Id would be a critical
+    // escalation. Belt and braces.
+    const ApiClient = require('../model/apiClient');
+    const row = await ApiClient.findById('pk_pwned').lean();
+    expect(row).toBeNull();
+  });
+
+  test('non-admin PUT cannot promote an existing client to admin', async () => {
+    const created = await post(
+      '/api/v1/apiClient',
+      {
+        _id: 'pk_storefront_putcheck',
+        name: 'storefront',
+        role: 'storefront',
+      },
+      admin.accessToken
+    );
+    expect(created.status).toBe(201);
+    const u = await registerUser(ctx.request, ctx.app, { email: 'puttacker@x.com' });
+    const putRes = await ctx
+      .request(ctx.app)
+      .put('/api/v1/apiClient/pk_storefront_putcheck')
+      .set('Authorization', `Bearer ${u.accessToken}`)
+      .send({ role: 'admin' });
+    expect(putRes.status).toBeGreaterThanOrEqual(400);
+    const row = await ApiClient.findById('pk_storefront_putcheck').lean();
+    expect(row).not.toBeNull();
+    expect(row.role).toBe('storefront');
+  });
+});
+
+describe('History route respects role scope', () => {
+  let owner;
+  beforeEach(async () => {
+    owner = await registerUser(ctx.request, ctx.app, { email: 'hist-owner@x.com' });
+    await post(
+      '/api/v1/public_product',
+      { name: 'Draft Widget', price: 10, cost: 4, published: false },
+      owner.accessToken
+    ).expect(201);
+    await post(
+      '/api/v1/public_product',
+      { name: 'Live Widget', price: 20, cost: 7, published: true },
+      owner.accessToken
+    ).expect(201);
+    await issueClient({ id: 'pk_storefront_hist', role: 'storefront' });
+  });
+
+  test('storefront cannot read history for unpublished records', async () => {
+    const list = await get('/api/v1/public_product', owner.accessToken).expect(200);
+    const draft = list.body.results.find((r) => r.name === 'Draft Widget');
+    await get(`/api/v1/public_product/${draft._id}/history`, null, {
+      'X-Client-Id': 'pk_storefront_hist',
+    }).expect(404);
+  });
+
+  test('storefront can read history for published records (acl.list bypass)', async () => {
+    const list = await get('/api/v1/public_product', owner.accessToken).expect(200);
+    const live = list.body.results.find((r) => r.name === 'Live Widget');
+    await get(`/api/v1/public_product/${live._id}/history`, null, {
+      'X-Client-Id': 'pk_storefront_hist',
+    }).expect(200);
+  });
 });

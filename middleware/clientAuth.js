@@ -1,6 +1,7 @@
 const ApiClient = require('../model/apiClient');
 const { UnauthorizedError, ForbiddenError } = require('../utils/errors');
 const logger = require('../utils/logger');
+const asyncHandler = require('../utils/asyncHandler');
 
 /**
  * Resolve `X-Client-Id` into a synthetic `req.user` so the existing
@@ -36,7 +37,7 @@ const logger = require('../utils/logger');
  * permission would create records attributed to the client — the
  * defence in depth is to refuse outright at the middleware.
  */
-const clientAuth = () => async (req, res, next) => {
+const clientAuth = () => asyncHandler(async (req, res, next) => {
   // Bearer takes priority. Let auth(true) handle it.
   const hasBearer =
     req.headers.authorization &&
@@ -79,6 +80,6 @@ const clientAuth = () => async (req, res, next) => {
   };
   req.clientAuth = { id: client._id, role: client.role, name: client.name };
   return next();
-};
+});
 
 module.exports = clientAuth;

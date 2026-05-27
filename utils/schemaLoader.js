@@ -1201,10 +1201,18 @@ function createSchemaLoader({ app, apiSpec, setApolloRouter, buildGraphqlContext
         const page = parseInt(req.query.__page) || 1;
         // Authorization: must be able to read the record (deleted or
         // not). Bypass for acl.list roles, otherwise the caller must
-        // own the record.
-        const ownerQuery = bypassUserScopeForList(s, req.user)
+        // own the record. Role-scope filter is applied on top so a
+        // role with acl.list bypass still cannot see history for
+        // records outside its acl.scope predicate — without this the
+        // history endpoint would be an alternate read surface that
+        // leaks before/after/diff for out-of-scope records.
+        const baseOwner = bypassUserScopeForList(s, req.user)
           ? { _id: req.params.id }
           : { _id: req.params.id, userId: req.user.user_id };
+        const ownerQuery = applyRoleScopeFilter(
+          baseOwner,
+          getRoleScopeFilter(s, req.user)
+        );
         const exists = await model.findOne(ownerQuery).select('_id').lean();
         if (!exists) throw new NotFoundError(path);
 
