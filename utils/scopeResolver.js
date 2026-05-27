@@ -46,12 +46,28 @@ const matchesScopeFragment = (record, filter) => {
   if (!filter || typeof filter !== 'object') return true;
   for (const [key, expected] of Object.entries(filter)) {
     if (key === '$and') {
-      if (!Array.isArray(expected)) continue;
+      // Malformed scope — fail closed. A schema with
+      // `acl.scope.storefront = { $and: 'oops' }` should hide every
+      // record, not silently treat the constraint as absent and
+      // return everything. Logged so the misconfiguration surfaces.
+      if (!Array.isArray(expected)) {
+        logger.warn(
+          { key, expected: typeof expected },
+          'acl.scope $and is not an array; treating as no-match'
+        );
+        return false;
+      }
       if (!expected.every((f) => matchesScopeFragment(record, f))) return false;
       continue;
     }
     if (key === '$or') {
-      if (!Array.isArray(expected)) continue;
+      if (!Array.isArray(expected)) {
+        logger.warn(
+          { key, expected: typeof expected },
+          'acl.scope $or is not an array; treating as no-match'
+        );
+        return false;
+      }
       if (!expected.some((f) => matchesScopeFragment(record, f))) return false;
       continue;
     }

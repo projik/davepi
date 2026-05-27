@@ -278,6 +278,54 @@ describe('apiClient admin surface', () => {
   });
 });
 
+describe('matchesScopeFragment fails closed on malformed $and/$or', () => {
+  // The in-process matcher is the enforcement site for GraphQL
+  // findById / findByIds — it must not treat a malformed `$and` /
+  // `$or` as "no constraint" and let an out-of-scope record through.
+  const malformedSchema = {
+    path: 'scope_malformed',
+    collection: 'scope_malformed',
+    version: 'v1',
+    fields: [
+      { name: 'userId', type: String, required: true },
+      { name: 'name', type: String },
+      { name: 'published', type: Boolean, default: false },
+    ],
+    acl: {
+      list: ['storefront'],
+      scope: { storefront: { $and: 'not-an-array' } },
+    },
+  };
+
+  let owner;
+  beforeAll(async () => {
+    await ctx.app.locals.schemaLoader.loadSchema(malformedSchema);
+  });
+  beforeEach(async () => {
+    owner = await registerUser(ctx.request, ctx.app, { email: 'malf-owner@x.com' });
+    await post(
+      '/api/v1/scope_malformed',
+      { name: 'Live Widget', published: true },
+      owner.accessToken
+    ).expect(201);
+    await issueClient({ id: 'pk_storefront_malformed', role: 'storefront' });
+  });
+
+  test('GraphQL findById on a malformed $and scope returns null (fail-closed)', async () => {
+    const list = await get('/api/v1/scope_malformed', owner.accessToken).expect(200);
+    const live = list.body.results[0];
+    const res = await ctx
+      .request(ctx.app)
+      .post('/graphql/')
+      .set('X-Client-Id', 'pk_storefront_malformed')
+      .send({
+        query: `{ scope_malformedById(_id: "${live._id}") { name } }`,
+      })
+      .expect(200);
+    expect(res.body.data.scope_malformedById).toBeNull();
+  });
+});
+
 describe('MCP read tools respect role scope', () => {
   let owner;
   const { buildMcpServer } = require('../utils/mcpServer');
