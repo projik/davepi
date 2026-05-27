@@ -278,6 +278,84 @@ describe('apiClient admin surface', () => {
   });
 });
 
+describe('MCP read tools respect role scope', () => {
+  let owner;
+  const { buildMcpServer } = require('../utils/mcpServer');
+  const { Client } = require('@modelcontextprotocol/sdk/client/index.js');
+  const { InMemoryTransport } = require('@modelcontextprotocol/sdk/inMemory.js');
+
+  const connectMcp = async (syntheticUser) => {
+    const server = buildMcpServer({
+      schemaLoader: ctx.app.locals.schemaLoader,
+      getUser: () => syntheticUser,
+      name: 'public-read-test',
+    });
+    const [a, b] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: 'test-client', version: '0.0.1' });
+    await Promise.all([server.connect(b), client.connect(a)]);
+    return { client, close: async () => { await client.close(); await server.close(); } };
+  };
+  const parse = (res) => {
+    if (res.structuredContent !== undefined) return res.structuredContent;
+    const txt = res.content && res.content[0] && res.content[0].text;
+    return txt ? JSON.parse(txt) : null;
+  };
+
+  beforeEach(async () => {
+    owner = await registerUser(ctx.request, ctx.app, { email: 'mcp-owner@x.com' });
+    await post(
+      '/api/v1/public_product',
+      { name: 'Draft Widget', price: 10, cost: 4, published: false },
+      owner.accessToken
+    ).expect(201);
+    await post(
+      '/api/v1/public_product',
+      { name: 'Live Widget', price: 20, cost: 7, published: true },
+      owner.accessToken
+    ).expect(201);
+  });
+
+  const storefrontUser = {
+    user_id: 'pk_storefront_mcp',
+    roles: ['storefront'],
+    isClient: true,
+  };
+
+  test('list_public_product returns only scope-matching records', async () => {
+    const { client, close } = await connectMcp(storefrontUser);
+    try {
+      const res = await client.callTool({ name: 'list_public_product', arguments: {} });
+      const data = parse(res);
+      expect(data.results.map((r) => r.name)).toEqual(['Live Widget']);
+    } finally { await close(); }
+  });
+
+  test('get_public_product on an out-of-scope record is not-found', async () => {
+    const list = await get('/api/v1/public_product', owner.accessToken).expect(200);
+    const draft = list.body.results.find((r) => r.name === 'Draft Widget');
+    const { client, close } = await connectMcp(storefrontUser);
+    try {
+      const res = await client.callTool({
+        name: 'get_public_product',
+        arguments: { id: String(draft._id) },
+      });
+      expect(res.isError).toBe(true);
+    } finally { await close(); }
+  });
+
+  test('scope cannot be widened via the MCP filter argument', async () => {
+    const { client, close } = await connectMcp(storefrontUser);
+    try {
+      const res = await client.callTool({
+        name: 'list_public_product',
+        arguments: { filter: { published: false } },
+      });
+      const data = parse(res);
+      expect(data.results).toEqual([]);
+    } finally { await close(); }
+  });
+});
+
 describe('History route respects role scope', () => {
   let owner;
   beforeEach(async () => {
