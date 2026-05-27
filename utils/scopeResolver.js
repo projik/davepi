@@ -7,12 +7,20 @@ const {
   canReadField,
   stampTenantFields,
   stripTenantFields,
+  getRoleScopeFilter,
+  applyRoleScopeFilter,
 } = require('./acl');
 const { emitRecordEvent } = require('./events');
 const { runBeforeHook, runAfterHook } = require('./hooks');
 const logger = require('./logger');
 
 const STAMPED_FIELDS = ['userId', 'accountId'];
+
+const refuseClientWrite = (user) => {
+  if (user && user.isClient) {
+    throw new ForbiddenError('Client-authenticated requests are read-only');
+  }
+};
 
 const requireUser = (rp) => {
   const userId = rp.context && rp.context.user && rp.context.user.user_id;
@@ -21,6 +29,64 @@ const requireUser = (rp) => {
 };
 
 const sameId = (a, b) => String(a) === String(b);
+
+/**
+ * Evaluate a `schema.acl.scope[role]` filter against an already-
+ * fetched record. graphql-compose-mongoose's findById doesn't expose
+ * the underlying filter object (the resolver fetches by `_id`
+ * directly), so the scope predicate has to be checked in-process
+ * after the read. Supports the common shapes documented for
+ * `acl.scope`: equality, `$in`, `$nin`, `$ne`, `$exists`, and an
+ * `$and` envelope produced by `applyRoleScopeFilter` when multiple
+ * roles each declare a scope. Anything more exotic (regex,
+ * geospatial, etc.) is reserved for REST list queries where the
+ * predicate lands directly on the Mongo driver.
+ */
+const matchesScopeFragment = (record, filter) => {
+  if (!filter || typeof filter !== 'object') return true;
+  for (const [key, expected] of Object.entries(filter)) {
+    if (key === '$and') {
+      if (!Array.isArray(expected)) continue;
+      if (!expected.every((f) => matchesScopeFragment(record, f))) return false;
+      continue;
+    }
+    if (key === '$or') {
+      if (!Array.isArray(expected)) continue;
+      if (!expected.some((f) => matchesScopeFragment(record, f))) return false;
+      continue;
+    }
+    const actual = record ? record[key] : undefined;
+    if (expected && typeof expected === 'object' && !Array.isArray(expected)) {
+      if ('$in' in expected) {
+        if (!Array.isArray(expected.$in) || !expected.$in.some((v) => sameId(v, actual))) return false;
+        continue;
+      }
+      if ('$nin' in expected) {
+        if (Array.isArray(expected.$nin) && expected.$nin.some((v) => sameId(v, actual))) return false;
+        continue;
+      }
+      if ('$ne' in expected) {
+        if (sameId(expected.$ne, actual)) return false;
+        continue;
+      }
+      if ('$exists' in expected) {
+        const present = actual !== undefined && actual !== null;
+        if (Boolean(expected.$exists) !== present) return false;
+        continue;
+      }
+      // Unsupported operator — fail closed.
+      return false;
+    }
+    if (!sameId(expected, actual)) return false;
+  }
+  return true;
+};
+
+const matchesRoleScope = (record, schema, user) => {
+  const scope = getRoleScopeFilter(schema, user);
+  if (!scope) return true;
+  return matchesScopeFragment(record, scope);
+};
 
 const stampedValues = (userId) => ({ userId, accountId: userId });
 
@@ -150,6 +216,11 @@ const wrapFilter = (resolver, { schema, action, kind = 'write' } = {}) => {
     const userId = requireUser(rp);
     const user = userFromContext(rp);
 
+    // Refuse client-authed callers on any mutation surface this
+    // wrapper covers (updateMany/removeMany). Read-class kinds are
+    // allowed through.
+    if (kind !== 'read') refuseClientWrite(user);
+
     const bypass =
       (kind === 'read' && bypassUserScopeForList(schema, user)) ||
       (kind === 'delete' && bypassUserScopeForDelete(schema, user));
@@ -158,6 +229,12 @@ const wrapFilter = (resolver, { schema, action, kind = 'write' } = {}) => {
       ...(rp.args.filter || {}),
       ...(bypass ? {} : { userId }),
     };
+    // Server-controlled per-role filter (`schema.acl.scope[role]`).
+    // Applied after the caller's own filter so it cannot be widened.
+    const scopeFilter = getRoleScopeFilter(schema, user);
+    if (scopeFilter) {
+      rp.args.filter = applyRoleScopeFilter(rp.args.filter, scopeFilter);
+    }
 
     // Full-text search: opt-in via the `search` arg added in
     // schemaLoader for read resolvers on schemas with searchable
@@ -197,6 +274,7 @@ const wrapCreateOne = (resolver, { schema } = {}) => {
   return resolver.wrapResolve((next) => async (rp) => {
     const userId = requireUser(rp);
     const user = userFromContext(rp);
+    refuseClientWrite(user);
     const filtered = filterWritable(rp.args.record || {}, schema, user, 'create');
     let stamped = { ...filtered, ...stampedValues(userId) };
     stamped = await runBeforeHook(schema, 'beforeCreate', {
@@ -229,6 +307,7 @@ const wrapCreateMany = (resolver, { schema } = {}) => {
   return resolver.wrapResolve((next) => async (rp) => {
     const userId = requireUser(rp);
     const user = userFromContext(rp);
+    refuseClientWrite(user);
     rp.args.records = (rp.args.records || []).map((r) => {
       const filtered = filterWritable(r, schema, user, 'create');
       return { ...filtered, ...stampedValues(userId) };
@@ -259,6 +338,10 @@ const wrapFindById = (resolver, { schema } = {}) =>
     if (!result) return null;
     const bypass = bypassUserScopeForList(schema, user);
     if (!bypass && !sameId(result.userId, userId)) return null;
+    // Enforce schema.acl.scope[role] post-fetch: a record that
+    // doesn't match the role's mandatory filter is treated as
+    // not-found to mirror REST behaviour.
+    if (!matchesRoleScope(result, schema, user)) return null;
     return projectResult(result, schema, user);
   });
 
@@ -269,10 +352,13 @@ const wrapFindByIds = (resolver, { schema } = {}) =>
     ensureProjection(rp, ['userId']);
     const results = await next(rp);
     const bypass = bypassUserScopeForList(schema, user);
-    const filtered = bypass
+    const ownerFiltered = bypass
       ? results || []
       : (results || []).filter((r) => sameId(r.userId, userId));
-    return projectResult(filtered, schema, user);
+    const scopeFiltered = ownerFiltered.filter((r) =>
+      matchesRoleScope(r, schema, user)
+    );
+    return projectResult(scopeFiltered, schema, user);
   });
 
 /**
@@ -285,6 +371,7 @@ const wrapByIdMutation = (Model) => (resolver, { schema, action, kind = 'write' 
   return resolver.wrapResolve((next) => async (rp) => {
     const userId = requireUser(rp);
     const user = userFromContext(rp);
+    refuseClientWrite(user);
 
     const bypass =
       (kind === 'read' && bypassUserScopeForList(schema, user)) ||

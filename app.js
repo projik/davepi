@@ -19,6 +19,7 @@ const httpLogger = require("./middleware/httpLogger");
 const { metricsMiddleware, metricsHandler } = require("./middleware/metrics");
 const { buildCorsMiddleware } = require("./middleware/corsConfig");
 const { authLimiter, apiLimiter } = require("./middleware/rateLimit");
+const clientAuth = require("./middleware/clientAuth");
 const asyncHandler = require("./utils/asyncHandler");
 const logger = require("./utils/logger");
 const {
@@ -85,6 +86,16 @@ app.use(express.json());
 app.use(httpLogger);
 app.use(metricsMiddleware);
 app.use('/api', apiLimiter);
+// Resolve X-Client-Id into a synthetic req.user BEFORE per-route
+// auth(true) middleware runs. A real Bearer token (when present) wins;
+// when only the client header is present, clientAuth synthesises the
+// user and downstream auth(true) sees a populated req.user and skips
+// its own Bearer requirement. Mounted on both /api (REST) and
+// /graphql so the public surface is symmetric. See
+// middleware/clientAuth.js.
+const sharedClientAuth = clientAuth();
+app.use('/api', sharedClientAuth);
+app.use('/graphql', sharedClientAuth);
 
 const apiSpec = {
   info: {
@@ -113,7 +124,14 @@ app.use((req, res, next) => {
 const buildGraphqlContext = ({ req }) => {
   const header = req.headers.authorization || '';
   const token = header.replace(/^bearer\s+/i, '').trim();
-  if (!token) return { user: null };
+  if (!token) {
+    // No Bearer — fall back to whatever upstream Express middleware
+    // attached (e.g. clientAuth resolving X-Client-Id into a synthetic
+    // user). This keeps GraphQL surface parity with REST: a public
+    // call via `X-Client-Id` works on both.
+    if (req.user && req.user.user_id) return { user: req.user };
+    return { user: null };
+  }
   try {
     const decoded = jwt.verify(token, process.env.TOKEN_KEY);
     return { user: decoded };
