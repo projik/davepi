@@ -328,7 +328,16 @@ module.exports = {
 - `log` — a pino child logger keyed by plugin name.
 - `appName` — convenience for context.
 
-Plugins run after every initial schema is loaded, in declaration order, and are awaited. A throw during `setup` fails boot — silent dropping would hide misconfiguration from operators.
+Plugins run after every initial schema is loaded, in declaration order, and are awaited. A throw during `setup` fails boot — silent dropping would hide misconfiguration from operators. The loaded descriptors are exposed on `app.locals.plugins` for introspection.
+
+**Spec forms** accepted by `utils/pluginLoader.js`:
+- `"./relative/path.js"` or absolute path — `require`'d against the consumer project's cwd (not davepi's own dir).
+- `"davepi-plugin-foo"` — npm package, resolved via `require.resolve(spec, { paths: [cwd] })`, so consumer-installed packages win over anything alongside the framework.
+- An inline `{ name, setup }` object — **test-only**. Pass directly to `loadPlugins({ plugins: [...] })` instead of through `package.json`. Production code should not use this form.
+
+**Reference implementations** live in `packages/davepi-plugin-*` inside this repo: `audit`, `oauth`, `object-storage`, `postmark`, `queue`, `slack`, `stripe`, `twilio`. Before writing a new plugin, read the closest analogue — they cover event-bus subscribers, custom REST routers, schema injection, scheduled work, and inbound third-party webhooks. Each package is its own npm module with its own `test/` suite; copy that layout for new bundled plugins.
+
+**Don't reach around the extension points.** If you find yourself adding `require('./plugins/foo')` to `app.js` or wiring a `bus.on` directly inside `utils/schemaLoader.js`, stop — that's a sign you're bypassing the loader. Put the code in a plugin module and list it under `davepi.plugins`. Same for per-resource side effects: use a schema `hooks` block, not a patch to the `schemas.forEach` loop.
 
 ### When Debugging
 

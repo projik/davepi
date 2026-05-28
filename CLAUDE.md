@@ -87,9 +87,18 @@ module.exports = {
 }
 ```
 
-Each plugin module exports `{ name, async setup({ app, schemaLoader, bus, log, appName }) }`. Plugins load in declaration order, after every schema is registered, so a plugin can introspect `schemaLoader.listSchemas()` and wire a route per resource. The `bus` is the same `EventEmitter` from `utils/events.js` that fires `record` events for every CRUD mutation — the webhook dispatcher uses the same bus, so plugin event subscribers compose with webhooks. After plugins finish loading, the loader re-asserts `errorHandler` at the tail of the middleware stack via `schemaLoader.moveErrorHandlerToEnd()`.
+Each plugin module exports `{ name, async setup({ app, schemaLoader, bus, log, appName }) }`. Plugins load in declaration order, after every schema is registered, so a plugin can introspect `schemaLoader.listSchemas()` and wire a route per resource. The `bus` is the same `EventEmitter` from `utils/events.js` that fires `record` events for every CRUD mutation — the webhook dispatcher uses the same bus, so plugin event subscribers compose with webhooks. After plugins finish loading, the loader re-asserts `errorHandler` at the tail of the middleware stack via `schemaLoader.moveErrorHandlerToEnd()`. The loaded descriptors are also exposed on `app.locals.plugins` so introspection routes and tests can see what wound up registered.
+
+**Spec forms** accepted by `utils/pluginLoader.js`:
+- `"./relative/path.js"` or absolute path — `require`'d against the consumer project's cwd (not davepi's own dir).
+- `"davepi-plugin-foo"` — npm package, resolved via `require.resolve(spec, { paths: [cwd] })`, so consumer-installed packages win over anything alongside the framework.
+- An inline `{ name, setup }` object — the **test-only** form. Pass plugins directly to `loadPlugins({ plugins: [...] })` instead of through `package.json`. Production code should not use this form.
+
+**Reference implementations** live in `packages/davepi-plugin-*` inside this repo — `audit`, `oauth`, `object-storage`, `postmark`, `queue`, `slack`, `stripe`, `twilio`. Read the closest analogue before writing a new plugin from scratch; they cover the common shapes (event-bus subscriber, custom REST router, schema injection, scheduled work, third-party webhook receiver). Each package is its own npm module with its own `test/` suite — copy that structure for a new bundled plugin.
 
 A plugin that throws during `setup` will fail boot. This is deliberate — silently dropping a plugin would hide misconfiguration from operators.
+
+**Don't reach around the extension points.** If you're tempted to add a `require('./plugins/foo')` from `app.js` or wire a `bus.on` inside `utils/schemaLoader.js`, stop — that's the symptom of bypassing the loader. Put the code in a plugin module and list it under `davepi.plugins`.
 
 ## Conventions worth knowing
 
