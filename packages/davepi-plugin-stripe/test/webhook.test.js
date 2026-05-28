@@ -46,6 +46,24 @@ function stubRes() {
   return res;
 }
 
+// Stub typed errors mirroring utils/errors.js shape so the handler
+// can throw / next() them without requiring the framework's actual
+// errors module (which would pull mongoose into this zero-dep test).
+class StubValidationError extends Error {
+  constructor(m) { super(m); this.name = 'ValidationError'; this.status = 400; this.code = 'VALIDATION'; }
+}
+class StubAppError extends Error {
+  constructor(m, status = 500, code = 'INTERNAL') { super(m); this.status = status; this.code = code; }
+}
+const stubErrors = { ValidationError: StubValidationError, AppError: StubAppError };
+
+function stubNext() {
+  const calls = [];
+  const fn = (err) => { calls.push(err); };
+  fn.calls = calls;
+  return fn;
+}
+
 function stripeClientThatVerifies(event) {
   return {
     webhooks: {
@@ -118,27 +136,59 @@ test('verifies signature, dedupes via eventSeen.create, ACKs 200, emits to bus',
   const handler = buildWebhookHandler({
     stripeClient: stripeClientThatVerifies(event),
     webhookSecret: 'whsec_x',
-    models: { eventSeen, subscription: subscriptionModel(), user: userModel() },
+    // userModel with matched user so the bus emit resolves userId
+    models: { eventSeen, subscription: subscriptionModel(), user: userModel({ matchedUserId: 'u1' }) },
     bus,
     log: silentLog(),
     emitter,
+    errors: stubErrors,
   });
 
   const req = { headers: { 'stripe-signature': 'OK' }, rawBody: Buffer.from('{}') };
   const res = stubRes();
-  await handler(req, res);
+  const next = stubNext();
+  await handler(req, res, next);
   await waitTick();
 
   assert.equal(res.statusCode, 200);
   assert.deepEqual(res.body, { received: true });
   assert.equal(eventSeen.created.length, 1);
   assert.equal(eventSeen.created[0].eventId, 'evt_1');
+  assert.equal(eventSeen.created[0].stripeCustomerId, 'cus_1');
   assert.equal(busEvents.length, 1);
   assert.equal(busEvents[0].type, 'stripe.customer.subscription.updated');
   assert.equal(busEvents[0].recordId, 'sub_1');
+  assert.equal(busEvents[0].userId, 'u1');
+  assert.equal(busEvents[0].accountId, 'u1');
+  assert.equal(next.calls.length, 0);
 });
 
-test('rejects requests with missing Stripe-Signature header (400, no dedupe)', async () => {
+test('skips bus emit when no dAvePi user is linked to the Stripe customer (no audit-write footgun)', async () => {
+  const event = {
+    id: 'evt_orphan',
+    type: 'invoice.paid',
+    data: { object: { id: 'in_1', customer: 'cus_unmapped' } },
+  };
+  const bus = new EventEmitter();
+  const busEvents = [];
+  bus.on('record', (e) => busEvents.push(e));
+  const log = capturingLog();
+  const handler = buildWebhookHandler({
+    stripeClient: stripeClientThatVerifies(event),
+    webhookSecret: 'whsec_x',
+    models: { eventSeen: eventSeenModel(), subscription: subscriptionModel(), user: userModel({ matchedUserId: null }) },
+    bus,
+    log,
+    emitter: new EventEmitter(),
+    errors: stubErrors,
+  });
+  await handler({ headers: { 'stripe-signature': 'OK' }, rawBody: Buffer.from('{}') }, stubRes(), stubNext());
+  await waitTick();
+  assert.equal(busEvents.length, 0);
+  assert.ok(log.records.warn.some((r) => /no linked dAvePi user/.test(r.msg)));
+});
+
+test('rejects requests with missing Stripe-Signature header via next(ValidationError); no dedupe', async () => {
   const eventSeen = eventSeenModel();
   const handler = buildWebhookHandler({
     stripeClient: stripeClientThatVerifies({ id: 'x', type: 'y', data: { object: {} } }),
@@ -147,15 +197,17 @@ test('rejects requests with missing Stripe-Signature header (400, no dedupe)', a
     bus: new EventEmitter(),
     log: silentLog(),
     emitter: new EventEmitter(),
+    errors: stubErrors,
   });
-  const res = stubRes();
-  await handler({ headers: {}, rawBody: Buffer.from('{}') }, res);
-  assert.equal(res.statusCode, 400);
-  assert.match(res.sendBody, /Missing Stripe-Signature/);
+  const next = stubNext();
+  await handler({ headers: {}, rawBody: Buffer.from('{}') }, stubRes(), next);
+  assert.equal(next.calls.length, 1);
+  assert.equal(next.calls[0].name, 'ValidationError');
+  assert.match(next.calls[0].message, /Missing Stripe-Signature/);
   assert.equal(eventSeen.created.length, 0);
 });
 
-test('rejects when rawBody is missing or not a buffer (operator misconfig diagnostic)', async () => {
+test('rejects when rawBody is missing via next(ValidationError); operator log records diagnostic', async () => {
   const log = capturingLog();
   const handler = buildWebhookHandler({
     stripeClient: stripeClientThatVerifies({ id: 'x', type: 'y', data: { object: {} } }),
@@ -164,15 +216,16 @@ test('rejects when rawBody is missing or not a buffer (operator misconfig diagno
     bus: new EventEmitter(),
     log,
     emitter: new EventEmitter(),
+    errors: stubErrors,
   });
-  const res = stubRes();
-  await handler({ headers: { 'stripe-signature': 'OK' } }, res); // no rawBody
-  assert.equal(res.statusCode, 400);
-  assert.match(res.sendBody, /No raw body/);
+  const next = stubNext();
+  await handler({ headers: { 'stripe-signature': 'OK' } }, stubRes(), next);
+  assert.equal(next.calls.length, 1);
+  assert.equal(next.calls[0].name, 'ValidationError');
   assert.ok(log.records.error.some((r) => /express\.json\(\) verify hook/.test(r.msg)));
 });
 
-test('bad signature -> 400 "Webhook Error: ..." and no dedupe insert', async () => {
+test('bad signature -> next(ValidationError) with generic message; no SDK details leak; no dedupe insert', async () => {
   const eventSeen = eventSeenModel();
   const handler = buildWebhookHandler({
     stripeClient: stripeClientThatVerifies({ id: 'x', type: 'y', data: { object: {} } }),
@@ -181,14 +234,19 @@ test('bad signature -> 400 "Webhook Error: ..." and no dedupe insert', async () 
     bus: new EventEmitter(),
     log: silentLog(),
     emitter: new EventEmitter(),
+    errors: stubErrors,
   });
-  const res = stubRes();
+  const next = stubNext();
   await handler(
     { headers: { 'stripe-signature': 'BAD_SIG' }, rawBody: Buffer.from('{}') },
-    res
+    stubRes(),
+    next,
   );
-  assert.equal(res.statusCode, 400);
-  assert.match(res.sendBody, /Webhook Error: No signatures found/);
+  assert.equal(next.calls.length, 1);
+  assert.equal(next.calls[0].name, 'ValidationError');
+  assert.match(next.calls[0].message, /Webhook signature verification failed/);
+  // The raw SDK error message must NOT leak through the response shape.
+  assert.doesNotMatch(next.calls[0].message, /No signatures found/);
   assert.equal(eventSeen.created.length, 0);
 });
 
@@ -206,11 +264,13 @@ test('duplicate event (dedupe row exists) short-circuits 200 + duplicate flag', 
     bus,
     log: silentLog(),
     emitter: new EventEmitter(),
+    errors: stubErrors,
   });
   const res = stubRes();
   await handler(
     { headers: { 'stripe-signature': 'OK' }, rawBody: Buffer.from('{}') },
-    res
+    res,
+    stubNext(),
   );
   await waitTick();
   assert.equal(res.statusCode, 200);
@@ -233,9 +293,10 @@ test('onWebhookEvent subscribers receive the raw Stripe event after ACK', async 
     bus: new EventEmitter(),
     log: silentLog(),
     emitter,
+    errors: stubErrors,
   });
   const res = stubRes();
-  await handler({ headers: { 'stripe-signature': 'OK' }, rawBody: Buffer.from('{}') }, res);
+  await handler({ headers: { 'stripe-signature': 'OK' }, rawBody: Buffer.from('{}') }, res, stubNext());
   await waitTick();
   assert.equal(seen.length, 1);
   assert.equal(seen[0].id, 'evt_2');
@@ -255,8 +316,9 @@ test('subscriber throw is logged and never blocks subsequent subscribers', async
     bus: new EventEmitter(),
     log,
     emitter,
+    errors: stubErrors,
   });
-  await handler({ headers: { 'stripe-signature': 'OK' }, rawBody: Buffer.from('{}') }, stubRes());
+  await handler({ headers: { 'stripe-signature': 'OK' }, rawBody: Buffer.from('{}') }, stubRes(), stubNext());
   await waitTick();
   assert.equal(secondCalled, true);
   assert.ok(log.records.error.some((r) => /subscriber threw/.test(r.msg)));
@@ -273,14 +335,17 @@ test('star subscriber (`*`) sees every event type', async () => {
     bus: new EventEmitter(),
     log: silentLog(),
     emitter,
+    errors: stubErrors,
   });
   await handler({ id: '1', type: 'a.b', data: { object: {} } })(
     { headers: { 'stripe-signature': 'OK' }, rawBody: Buffer.from('{}') },
     stubRes(),
+    stubNext(),
   );
   await handler({ id: '2', type: 'c.d', data: { object: {} } })(
     { headers: { 'stripe-signature': 'OK' }, rawBody: Buffer.from('{}') },
     stubRes(),
+    stubNext(),
   );
   await waitTick();
   assert.deepEqual(seen, ['a.b', 'c.d']);

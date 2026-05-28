@@ -164,6 +164,10 @@ describe('davepi-plugin-stripe — end-to-end via pluginLoader', () => {
       .set('Content-Type', 'application/json')
       .send('{"id":"evt_bad","type":"x","data":{"object":{}}}');
     expect(res.status).toBe(400);
-    expect(res.text).toMatch(/Webhook Error/);
+    // Response is shaped by the framework's centralized errorHandler;
+    // the message is generic and never echoes the underlying Stripe
+    // SDK details.
+    expect(res.body.error.message).toMatch(/signature verification failed/i);
+    expect(res.body.error.message).not.toMatch(/No signatures found/);
   });
 });

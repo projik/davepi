@@ -22,12 +22,15 @@
  * cheap to clean up.
  */
 
-async function getOrCreateCustomer({ stripeClient, userModel, user, log }) {
+async function getOrCreateCustomer({ stripeClient, userModel, user, log, errors }) {
+  const { ValidationError, NotFoundError } = errors || {};
   if (!user || !user.user_id) {
+    if (ValidationError) throw new ValidationError('user.user_id is required');
     throw new Error('davepi-plugin-stripe: getOrCreateCustomer requires user.user_id');
   }
   const userDoc = await userModel.findById(user.user_id);
   if (!userDoc) {
+    if (NotFoundError) throw new NotFoundError(`user ${user.user_id} not found`);
     throw new Error(`davepi-plugin-stripe: user ${user.user_id} not found`);
   }
   if (userDoc.stripeCustomerId) {

@@ -40,14 +40,29 @@ const stripeEventSeenSchema = {
   path: 'stripe_event_seen',
   collection: 'stripe_event_seen',
   version: 'v1',
+  // Dedupe rows aren't tenant-scoped data — they're operator
+  // diagnostics ("did Stripe deliver this event yet?"). The
+  // framework's scoped resolvers $and a `{ userId: caller }` filter
+  // onto every read; without the list ACL bypass these rows would
+  // be invisible through the auto-generated REST/GraphQL surface
+  // even to the user the event maps to. Same posture davepi-plugin-audit
+  // uses on its `audit` rows.
+  acl: {
+    list:   ['admin'],
+    delete: ['admin'],
+  },
   fields: [
-    { name: 'userId', type: String, required: false },
     { name: 'eventId', type: String, required: true, unique: true, index: true },
     { name: 'eventType', type: String, required: true },
-    // TTL index: documents expire 7 days after insert. Mongoose's
-    // schema-driven core honours `expires` on a Date field by
-    // emitting a `{ expireAfterSeconds: 0 }` TTL index that fires
-    // when the stored date is reached.
+    // Loose link to the customer the event is about. Optional —
+    // some Stripe events (account.*, invoice.created on a checkout
+    // session before the customer exists) don't carry a customer.
+    // Indexed for operator queries like "show me everything we
+    // saw for cus_xxx".
+    { name: 'stripeCustomerId', type: String, index: true },
+    // TTL index: documents expire 7 days after the stored date.
+    // Mongoose honours `expires: 0` on a Date field by emitting
+    // a `{ expireAfterSeconds: 0 }` TTL index.
     { name: 'expiresAt', type: Date, required: true, expires: 0 },
   ],
 };

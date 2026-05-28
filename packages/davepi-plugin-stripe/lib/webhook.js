@@ -50,30 +50,35 @@ function buildWebhookHandler({
   bus,
   log,
   emitter,           // plugin-local EventEmitter for onWebhookEvent
+  errors,            // typed error constructors from utils/errors.js
 }) {
-  return async function stripeWebhookHandler(req, res) {
+  const { ValidationError, AppError } = errors || {};
+  return async function stripeWebhookHandler(req, res, next) {
     const sigHeader = req.headers['stripe-signature'];
     if (!sigHeader) {
       log.warn({ plugin: 'stripe' }, 'webhook: missing Stripe-Signature header');
-      return res.status(400).send('Missing Stripe-Signature');
+      return next(new ValidationError('Missing Stripe-Signature header'));
     }
     if (!req.rawBody || !Buffer.isBuffer(req.rawBody)) {
       log.error(
         { plugin: 'stripe' },
         'webhook: req.rawBody is not a Buffer — express.json() verify hook may not be wired'
       );
-      return res.status(400).send('No raw body');
+      return next(new ValidationError('Raw request body unavailable for signature verification'));
     }
 
     let event;
     try {
       event = stripeClient.webhooks.constructEvent(req.rawBody, sigHeader, webhookSecret);
     } catch (err) {
+      // Log the underlying SDK message for operators but surface a
+      // generic "verification failed" through the framework's
+      // errorHandler — no internal details leak in the response body.
       log.warn(
         { plugin: 'stripe', err: { message: err.message } },
         'webhook: signature verification failed'
       );
-      return res.status(400).send(`Webhook Error: ${err.message}`);
+      return next(new ValidationError('Webhook signature verification failed'));
     }
 
     // Idempotency dedupe. Insert first, ACK after — on duplicate-key
@@ -83,6 +88,10 @@ function buildWebhookHandler({
       await models.eventSeen.create({
         eventId: event.id,
         eventType: event.type,
+        stripeCustomerId: (event.data && event.data.object && (
+          event.data.object.customer ||
+          (event.data.object.object === 'customer' ? event.data.object.id : null)
+        )) || undefined,
         expiresAt: new Date(Date.now() + SEVEN_DAYS_MS),
       });
     } catch (err) {
@@ -97,7 +106,9 @@ function buildWebhookHandler({
         { plugin: 'stripe', err, eventId: event.id },
         'webhook: dedupe insert failed — refusing event so Stripe retries'
       );
-      return res.status(500).send('Dedupe insert failed');
+      // Force a 5xx response shape through errorHandler so Stripe
+      // retries. `AppError`'s status defaults to 500 — perfect here.
+      return next(new AppError('Dedupe insert failed', 500, 'STRIPE_DEDUPE_FAILED'));
     }
 
     // ACK first. Anything beyond this point is best-effort; a slow
@@ -125,21 +136,60 @@ function buildWebhookHandler({
       // Bus rebroadcast — every plugin subscriber (audit, slack,
       // postmark rules) can react to `stripe.*` events using the
       // same `record` event shape the framework already uses for
-      // CRUD events. recordId is the Stripe object id when present
-      // so downstream formatters render naturally.
+      // CRUD events. The audit plugin REQUIRES `userId` on the
+      // event (its `audit` schema declares `userId` as required),
+      // so we resolve the linked dAvePi user from the Stripe
+      // customer id before emitting. If no linked user is found
+      // we skip the bus emit entirely rather than emit a tenantless
+      // record — a `null` userId would crash audit writes and spam
+      // the operator log on every webhook delivery for unmapped
+      // customers. Plugin-local `onWebhookEvent` subscribers still
+      // see the raw event below; that channel is the right place
+      // for handlers that don't need tenant identity.
       const stripeObject = event.data && event.data.object;
-      try {
-        bus.emit('record', {
-          type: `stripe.${event.type}`,
-          version: 'v1',
-          recordId: stripeObject && stripeObject.id,
-          record: stripeObject,
-          eventId: event.id,
-        });
-      } catch (err) {
-        log.error(
-          { err, plugin: 'stripe', eventId: event.id },
-          'webhook: bus emit failed'
+      const stripeCustomerId = stripeObject && (
+        stripeObject.customer ||
+        (stripeObject.object === 'customer' ? stripeObject.id : null)
+      );
+      let userId = null;
+      if (stripeCustomerId && models.user && typeof models.user.findOne === 'function') {
+        try {
+          const userDoc = await models.user
+            .findOne({ stripeCustomerId })
+            .select('_id')
+            .lean();
+          if (userDoc) userId = String(userDoc._id);
+        } catch (err) {
+          log.error(
+            { err, plugin: 'stripe', eventId: event.id, stripeCustomerId },
+            'webhook: user lookup for bus emit failed'
+          );
+        }
+      }
+      if (userId) {
+        try {
+          bus.emit('record', {
+            type: `stripe.${event.type}`,
+            version: 'v1',
+            userId,
+            // Stamp accountId from the same userId so the framework's
+            // tenant-stamping invariants downstream (audit, scoped
+            // resolvers) see a consistent ownership pair.
+            accountId: userId,
+            recordId: stripeObject && stripeObject.id,
+            record: stripeObject,
+            eventId: event.id,
+          });
+        } catch (err) {
+          log.error(
+            { err, plugin: 'stripe', eventId: event.id },
+            'webhook: bus emit failed'
+          );
+        }
+      } else {
+        log.warn(
+          { plugin: 'stripe', eventId: event.id, eventType: event.type, stripeCustomerId },
+          'webhook: skipping bus emit — no linked dAvePi user for Stripe customer'
         );
       }
 

@@ -133,10 +133,12 @@ function createPlugin(opts = {}) {
     apiLimiter:    opts.apiLimiter || null,
     userModel:     opts.userModel || null,
     errors:        opts.errors || null,
+    asyncHandler:  opts.asyncHandler || null,
   };
 
   const state = {
     enabled:       false,
+    errors:        null,
     stripeClient:  null,
     webhookSecret: null,
     userModel:     null,
@@ -174,6 +176,7 @@ function createPlugin(opts = {}) {
       stripeClient: state.stripeClient,
       userModel: state.userModel,
       user,
+      errors: state.errors,
     });
     const params = {
       mode: mode === 'payment' ? 'payment' : 'subscription',
@@ -198,6 +201,7 @@ function createPlugin(opts = {}) {
       stripeClient: state.stripeClient,
       userModel: state.userModel,
       user,
+      errors: state.errors,
     });
     return state.stripeClient.billingPortal.sessions.create({
       customer: customerId,
@@ -252,6 +256,7 @@ function createPlugin(opts = {}) {
 
     state.userModel = resolveDep('userModel', () => require('davepi/model/user'));
     const errors = resolveDep('errors', () => require('davepi/utils/errors'));
+    state.errors = errors;
 
     // Register the schema-driven mirror + dedupe collections so the
     // framework auto-generates REST/GraphQL/Swagger for them. Done
@@ -292,34 +297,51 @@ function createPlugin(opts = {}) {
       return;
     }
 
-    // Resolve auth + apiLimiter against the framework. These are the
-    // same middleware the auto-generated routes use — we want
-    // identical posture for billing routes.
+    // Resolve auth + apiLimiter + asyncHandler against the framework.
+    // These are the same middleware the auto-generated routes use —
+    // we want identical posture for billing routes (asyncHandler in
+    // particular routes thrown errors through the centralised
+    // errorHandler so plugin routes never need their own try/catch).
     const auth = injected.auth || resolveDep('auth', () => require('davepi/middleware/auth'));
     const apiLimiter = injected.apiLimiter
       || resolveDep('apiLimiter', () => require('davepi/middleware/rateLimit').apiLimiter);
+    const asyncHandler = injected.asyncHandler
+      || resolveDep('asyncHandler', () => require('davepi/utils/asyncHandler'));
 
     // Webhook route. Stripe sends content-type application/json; the
     // global express.json() has already parsed the body, but its
     // `verify` hook stashed the raw buffer on req.rawBody so signature
     // verification has the bytes it needs.
+    //
+    // Refuse to mount if the dedupe model isn't available — without
+    // it every webhook delivery would 5xx in the handler and Stripe
+    // would retry forever. Fail loudly at boot instead.
     if (config.webhookPath && config.webhookSecret) {
-      state.webhookSecret = config.webhookSecret;
-      app.post(
-        config.webhookPath,
-        buildWebhookHandler({
-          stripeClient: state.stripeClient,
-          webhookSecret: state.webhookSecret,
-          models,
-          bus,
-          log,
-          emitter,
-        })
-      );
-      log.info(
-        { plugin: 'stripe', path: config.webhookPath },
-        'davepi-plugin-stripe webhook mounted'
-      );
+      if (!models.eventSeen || !models.subscription) {
+        log.error(
+          { plugin: 'stripe' },
+          'webhook route requires the stripe_event_seen and stripe_subscription models ' +
+          'but schemaLoader.loadSchema did not produce them; webhook route NOT mounted'
+        );
+      } else {
+        state.webhookSecret = config.webhookSecret;
+        app.post(
+          config.webhookPath,
+          asyncHandler(buildWebhookHandler({
+            stripeClient: state.stripeClient,
+            webhookSecret: state.webhookSecret,
+            models,
+            bus,
+            log,
+            emitter,
+            errors,
+          }))
+        );
+        log.info(
+          { plugin: 'stripe', path: config.webhookPath },
+          'davepi-plugin-stripe webhook mounted'
+        );
+      }
     } else if (config.webhookPath && !config.webhookSecret) {
       log.warn(
         { plugin: 'stripe' },
@@ -332,13 +354,13 @@ function createPlugin(opts = {}) {
         config.checkoutPath,
         apiLimiter,
         auth(true),
-        buildCheckoutHandler({
+        asyncHandler(buildCheckoutHandler({
           stripeClient: state.stripeClient,
           userModel: state.userModel,
           log,
           automaticTax: config.automaticTax,
           errors,
-        })
+        }))
       );
       log.info(
         { plugin: 'stripe', path: config.checkoutPath },
@@ -351,17 +373,28 @@ function createPlugin(opts = {}) {
         config.portalPath,
         apiLimiter,
         auth(true),
-        buildPortalHandler({
+        asyncHandler(buildPortalHandler({
           stripeClient: state.stripeClient,
           userModel: state.userModel,
           log,
           errors,
-        })
+        }))
       );
       log.info(
         { plugin: 'stripe', path: config.portalPath },
         'davepi-plugin-stripe portal route mounted'
       );
+    }
+
+    // Re-assert errorHandler at the tail of the middleware stack so
+    // the routes we just mounted route thrown errors through the
+    // framework's centralised errorHandler instead of falling through
+    // to Express's default 400/500 HTML page. The schema loader
+    // already called this after each loadSchema, but the app.post()
+    // calls above sit after that re-assertion in the stack, so we
+    // need to push errorHandler past them again. Idempotent.
+    if (schemaLoader && typeof schemaLoader.moveErrorHandlerToEnd === 'function') {
+      schemaLoader.moveErrorHandlerToEnd();
     }
 
     state.enabled = true;

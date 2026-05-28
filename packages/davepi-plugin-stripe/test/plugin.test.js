@@ -130,7 +130,13 @@ const dummyApiLimiter = (_req, _res, next) => next();
 const dummyErrors = {
   ValidationError: class ValidationError extends Error { constructor(m) { super(m); this.status = 400; } },
   ForbiddenError:  class ForbiddenError  extends Error { constructor(m) { super(m); this.status = 403; } },
+  NotFoundError:   class NotFoundError   extends Error { constructor(m) { super(m); this.status = 404; } },
+  AppError:        class AppError        extends Error { constructor(m, s = 500) { super(m); this.status = s; } },
 };
+// Mirror utils/asyncHandler.js exactly so tests exercise the same
+// wrap the framework would apply to plugin routes.
+const dummyAsyncHandler = (fn) => (req, res, next) =>
+  Promise.resolve(fn(req, res, next)).catch(next);
 
 test('default export is a plugin object with name + setup + createCheckoutSession', () => {
   assert.equal(stripeModule.name, 'stripe');
@@ -170,6 +176,7 @@ test('setup registers stripe_event_seen and stripe_subscription schemas', async 
     apiLimiter: dummyApiLimiter,
     userModel: stubUserModel(),
     errors: dummyErrors,
+    asyncHandler: dummyAsyncHandler,
   });
   await plugin.setup({
     app, schemaLoader, bus: new EventEmitter(), log: silentLog(), appName: 'demo',
@@ -189,6 +196,7 @@ test('setup mounts checkout, portal, and (when secret present) webhook routes', 
     apiLimiter: dummyApiLimiter,
     userModel: stubUserModel(),
     errors: dummyErrors,
+    asyncHandler: dummyAsyncHandler,
   });
   await plugin.setup({
     app, schemaLoader: stubSchemaLoader(), bus: new EventEmitter(), log: silentLog(),
@@ -202,6 +210,35 @@ test('setup mounts checkout, portal, and (when secret present) webhook routes', 
   assert.equal(checkout.handlers.length, 3);
 });
 
+test('webhook route is NOT mounted when schemaLoader did not produce the dedupe model', async () => {
+  // Use a schemaLoader stub whose loadSchema is a no-op so getEntry
+  // returns null for the eventSeen + subscription paths. Mirrors the
+  // failure mode where a future framework refactor stops surfacing
+  // entries through getEntry; route would otherwise mount and every
+  // delivery would 5xx the moment models.eventSeen.create is called.
+  const app = stubApp();
+  const log = capturingLog();
+  const brokenSchemaLoader = {
+    loadSchema: async () => {},
+    listSchemas: () => [],
+    getEntry: () => null,
+  };
+  const plugin = createPlugin({
+    env: { STRIPE_SECRET_KEY: 'sk_test_x', STRIPE_WEBHOOK_SECRET: 'whsec_x' },
+    stripeFactory: fakeStripeFactory(),
+    auth: dummyAuth,
+    apiLimiter: dummyApiLimiter,
+    userModel: stubUserModel(),
+    errors: dummyErrors,
+    asyncHandler: dummyAsyncHandler,
+  });
+  await plugin.setup({
+    app, schemaLoader: brokenSchemaLoader, bus: new EventEmitter(), log,
+  });
+  assert.equal(app.routes.some((r) => r.path === '/api/webhooks/stripe'), false);
+  assert.ok(log.records.error.some((r) => /stripe_event_seen and stripe_subscription models/.test(r.msg)));
+});
+
 test('webhook route is NOT mounted when STRIPE_WEBHOOK_SECRET is missing; warn logged', async () => {
   const app = stubApp();
   const log = capturingLog();
@@ -212,6 +249,7 @@ test('webhook route is NOT mounted when STRIPE_WEBHOOK_SECRET is missing; warn l
     apiLimiter: dummyApiLimiter,
     userModel: stubUserModel(),
     errors: dummyErrors,
+    asyncHandler: dummyAsyncHandler,
   });
   await plugin.setup({
     app, schemaLoader: stubSchemaLoader(), bus: new EventEmitter(), log,
@@ -235,6 +273,7 @@ test('empty path env disables a specific route', async () => {
     apiLimiter: dummyApiLimiter,
     userModel: stubUserModel(),
     errors: dummyErrors,
+    asyncHandler: dummyAsyncHandler,
   });
   await plugin.setup({
     app, schemaLoader: stubSchemaLoader(), bus: new EventEmitter(), log: silentLog(),
@@ -255,6 +294,7 @@ test('createCheckoutSession: stamps customer, returns session, sets line items',
     apiLimiter: dummyApiLimiter,
     userModel,
     errors: dummyErrors,
+    asyncHandler: dummyAsyncHandler,
   });
   await plugin.setup({
     app: stubApp(), schemaLoader: stubSchemaLoader(), bus: new EventEmitter(),
@@ -296,6 +336,7 @@ test('createCheckoutSession reuses existing stripeCustomerId without re-creating
     apiLimiter: dummyApiLimiter,
     userModel,
     errors: dummyErrors,
+    asyncHandler: dummyAsyncHandler,
   });
   await plugin.setup({
     app: stubApp(), schemaLoader: stubSchemaLoader(), bus: new EventEmitter(),
@@ -320,6 +361,7 @@ test('STRIPE_AUTOMATIC_TAX=true threads automatic_tax onto checkout params', asy
     apiLimiter: dummyApiLimiter,
     userModel: stubUserModel({ _id: 'u1', email: 'u1@example.com', stripeCustomerId: 'cus_x' }),
     errors: dummyErrors,
+    asyncHandler: dummyAsyncHandler,
   });
   await plugin.setup({
     app: stubApp(), schemaLoader: stubSchemaLoader(), bus: new EventEmitter(),
@@ -341,6 +383,7 @@ test('createPortalSession: stamps customer, returns session url', async () => {
     apiLimiter: dummyApiLimiter,
     userModel,
     errors: dummyErrors,
+    asyncHandler: dummyAsyncHandler,
   });
   await plugin.setup({
     app: stubApp(), schemaLoader: stubSchemaLoader(), bus: new EventEmitter(),
@@ -363,6 +406,7 @@ test('createCheckoutSession argument validation: priceId and urls required', asy
     apiLimiter: dummyApiLimiter,
     userModel: stubUserModel({ _id: 'u1', email: 'u1@example.com' }),
     errors: dummyErrors,
+    asyncHandler: dummyAsyncHandler,
   });
   await plugin.setup({
     app: stubApp(), schemaLoader: stubSchemaLoader(), bus: new EventEmitter(),
@@ -402,6 +446,7 @@ test('client getter exposes the underlying Stripe SDK instance after setup', asy
     apiLimiter: dummyApiLimiter,
     userModel: stubUserModel(),
     errors: dummyErrors,
+    asyncHandler: dummyAsyncHandler,
   });
   assert.equal(plugin.client, null);
   await plugin.setup({
@@ -419,6 +464,7 @@ test('refuses helpers when user.user_id is missing', async () => {
     apiLimiter: dummyApiLimiter,
     userModel: stubUserModel(),
     errors: dummyErrors,
+    asyncHandler: dummyAsyncHandler,
   });
   await plugin.setup({
     app: stubApp(), schemaLoader: stubSchemaLoader(), bus: new EventEmitter(),

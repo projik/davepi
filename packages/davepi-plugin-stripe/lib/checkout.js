@@ -30,73 +30,74 @@ function refuseClientAuth(user) {
   return null;
 }
 
+// The handlers below intentionally do NOT wrap their bodies in
+// try/catch — they're registered through the framework's
+// `asyncHandler` (see index.js#setup), which forwards any thrown
+// error to `next(err)` so the centralised `errorHandler` shapes the
+// response. Throwing a typed error from `utils/errors.js` is the
+// only error path; raw `Error` instances never escape.
+
 function buildCheckoutHandler({ stripeClient, userModel, log, automaticTax, errors }) {
   const { ValidationError, ForbiddenError } = errors;
-  return async function checkoutHandler(req, res, next) {
-    try {
-      const refused = refuseClientAuth(req.user);
-      if (refused) return next(new ForbiddenError(refused.message));
+  return async function checkoutHandler(req, res) {
+    const refused = refuseClientAuth(req.user);
+    if (refused) throw new ForbiddenError(refused.message);
 
-      const { priceId, mode, successUrl, cancelUrl, quantity, allowPromotionCodes } = req.body || {};
-      if (!priceId || typeof priceId !== 'string') {
-        return next(new ValidationError('priceId is required'));
-      }
-      if (!successUrl || !cancelUrl) {
-        return next(new ValidationError('successUrl and cancelUrl are required'));
-      }
-      const sessionMode = mode === 'payment' ? 'payment' : 'subscription';
-
-      const customerId = await getOrCreateCustomer({
-        stripeClient,
-        userModel,
-        user: req.user,
-        log,
-      });
-
-      const params = {
-        mode: sessionMode,
-        customer: customerId,
-        line_items: [{ price: priceId, quantity: quantity || 1 }],
-        success_url: successUrl,
-        cancel_url: cancelUrl,
-        client_reference_id: String(req.user.user_id),
-        allow_promotion_codes: !!allowPromotionCodes,
-      };
-      if (automaticTax) params.automatic_tax = { enabled: true };
-
-      const session = await stripeClient.checkout.sessions.create(params);
-      res.status(200).json({ url: session.url, id: session.id });
-    } catch (err) {
-      next(err);
+    const { priceId, mode, successUrl, cancelUrl, quantity, allowPromotionCodes } = req.body || {};
+    if (!priceId || typeof priceId !== 'string') {
+      throw new ValidationError('priceId is required');
     }
+    if (!successUrl || !cancelUrl) {
+      throw new ValidationError('successUrl and cancelUrl are required');
+    }
+    const sessionMode = mode === 'payment' ? 'payment' : 'subscription';
+
+    const customerId = await getOrCreateCustomer({
+      stripeClient,
+      userModel,
+      user: req.user,
+      log,
+      errors,
+    });
+
+    const params = {
+      mode: sessionMode,
+      customer: customerId,
+      line_items: [{ price: priceId, quantity: quantity || 1 }],
+      success_url: successUrl,
+      cancel_url: cancelUrl,
+      client_reference_id: String(req.user.user_id),
+      allow_promotion_codes: !!allowPromotionCodes,
+    };
+    if (automaticTax) params.automatic_tax = { enabled: true };
+
+    const session = await stripeClient.checkout.sessions.create(params);
+    res.status(200).json({ url: session.url, id: session.id });
   };
 }
 
 function buildPortalHandler({ stripeClient, userModel, log, errors }) {
   const { ValidationError, ForbiddenError } = errors;
-  return async function portalHandler(req, res, next) {
-    try {
-      const refused = refuseClientAuth(req.user);
-      if (refused) return next(new ForbiddenError(refused.message));
+  return async function portalHandler(req, res) {
+    const refused = refuseClientAuth(req.user);
+    if (refused) throw new ForbiddenError(refused.message);
 
-      const { returnUrl } = req.body || {};
-      if (!returnUrl) return next(new ValidationError('returnUrl is required'));
+    const { returnUrl } = req.body || {};
+    if (!returnUrl) throw new ValidationError('returnUrl is required');
 
-      const customerId = await getOrCreateCustomer({
-        stripeClient,
-        userModel,
-        user: req.user,
-        log,
-      });
+    const customerId = await getOrCreateCustomer({
+      stripeClient,
+      userModel,
+      user: req.user,
+      log,
+      errors,
+    });
 
-      const session = await stripeClient.billingPortal.sessions.create({
-        customer: customerId,
-        return_url: returnUrl,
-      });
-      res.status(200).json({ url: session.url });
-    } catch (err) {
-      next(err);
-    }
+    const session = await stripeClient.billingPortal.sessions.create({
+      customer: customerId,
+      return_url: returnUrl,
+    });
+    res.status(200).json({ url: session.url });
   };
 }
 
