@@ -273,50 +273,66 @@ function createPlugin(opts = {}) {
   }
 
   /**
-   * Execute one tick of a job: acquire the lock, fire the handler,
-   * heartbeat through long runs, release. Returns an outcome object
-   * for the manual-run endpoint:
-   *
-   *   { acquired: true,  status: 'ok' | 'failed' | 'aborted', durationMs }
-   *   { acquired: false }   // another holder owns it
+   * Acquire the lease for a job. Returns the lease on success, or
+   * `null` if another node holds it. Split out from `runJob` so the
+   * HTTP run-now endpoint can report the REAL acquisition result
+   * (instead of peek-release-reacquire, which races: another node
+   * could win the lock between the peek's release and runJob's
+   * re-acquire).
    */
-  async function runJob(entry, { manual = false } = {}) {
+  async function acquireLease(entry) {
     if (!state.mongoose) {
       throw new Error('davepi-plugin-cron: cannot run job without a mongoose connection (setup not run)');
     }
-    const lease = await lock.acquire({
+    return lock.acquire({
       mongoose:     state.mongoose,
       name:         entry.name,
       leaseSeconds: entry.leaseSeconds,
     });
-    if (!lease) {
-      // Another node holds the lock — skip this tick. The status
-      // endpoint sees no update from us.
-      state.log && state.log.debug && state.log.debug(
-        { plugin: 'cron', name: entry.name, manual },
-        'tick skipped: lock held by another holder',
-      );
-      return { acquired: false };
-    }
+  }
+
+  /**
+   * Run a job with an already-acquired lease. Owns the heartbeat
+   * lifecycle, the abort-status detection, and the lease release in
+   * the finally block. Returns `{ status, durationMs }`.
+   *
+   * Abort semantics: the handler is documented to return early when
+   * `signal.aborted` is true (cooperative pattern from the README).
+   * If we see the signal flipped after a clean return we record the
+   * run as `aborted` rather than `ok` — otherwise the lost-lease
+   * case is invisible in the status endpoint.
+   *
+   * Heartbeat: a recursive setTimeout drives the next tick AFTER the
+   * previous heartbeat resolves, so a slow Mongo can't stack
+   * overlapping calls. `inFlight` is the per-iteration guard; even
+   * if the timer fires while we're still mid-call we'd skip
+   * — but the recursive shape makes that impossible by construction.
+   */
+  async function executeWithLease(entry, lease, { manual = false } = {}) {
     const startedAt = Date.now();
     entry.lastRun = startedAt;
-    let heartbeatTimer = null;
+
     const heartbeatMs = Math.max(1000, Math.floor(entry.leaseSeconds * 1000 / 3));
-    let consecutiveHeartbeatFailures = 0;
-    if (heartbeatMs < entry.leaseSeconds * 1000) {
-      heartbeatTimer = setInterval(async () => {
+    let heartbeatTimer = null;
+    let heartbeatStopped = false;
+    let consecutiveFailures = 0;
+
+    function scheduleHeartbeat() {
+      if (heartbeatStopped) return;
+      heartbeatTimer = setTimeout(async () => {
+        if (heartbeatStopped) return;
         try {
           const ok = await lease.heartbeat();
           if (!ok) {
-            consecutiveHeartbeatFailures += 1;
-            if (consecutiveHeartbeatFailures >= 2) {
-              // The signal is already flipped by lease.heartbeat()
-              // when it returns false. We just stop pinging.
-              clearInterval(heartbeatTimer);
-              heartbeatTimer = null;
+            consecutiveFailures += 1;
+            if (consecutiveFailures >= 2) {
+              // lease.heartbeat() already flipped the abort signal
+              // when it returned false; we just stop pinging.
+              heartbeatStopped = true;
+              return;
             }
           } else {
-            consecutiveHeartbeatFailures = 0;
+            consecutiveFailures = 0;
           }
         } catch (err) {
           state.log && state.log.warn(
@@ -324,13 +340,14 @@ function createPlugin(opts = {}) {
             'heartbeat threw',
           );
         }
+        scheduleHeartbeat();
       }, heartbeatMs);
-      // Don't pin the event loop alive — a CLI / test that exits
-      // before the next heartbeat shouldn't wait for it.
       if (heartbeatTimer && typeof heartbeatTimer.unref === 'function') {
         heartbeatTimer.unref();
       }
     }
+    if (heartbeatMs < entry.leaseSeconds * 1000) scheduleHeartbeat();
+
     let status = 'ok';
     let lastError = null;
     try {
@@ -341,6 +358,13 @@ function createPlugin(opts = {}) {
         now:    new Date(startedAt),
         name:   entry.name,
       });
+      // Cooperative-abort case: handler returned cleanly but the
+      // lease was lost mid-run. Record as aborted so the status
+      // endpoint shows the lease event.
+      if (lease.signal && lease.signal.aborted) {
+        status = 'aborted';
+        lastError = 'lease lost mid-run';
+      }
     } catch (err) {
       status = lease.signal && lease.signal.aborted ? 'aborted' : 'failed';
       lastError = err && err.message ? err.message : String(err);
@@ -349,7 +373,8 @@ function createPlugin(opts = {}) {
         'cron handler threw',
       );
     } finally {
-      if (heartbeatTimer) clearInterval(heartbeatTimer);
+      heartbeatStopped = true;
+      if (heartbeatTimer) clearTimeout(heartbeatTimer);
       await lease.release();
     }
     const durationMs = Date.now() - startedAt;
@@ -358,7 +383,26 @@ function createPlugin(opts = {}) {
     entry.lastError = lastError;
     entry.runCount += 1;
     if (status !== 'ok') entry.failCount += 1;
-    return { acquired: true, status, durationMs };
+    return { status, durationMs };
+  }
+
+  /**
+   * Acquire + execute in one call. Returns an outcome object:
+   *
+   *   { acquired: true,  status: 'ok' | 'failed' | 'aborted', durationMs }
+   *   { acquired: false }   // another holder owns it
+   */
+  async function runJob(entry, { manual = false } = {}) {
+    const lease = await acquireLease(entry);
+    if (!lease) {
+      state.log && state.log.debug && state.log.debug(
+        { plugin: 'cron', name: entry.name, manual },
+        'tick skipped: lock held by another holder',
+      );
+      return { acquired: false };
+    }
+    const result = await executeWithLease(entry, lease, { manual });
+    return { acquired: true, ...result };
   }
 
   /**
@@ -391,17 +435,51 @@ function createPlugin(opts = {}) {
     }
     state.mongoose = mongoose;
 
-    // Best-effort: an existing connection is required for the lock
-    // collection. If it isn't open yet, lock acquisition will fail
-    // at first tick and `runJob` will surface the error — but
-    // bailing here would prevent registration entirely on apps that
-    // connect after loadPlugins.
-    try {
-      await lock.ensureIndexes(mongoose);
-    } catch (err) {
-      log.warn(
-        { err, plugin: 'cron' },
-        'could not ensure cron_lock indexes; will retry on first tick',
+    // Indexes are required for the unique-name race and the TTL
+    // sweep. The framework's bootstrap doesn't await Mongo
+    // connection before loading plugins, so on a cold start we may
+    // hit setup() before mongoose is open — bailing here would
+    // prevent registration entirely. Instead: try once now, and if
+    // the connection isn't ready, register a once-only 'connected'
+    // listener so the indexes land as soon as Mongo is up. The
+    // `acquire()` path also lazily ensures on first use, closing
+    // the gap where the listener never fires (offline test envs,
+    // mocked mongoose).
+    async function tryEnsureIndexes(context) {
+      try {
+        await lock.ensureIndexes(mongoose);
+        log.info({ plugin: 'cron', when: context }, 'cron_lock indexes ensured');
+      } catch (err) {
+        log.warn(
+          { err, plugin: 'cron', when: context },
+          'failed to ensure cron_lock indexes; first tick will retry via acquire()',
+        );
+      }
+    }
+    const conn = mongoose.connection;
+    const ready = conn && (conn.readyState === 1 || (conn.db && typeof conn.db.collection === 'function'));
+    if (ready) {
+      await tryEnsureIndexes('setup');
+    } else if (conn && typeof conn.once === 'function') {
+      log.info(
+        { plugin: 'cron' },
+        'mongo not yet connected at cron setup; deferring index ensure to the connected event',
+      );
+      conn.once('connected', () => {
+        tryEnsureIndexes('connected-event').catch(() => { /* tryEnsureIndexes already logs */ });
+      });
+      // 'open' fires after the initial sync; covers older mongoose
+      // versions where 'connected' is the wire-up but 'open' is when
+      // collections are actually queryable.
+      conn.once('open', () => {
+        tryEnsureIndexes('open-event').catch(() => { /* logged */ });
+      });
+    } else {
+      // No `once`-style API and not ready — likely a test stub. The
+      // first acquire() will lazily ensure indexes.
+      log.info(
+        { plugin: 'cron' },
+        'mongo connection has no once() API; index ensure will run on first acquire()',
       );
     }
 
@@ -477,24 +555,18 @@ function createPlugin(opts = {}) {
           runNow: async (name) => {
             const entry = jobs.get(name);
             if (!entry) throw new Error(`unknown job '${name}'`);
-            // Fire-and-forget on the HTTP path; we await the lock
-            // decision so the response can report whether the run
-            // actually started. The handler runs in the background
-            // from there.
-            const lockPeek = await lock.acquire({
-              mongoose:     state.mongoose,
-              name:         entry.name,
-              leaseSeconds: entry.leaseSeconds,
-            });
-            if (!lockPeek) return { acquired: false, reason: 'locked' };
-            // Release the peek — the real run will re-acquire. This
-            // avoids a window where the user hits run-now twice and
-            // the second hangs because the first's lease isn't
-            // visible yet.
-            await lockPeek.release();
-            // Run in the background — handler errors are logged via
-            // `runJob`'s try/catch.
-            runJob(entry, { manual: true }).catch((err) => {
+            // Acquire ONCE and hand the lease into the background
+            // executor. The previous peek/release/reacquire shape
+            // was racy: another node could win the lock between
+            // release and re-acquire, and the HTTP response would
+            // claim `acquired:true` while the background runJob
+            // returned `acquired:false` and skipped silently.
+            const lease = await acquireLease(entry);
+            if (!lease) return { acquired: false, reason: 'locked' };
+            // Run with the held lease in the background — handler
+            // errors are routed through executeWithLease's
+            // try/catch + the framework log.
+            executeWithLease(entry, lease, { manual: true }).catch((err) => {
               log.error({ err, plugin: 'cron', name }, 'manual run threw');
             });
             return { acquired: true };

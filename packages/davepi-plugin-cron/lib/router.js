@@ -64,8 +64,11 @@ function buildRouter({ express, errors, asyncHandler, jobs, runNow, log }) {
     try {
       outcome = await runNow(name);
     } catch (err) {
+      // Internal-error details stay in the operator log only. The
+      // HTTP client sees a generic typed error — never the caught
+      // err.message, which can leak driver / Mongo internals.
       log.error({ err, plugin: 'cron', name }, 'manual run-now failed to start');
-      return next(new ValidationError(`could not start '${name}': ${err.message}`));
+      return next(new ValidationError('could not start cron job'));
     }
     res.json({ ok: true, ...outcome });
   }));

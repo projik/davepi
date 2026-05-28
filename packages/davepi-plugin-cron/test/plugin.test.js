@@ -447,3 +447,159 @@ test('CRON_LEASE_SECONDS / per-job leaseSeconds override the default', async () 
   assert.equal(a.leaseSeconds, 600);
   assert.equal(b.leaseSeconds, 30);
 });
+
+test('cooperative-abort: handler returns early on signal.aborted → status=aborted', async () => {
+  const mongoose = makeMongooseStub();
+  const plugin = createPlugin({ env: { NODE_ENV: 'test' }, mongoose });
+  plugin.register('coop', {
+    schedule: '* * * * *',
+    handler: async ({ lease }) => {
+      // Simulate a heartbeat-loss mid-run by flipping the signal
+      // ourselves; a real run would flip via lease.heartbeat()
+      // returning false. The handler then returns cleanly — the
+      // documented cooperative pattern from the README.
+      lease.signal.dispatchEvent
+        ? lease.signal.dispatchEvent(new Event('abort'))
+        : null;
+      // The plugin's lease wraps an AbortController; call abort()
+      // through a side channel: heartbeat against an overwritten
+      // row.
+      mongoose.__coll.__rows.set('coop', {
+        name: 'coop', holderId: 'other', expiresAt: new Date(Date.now() + 60000),
+      });
+      await lease.heartbeat();
+      return; // cooperative early return
+    },
+  });
+  await plugin.setup({ bus: new EventEmitter(), log: silentLog(), appName: 'shop' });
+  const out = await plugin.tickOnce('coop');
+  assert.equal(out.status, 'aborted');
+  const status = plugin.list()[0];
+  assert.equal(status.lastStatus, 'aborted');
+  assert.equal(status.failCount, 1);
+  assert.match(status.lastError, /lease lost/);
+});
+
+test('heartbeats do not stack when Mongo is slow (recursive setTimeout, no overlap)', async () => {
+  // Drive a job whose handler sits for ~250ms while we count how
+  // many heartbeats fire and verify none overlap. The previous
+  // setInterval implementation could stack; the recursive
+  // setTimeout shape can't by construction.
+  const mongoose = makeMongooseStub();
+  // Make heartbeat slow by wrapping the collection's
+  // findOneAndUpdate when the filter is a heartbeat (matches by
+  // { name, holderId }).
+  let inFlight = 0;
+  let maxInFlight = 0;
+  const realFindOneAndUpdate = mongoose.__coll.findOneAndUpdate.bind(mongoose.__coll);
+  mongoose.__coll.findOneAndUpdate = async (filter, ...rest) => {
+    const isHeartbeat = filter && filter.holderId && !filter.expiresAt;
+    if (isHeartbeat) {
+      inFlight += 1;
+      maxInFlight = Math.max(maxInFlight, inFlight);
+      try {
+        await new Promise((r) => setTimeout(r, 50));
+        return realFindOneAndUpdate(filter, ...rest);
+      } finally {
+        inFlight -= 1;
+      }
+    }
+    return realFindOneAndUpdate(filter, ...rest);
+  };
+  const plugin = createPlugin({ env: { NODE_ENV: 'test' }, mongoose });
+  plugin.register('slow', {
+    schedule: '* * * * *',
+    // 3 second lease → 1 second heartbeat interval, but our slow
+    // heartbeat takes ~50ms. The handler holds for 220ms so several
+    // heartbeats would have a chance to overlap under setInterval.
+    leaseSeconds: 3,
+    handler: async () => {
+      // Run long enough for multiple heartbeat ticks. Heartbeat is
+      // every leaseSeconds/3 = 1s, so 2.2s → 2 heartbeats.
+      await new Promise((r) => setTimeout(r, 2200));
+    },
+  });
+  await plugin.setup({ bus: new EventEmitter(), log: silentLog(), appName: 'shop' });
+  await plugin.tickOnce('slow');
+  // The point: maxInFlight must never exceed 1. (We don't assert
+  // the exact heartbeat count — timing variance — just that they
+  // don't overlap.)
+  assert.equal(maxInFlight <= 1, true, `heartbeats overlapped (maxInFlight=${maxInFlight})`);
+});
+
+test('run-now manual trigger reports the actual lock acquisition (no peek race)', async () => {
+  const express = require('express');
+  const http = require('http');
+  const mongoose = makeMongooseStub();
+  const errors = {
+    NotFoundError:   class extends Error { constructor(m) { super(m); this.status = 404; } },
+    ForbiddenError:  class extends Error { constructor(m) { super(m); this.status = 403; } },
+    ValidationError: class extends Error { constructor(m) { super(m); this.status = 400; } },
+  };
+  const asyncHandler = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
+  const auth = () => (req, res, next) => { req.user = { user_id: 'admin', roles: ['admin'] }; next(); };
+  const app = express();
+  const plugin = createPlugin({
+    env: { NODE_ENV: 'test' },
+    mongoose, express, errors, auth, asyncHandler,
+  });
+  let handlerStarts = 0;
+  plugin.register('once', {
+    schedule: '* * * * *',
+    handler: async () => { handlerStarts += 1; await new Promise((r) => setTimeout(r, 50)); },
+  });
+  await plugin.setup({ app, bus: new EventEmitter(), log: silentLog(), appName: 'shop' });
+  app.use((err, req, res, next) => res.status(err.status || 500).json({ error: { message: err.message } }));
+  const server = app.listen(0);
+  const port = server.address().port;
+
+  // Pre-fill the lock so run-now finds it held — should return
+  // acquired:false, not acquired:true (the old peek-release path
+  // could lie here).
+  mongoose.__coll.__rows.set('once', {
+    name: 'once', holderId: 'other-node', expiresAt: new Date(Date.now() + 60000),
+  });
+
+  const res = await new Promise((resolve, reject) => {
+    const req = http.request(
+      { host: '127.0.0.1', port, path: '/api/cron/once/run-now', method: 'POST' },
+      (r) => {
+        let body = '';
+        r.on('data', (c) => { body += c; });
+        r.on('end', () => resolve({ status: r.statusCode, body: JSON.parse(body) }));
+      },
+    );
+    req.on('error', reject);
+    req.end();
+  });
+  assert.equal(res.status, 200);
+  assert.equal(res.body.acquired, false);
+  assert.equal(res.body.reason, 'locked');
+  await new Promise((r) => setTimeout(r, 60));
+  assert.equal(handlerStarts, 0); // ...and the handler genuinely did not run
+  server.close();
+});
+
+test('lock.acquire throws a clear error when connection.db is unavailable', async () => {
+  await assert.rejects(
+    () => lock.acquire({ mongoose: { connection: {} }, name: 'x', leaseSeconds: 60 }),
+    /connection is not ready/,
+  );
+});
+
+test('setup defers ensureIndexes when mongoose is not yet connected', async () => {
+  // Mongoose stub that reports readyState=0 and exposes a once()
+  // surface. The plugin should attach a 'connected' listener.
+  const listeners = {};
+  const conn = {
+    readyState: 0,
+    db: null,
+    once: (event, fn) => { listeners[event] = fn; },
+  };
+  const mongoose = { connection: conn };
+  const log = silentLog();
+  const plugin = createPlugin({ env: { NODE_ENV: 'test' }, mongoose });
+  await plugin.setup({ bus: new EventEmitter(), log, appName: 'shop' });
+  assert.equal(typeof listeners.connected, 'function');
+  assert.equal(typeof listeners.open, 'function');
+});

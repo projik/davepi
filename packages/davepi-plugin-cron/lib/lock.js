@@ -59,7 +59,23 @@ async function acquire({ mongoose, name, leaseSeconds, now = Date.now() }) {
   if (!Number.isFinite(leaseSeconds) || leaseSeconds <= 0) {
     throw new TypeError('acquire: leaseSeconds must be a positive number');
   }
-  const coll = mongoose.connection.db.collection(COLLECTION);
+  // Defensive guard: when the framework's bootstrap hasn't awaited
+  // Mongo's connect before loading plugins, `mongoose.connection.db`
+  // can be undefined on the first tick. Surface a clear error
+  // rather than the cryptic "cannot read property 'collection' of
+  // undefined" that the chained dereference would produce.
+  const conn = mongoose && mongoose.connection;
+  if (!conn || !conn.db || typeof conn.db.collection !== 'function') {
+    throw new Error(
+      'davepi-plugin-cron: mongoose connection is not ready ' +
+      '(connection.db is unavailable). Connect to Mongo before the first tick.',
+    );
+  }
+  // Lazy ensureIndexes for the deferred-connect path. Once it's
+  // succeeded for this mongoose connection we don't redo it — the
+  // call below short-circuits via a per-connection guard symbol.
+  await ensureIndexesOnce(mongoose);
+  const coll = conn.db.collection(COLLECTION);
   const holderId = newHolderId();
   const expiresAt = new Date(now + leaseSeconds * 1000);
 
@@ -167,4 +183,22 @@ async function ensureIndexes(mongoose) {
   );
 }
 
-module.exports = { acquire, ensureIndexes, COLLECTION };
+// Per-connection one-shot guard so `acquire()` can lazily ensure
+// indexes without doing the round-trip on every tick. We stash the
+// promise on the connection object itself; once it resolves
+// subsequent calls return the same already-resolved promise.
+const ENSURE_KEY = Symbol.for('davepi-plugin-cron.indexes-ensured');
+async function ensureIndexesOnce(mongoose) {
+  const conn = mongoose && mongoose.connection;
+  if (!conn) return;
+  if (conn[ENSURE_KEY]) return conn[ENSURE_KEY];
+  conn[ENSURE_KEY] = ensureIndexes(mongoose).catch((err) => {
+    // Reset on failure so the next acquire retries. Throw out so
+    // callers see the underlying error.
+    delete conn[ENSURE_KEY];
+    throw err;
+  });
+  return conn[ENSURE_KEY];
+}
+
+module.exports = { acquire, ensureIndexes, ensureIndexesOnce, COLLECTION };
