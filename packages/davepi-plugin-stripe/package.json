@@ -1,0 +1,45 @@
+{
+  "name": "davepi-plugin-stripe",
+  "version": "0.1.0",
+  "description": "Stripe payments + subscriptions + webhooks for dAvePi. Mounts opt-in /api/checkout, /api/portal, and /api/webhooks/stripe routes; verifies webhook signatures via the official Stripe SDK; dedupes events; rebroadcasts every verified event onto the framework's record bus so audit/slack/email plugins compose; mirrors subscription state into a schema-driven `stripe_subscription` collection so REST/GraphQL list/filter work without round-tripping Stripe. Dormant when STRIPE_SECRET_KEY is unset.",
+  "license": "ISC",
+  "homepage": "https://docs.davepi.dev/features/plugins/",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/projik/davepi.git",
+    "directory": "packages/davepi-plugin-stripe"
+  },
+  "keywords": [
+    "davepi",
+    "davepi-plugin",
+    "stripe",
+    "payments",
+    "subscriptions",
+    "billing",
+    "webhook",
+    "checkout"
+  ],
+  "main": "index.js",
+  "files": [
+    "index.js",
+    "lib",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "stripe": "^17.0.0"
+  },
+  "peerDependencies": {
+    "davepi": ">=1.0.4"
+  },
+  "peerDependenciesMeta": {
+    "davepi": {
+      "optional": false
+    }
+  },
+  "scripts": {
+    "test": "node --test test/*.test.js"
+  }
+}
