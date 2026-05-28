@@ -437,8 +437,65 @@ test('schema afterDelete hook: deletes the blob when cascadeDelete is on', async
   await plugin.setup(args);
 
   const schema = args.schemaLoader.loaded[0];
-  await schema.hooks.afterDelete({ record: { key: 'u/abc/x.png' } });
+  await schema.hooks.afterDelete({ record: { userId: 'u', key: 'u/abc/x.png' } });
   assert.deepEqual(adapter.calls.find((c) => c.op === 'del').args, { key: 'u/abc/x.png' });
+});
+
+test('schema afterDelete hook: refuses cascade-delete when record.userId disagrees with key prefix', async () => {
+  // Defence-in-depth: the `key` field is API-write-locked, but a
+  // corrupted / direct-Mongoose-written row could carry a mismatched
+  // pair. The hook must refuse rather than wipe another tenant's blob.
+  const adapter = fakeAdapter();
+  const log = silentLog();
+  const plugin = createPlugin({
+    env:          { S3_BUCKET: 'b1', S3_CASCADE_DELETE: 'true' },
+    adapter,
+    errors:       fakeErrors,
+    auth:         fakeAuth,
+    asyncHandler: fakeAsyncHandler,
+    mongoose:     fakeMongoose,
+    express:      fakeExpress(),
+  });
+  const args = buildSetupArgs();
+  args.log = log;
+  await plugin.setup(args);
+
+  const schema = args.schemaLoader.loaded[0];
+  // record claims owner 'attacker', but the key lives under 'victim'
+  await schema.hooks.afterDelete({
+    record: { userId: 'attacker', key: 'victim/abc/secret.pdf' },
+  });
+  assert.equal(adapter.calls.find((c) => c.op === 'del'), undefined);
+  assert.ok(
+    log.records.warn.some((r) => /key does not belong to record owner/.test(r.m)),
+    'expected a warn entry explaining the refused delete'
+  );
+});
+
+test('schema afterDelete hook: refuses cascade-delete when key has no userId prefix', async () => {
+  // A key shape outside the documented `<userId>/<hash>/<name>` —
+  // either a framework bug or a manually-inserted row — must not get
+  // a blob delete either.
+  const adapter = fakeAdapter();
+  const log = silentLog();
+  const plugin = createPlugin({
+    env:          { S3_BUCKET: 'b1', S3_CASCADE_DELETE: 'true' },
+    adapter,
+    errors:       fakeErrors,
+    auth:         fakeAuth,
+    asyncHandler: fakeAsyncHandler,
+    mongoose:     fakeMongoose,
+    express:      fakeExpress(),
+  });
+  const args = buildSetupArgs();
+  args.log = log;
+  await plugin.setup(args);
+
+  const schema = args.schemaLoader.loaded[0];
+  await schema.hooks.afterDelete({
+    record: { userId: 'u', key: 'noslashes' },
+  });
+  assert.equal(adapter.calls.find((c) => c.op === 'del'), undefined);
 });
 
 test('schema afterDelete hook: storage failure is logged, not thrown (best-effort)', async () => {
@@ -462,7 +519,7 @@ test('schema afterDelete hook: storage failure is logged, not thrown (best-effor
 
   const schema = args.schemaLoader.loaded[0];
   // Must NOT throw — `after*` hooks are best-effort per framework contract.
-  await schema.hooks.afterDelete({ record: { key: 'u/abc/x.png' } });
+  await schema.hooks.afterDelete({ record: { userId: 'u', key: 'u/abc/x.png' } });
   assert.ok(log.records.error.some((r) => /cascade-delete/.test(r.m)));
 });
 

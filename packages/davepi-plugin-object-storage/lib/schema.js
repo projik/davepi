@@ -1,5 +1,7 @@
 'use strict';
 
+const { userIdOfKey } = require('./keys');
+
 /**
  * Build the `file` schema the plugin registers with the framework's
  * schemaLoader. Once registered, the file collection is queryable
@@ -43,6 +45,25 @@ function buildFileSchema({
   const afterDelete = async ({ record }) => {
     if (!cascadeDelete) return;
     if (!record || !record.key) return;
+    // Defence-in-depth: the `key` field is API-write-locked via the
+    // sentinel ACL above, so a client can't directly stamp a foreign
+    // tenant's key onto a file record. But framework bugs, corrupted
+    // documents, or a misconfigured admin tool that wrote directly
+    // through Mongoose could leave a row whose key disagrees with its
+    // userId. `userIdOfKey` parses the leading segment of the key
+    // (which buildKey always stamps as `<userId>/...`) — if it doesn't
+    // match record.userId, refuse to delete the blob rather than
+    // potentially wiping another tenant's bytes.
+    const keyUserId = userIdOfKey(record.key);
+    if (!keyUserId || String(keyUserId) !== String(record.userId)) {
+      if (log && typeof log.warn === 'function') {
+        log.warn(
+          { plugin: 'object-storage', key: record.key, recordUserId: record.userId },
+          'davepi-plugin-object-storage: cascade-delete refused — key does not belong to record owner'
+        );
+      }
+      return;
+    }
     try {
       const adapter = getAdapter();
       if (!adapter) return;
