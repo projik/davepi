@@ -91,31 +91,63 @@ function buildOtpHandlers({ config, state, sendSms }) {
     if (!state.OtpRate) return; // misconfig; surface later
     const now = new Date();
     const oneHour = 60 * 60 * 1000;
-    // First try to $inc an existing live window.
-    const existing = await state.OtpRate.findOneAndUpdate(
-      { phone, expiresAt: { $gt: now } },
-      { $inc: { count: 1 } },
-      { new: true }
-    );
-    if (existing) {
-      if (existing.count > config.otpMaxPerHour) {
-        throw ForbiddenError('OTP send rate limit exceeded; try again later');
-      }
-      return;
-    }
-    // No live window — open one.
-    await state.OtpRate.findOneAndUpdate(
+    const windowEnd = new Date(now.getTime() + oneHour);
+    // Single atomic upsert via aggregation pipeline. The previous
+    // check-then-upsert split had a race: two concurrent callers could
+    // both miss the live-window $inc, then both run the $set upsert,
+    // with the second clobbering the first's count back to 1. The
+    // pipeline form lets Mongo branch server-side: if the row is
+    // missing or expired, reset to count=1 with a fresh window;
+    // otherwise increment. With { upsert: true } on the unique
+    // `phone` index, concurrent updates serialize on the same doc.
+    const doc = await state.OtpRate.findOneAndUpdate(
       { phone },
-      {
+      [{
         $set: {
-          phone,
-          count:       1,
-          windowStart: now,
-          expiresAt:   new Date(now.getTime() + oneHour),
+          phone: phone,
+          windowStart: {
+            $cond: [
+              { $or: [{ $eq: [{ $ifNull: ['$expiresAt', null] }, null] }, { $lte: ['$expiresAt', now] }] },
+              now,
+              { $ifNull: ['$windowStart', now] },
+            ],
+          },
+          expiresAt: {
+            $cond: [
+              { $or: [{ $eq: [{ $ifNull: ['$expiresAt', null] }, null] }, { $lte: ['$expiresAt', now] }] },
+              windowEnd,
+              '$expiresAt',
+            ],
+          },
+          count: {
+            $cond: [
+              { $or: [{ $eq: [{ $ifNull: ['$expiresAt', null] }, null] }, { $lte: ['$expiresAt', now] }] },
+              1,
+              { $add: [{ $ifNull: ['$count', 0] }, 1] },
+            ],
+          },
         },
-      },
+      }],
       { upsert: true, new: true }
     );
+    if (doc && doc.count > config.otpMaxPerHour) {
+      throw ForbiddenError('OTP send rate limit exceeded; try again later');
+    }
+  }
+
+  // Best-effort decrement on the live rate-limit window. Used to
+  // refund the count when an SMS send fails so a Twilio outage
+  // doesn't lock a user out for the next hour. Never throws — a
+  // missing row, an expired window, or a concurrent reset all
+  // resolve to "nothing to refund".
+  async function refundRate(phone) {
+    if (!state.OtpRate) return;
+    try {
+      await state.OtpRate.findOneAndUpdate(
+        { phone, expiresAt: { $gt: new Date() }, count: { $gt: 0 } },
+        { $inc: { count: -1 } }
+      );
+    } catch (_) { /* swallow */ }
   }
 
   const send = asyncRoute(async (req, res) => {
@@ -140,6 +172,15 @@ function buildOtpHandlers({ config, state, sendSms }) {
     try {
       await sendSms({ to: phone, body: `${state.appName} code: ${code}` });
     } catch (err) {
+      // SMS failed but we already wrote the challenge row and charged
+      // the rate-limit window. Roll both back best-effort so a
+      // transient Twilio outage doesn't (a) leave a phantom challenge
+      // the user never received and (b) consume rate-limit budget
+      // that would block legitimate retries. Both ops are
+      // best-effort: a follow-up storage failure is logged through
+      // the eventual error but we still throw the original 503.
+      try { await state.OtpChallenge.deleteOne({ phone }); } catch (_) {}
+      await refundRate(phone);
       throw ServiceUnavailable('SMS dispatch failed', err);
     }
 
@@ -160,15 +201,21 @@ function buildOtpHandlers({ config, state, sendSms }) {
       throw UnauthorizedError('invalid or expired code');
     }
 
-    // Increment attempts atomically; bail at 5.
+    // Increment attempts atomically. Read-modify-write would let two
+    // concurrent wrong-code submissions both observe `attempts=N` and
+    // both write `N+1`, undercounting by one. `$inc` makes the
+    // increment server-side; we then delete when the post-increment
+    // value crosses the 5-attempt threshold.
     const attemptedHash = sha256(code);
     const match = timingSafeHexEqual(attemptedHash, row.codeHash);
     if (!match) {
-      const nextAttempts = (row.attempts || 0) + 1;
-      if (nextAttempts >= 5) {
+      const updated = await state.OtpChallenge.findOneAndUpdate(
+        { phone },
+        { $inc: { attempts: 1 } },
+        { new: true }
+      );
+      if (updated && updated.attempts >= 5) {
         await state.OtpChallenge.deleteOne({ phone });
-      } else {
-        await state.OtpChallenge.findOneAndUpdate({ phone }, { $set: { attempts: nextAttempts } });
       }
       throw UnauthorizedError('invalid or expired code');
     }

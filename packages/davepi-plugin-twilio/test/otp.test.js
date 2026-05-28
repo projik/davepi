@@ -35,7 +35,13 @@ function memOtpChallenge() {
     async findOne(q) { return rows.get(q.phone) || null; },
     async findOneAndUpdate(q, update, opts) {
       const existing = rows.get(q.phone) || null;
-      const next = { ...(existing || {}), ...(update.$set || {}) };
+      const next = { ...(existing || {}) };
+      if (update.$set) Object.assign(next, update.$set);
+      if (update.$inc) {
+        for (const [k, v] of Object.entries(update.$inc)) {
+          next[k] = (next[k] || 0) + v;
+        }
+      }
       rows.set(q.phone, next);
       return opts && opts.new ? next : existing;
     },
@@ -45,22 +51,74 @@ function memOtpChallenge() {
 
 function memOtpRate() {
   const rows = new Map();
+  // Mongo-pipeline-shape stub: enough $cond / $or / $eq / $ifNull /
+  // $lte / $add support to drive the OTP rate limiter. Kept here
+  // (not in lib/) because production code uses real Mongo — this is
+  // a single-purpose evaluator just for the in-memory test path.
+  function evalExpr(expr, ctx) {
+    if (expr === null || expr === undefined) return expr;
+    if (typeof expr === 'string' && expr.startsWith('$')) {
+      return ctx[expr.slice(1)];
+    }
+    if (typeof expr !== 'object') return expr;
+    if (Array.isArray(expr)) return expr.map((e) => evalExpr(e, ctx));
+    const keys = Object.keys(expr);
+    if (keys.length === 1 && keys[0].startsWith('$')) {
+      const op = keys[0];
+      const args = expr[op];
+      const evalArgs = (a) => Array.isArray(a) ? a.map((x) => evalExpr(x, ctx)) : evalExpr(a, ctx);
+      switch (op) {
+        case '$cond':   { const [c, t, f] = evalArgs(args); return c ? t : f; }
+        case '$or':     return evalArgs(args).some(Boolean);
+        case '$and':    return evalArgs(args).every(Boolean);
+        case '$not':    return !evalArgs(args)[0];
+        case '$eq':     { const [a, b] = evalArgs(args); return a === b || (a == null && b == null); }
+        case '$lte':    { const [a, b] = evalArgs(args); if (a == null) return false; return new Date(a) <= new Date(b); }
+        case '$ifNull': { const [a, b] = evalArgs(args); return a == null ? b : a; }
+        case '$add':    return evalArgs(args).reduce((s, n) => s + (n || 0), 0);
+        default: throw new Error('memOtpRate: unsupported op ' + op);
+      }
+    }
+    // Plain object literal — just substitute string field refs.
+    const out = {};
+    for (const k of Object.keys(expr)) out[k] = evalExpr(expr[k], ctx);
+    return out;
+  }
   return {
     rows,
     async findOneAndUpdate(filter, update, opts) {
       const phone = filter.phone;
       const existing = rows.get(phone) || null;
+      const now = new Date();
+      // live-only $inc branch (used by the refund path)
       const liveOnly = filter.expiresAt && filter.expiresAt.$gt;
-      // Live-only $inc branch
       if (liveOnly) {
-        if (!existing || new Date(existing.expiresAt) <= new Date(liveOnly)) return null;
-        existing.count = (existing.count || 0) + (update.$inc && update.$inc.count || 0);
+        if (!existing || new Date(existing.expiresAt) <= now) return null;
+        if (filter.count && filter.count.$gt != null && !((existing.count || 0) > filter.count.$gt)) return null;
+        if (update.$inc) {
+          for (const [k, v] of Object.entries(update.$inc)) existing[k] = (existing[k] || 0) + v;
+        }
         rows.set(phone, existing);
-        return opts && opts.new ? existing : { ...existing, count: existing.count - 1 };
+        return opts && opts.new ? existing : { ...existing };
       }
-      const next = { ...(existing || {}), ...(update.$set || {}) };
+      // Aggregation pipeline upsert (the OTP rate limiter).
+      if (Array.isArray(update)) {
+        const ctx = existing ? { ...existing } : {};
+        let next = { ...ctx };
+        for (const stage of update) {
+          if (stage.$set) {
+            for (const [k, v] of Object.entries(stage.$set)) next[k] = evalExpr(v, next);
+          }
+        }
+        rows.set(phone, next);
+        return opts && opts.new ? next : existing;
+      }
+      // Plain $set / $inc upsert (legacy path).
+      const next = { ...(existing || {}) };
+      if (update.$set) Object.assign(next, update.$set);
+      if (update.$inc) for (const [k, v] of Object.entries(update.$inc)) next[k] = (next[k] || 0) + v;
       rows.set(phone, next);
-      return next;
+      return opts && opts.new ? next : existing;
     },
   };
 }
@@ -283,6 +341,26 @@ test('OTP verify: correct code mints JWT and upserts a User by phone', async () 
   assert.equal(h.OtpChallenge.rows.has(PHONE), false);
   // User exists.
   assert.equal(h.User.byPhone.has(PHONE), true);
+});
+
+test('OTP send: SMS dispatch failure deletes the stored challenge and refunds the rate window', async () => {
+  const h = buildHarness({
+    smsMock: async () => { throw new Error('twilio down'); },
+  });
+  const res = fakeRes();
+  const { next, captured } = captureNext();
+  await h.handlers.send({ body: { phone: PHONE } }, res, next);
+
+  // 503 propagated…
+  assert.ok(captured.err);
+  assert.equal(captured.err.status, 503);
+  assert.equal(captured.err.code, 'SMS_UNAVAILABLE');
+  // …challenge row cleaned up…
+  assert.equal(h.OtpChallenge.rows.has(PHONE), false);
+  // …rate window refunded to 0 so the user can retry immediately.
+  const rate = h.OtpRate.rows.get(PHONE);
+  assert.ok(rate);
+  assert.equal(rate.count, 0);
 });
 
 test('generateCode produces N-digit zero-padded strings', () => {
