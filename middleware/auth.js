@@ -13,6 +13,11 @@ const { UnauthorizedError, ForbiddenError } = require('../utils/errors');
  */
 const verifyToken = (bool) => (req, res, next) => {
   if (!bool) return next();
+  // An upstream middleware (e.g. clientAuth resolving X-Client-Id)
+  // may have already populated req.user with a synthetic identity.
+  // When it has, skip the Bearer check — the rest of the stack only
+  // cares that req.user.user_id is present.
+  if (req.user && req.user.user_id) return next();
   const token =
     req.headers.authorization &&
     req.headers.authorization.replace(/bearer /i, '');
@@ -20,7 +25,7 @@ const verifyToken = (bool) => (req, res, next) => {
     return next(new ForbiddenError('A token is required for authentication'));
   }
   try {
-    req.user = jwt.verify(token, process.env.TOKEN_KEY);
+    req.user = jwt.verify(token, process.env.TOKEN_KEY, { algorithms: ['HS256'] });
   } catch (err) {
     return next(new UnauthorizedError('Invalid Token'));
   }

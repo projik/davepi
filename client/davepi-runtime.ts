@@ -30,6 +30,20 @@ export interface ApiOptions {
    */
   getToken?: () => string | Promise<string>;
   /**
+   * Public client ID identifying this frontend (e.g.
+   * `pk_storefront_live_abc123`). Sent on every request as
+   * `X-Client-Id`. Client IDs are identifiers, NOT secrets — they
+   * are meant to be baked into SPA bundles and are world-readable.
+   * The server resolves them to a role and applies the role's ACL +
+   * mandatory scope filter (see `schema.acl.scope` in AGENTS.md).
+   * Used to expose subsets of collections (published products,
+   * future appointments, etc.) to unauthenticated callers. When
+   * both `clientId` and a Bearer token are present, the Bearer wins
+   * for authorisation; the client ID stays attached as audit
+   * context.
+   */
+  clientId?: string;
+  /**
    * Custom fetch implementation (for Node, Cloudflare Workers,
    * tests). Defaults to global fetch.
    */
@@ -120,6 +134,7 @@ export function buildHttpClient(opts: ApiOptions): HttpClient {
   const fetchImpl = opts.fetch || (globalThis.fetch as typeof fetch);
   const getToken = opts.getToken || (() => undefined as unknown as string);
   const defaultHeaders = { ...(opts.headers || {}) };
+  if (opts.clientId) defaultHeaders['X-Client-Id'] = opts.clientId;
 
   async function request<T>({
     method,

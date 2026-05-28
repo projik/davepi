@@ -1,5 +1,5 @@
 {
-  "runAt": "2026-05-25T07:26:50.934Z",
+  "runAt": "2026-05-27T07:20:24.014Z",
   "agentMode": "real",
   "model": "claude-sonnet-4-6",
   "total": 10,
@@ -9,7 +9,7 @@
       "name": "01-task-fields",
       "passed": false,
       "message": "ANTHROPIC_API_KEY is required for real-agent mode (set EVAL_AGENT=stub to skip).",
-      "durationMs": 2
+      "durationMs": 3
     },
     {
       "name": "02-status-state-machine",
@@ -45,7 +45,7 @@
       "name": "07-file-attachment",
       "passed": false,
       "message": "ANTHROPIC_API_KEY is required for real-agent mode (set EVAL_AGENT=stub to skip).",
-      "durationMs": 2
+      "durationMs": 1
     },
     {
       "name": "08-searchable-fields",

@@ -41,6 +41,8 @@ const {
   filterWritable,
   bypassUserScopeForList,
   bypassUserScopeForDelete,
+  getRoleScopeFilter,
+  applyRoleScopeFilter,
 } = require('./acl');
 const { normalizeRelations, parseIncludes, applyIncludes } = require('./relations');
 const { matchAccept, decorateFileUrls } = require('./fileFields');
@@ -240,8 +242,12 @@ function registerSchemaTools(server, entry, { schemaLoader, getUser }) {
       const user = await requireUser(getUser);
       const pageSize = Math.min(args.perPage || PAGE_SIZE(), 200);
       const page = args.page || 1;
-      const filter = sanitizeFilter(args.filter);
+      let filter = sanitizeFilter(args.filter);
       if (!bypassUserScopeForList(s, user)) filter.userId = user.user_id;
+      // Apply schema.acl.scope[role] so MCP can't be used as an
+      // alternate read surface that bypasses the mandatory filter
+      // REST and GraphQL enforce.
+      filter = applyRoleScopeFilter(filter, getRoleScopeFilter(s, user));
       if (softDelete && !args.includeDeleted) filter.deletedAt = null;
       if (args.q && searchableFields.length) {
         filter.$text = { $search: String(args.q) };
@@ -283,9 +289,13 @@ function registerSchemaTools(server, entry, { schemaLoader, getUser }) {
     },
     handlerOf(async (args) => {
       const user = await requireUser(getUser);
-      const baseQuery = bypassUserScopeForList(s, user)
+      const ownerBase = bypassUserScopeForList(s, user)
         ? { _id: args.id }
         : { _id: args.id, userId: user.user_id };
+      const baseQuery = applyRoleScopeFilter(
+        ownerBase,
+        getRoleScopeFilter(s, user)
+      );
       if (softDelete) baseQuery.deletedAt = null;
       const record = await Model.findOne(baseQuery).lean();
       if (!record) throw new NotFoundError(path);
@@ -628,9 +638,16 @@ function registerSchemaTools(server, entry, { schemaLoader, getUser }) {
         const user = await requireUser(getUser);
         // Match the REST contract: the caller must be able to read the
         // record (or carry the acl.list bypass) to see its history.
-        const ownerQuery = bypassUserScopeForList(s, user)
+        // Role-scope predicate is applied on top so the history tool
+        // can't be used as an alternate read surface for out-of-scope
+        // records.
+        const ownerBase = bypassUserScopeForList(s, user)
           ? { _id: args.id }
           : { _id: args.id, userId: user.user_id };
+        const ownerQuery = applyRoleScopeFilter(
+          ownerBase,
+          getRoleScopeFilter(s, user)
+        );
         const exists = await Model.findOne(ownerQuery).select('_id').lean();
         if (!exists) throw new NotFoundError(path);
         const pageSize = Math.min(args.perPage || PAGE_SIZE(), 200);
@@ -681,7 +698,8 @@ function registerSchemaTools(server, entry, { schemaLoader, getUser }) {
         const user = await requireUser(getUser);
         const pageSize = Math.min(args.perPage || PAGE_SIZE(), 200);
         const page = args.page || 1;
-        const filter = bypassUserScopeForList(s, user) ? {} : { userId: user.user_id };
+        const ownerFilter = bypassUserScopeForList(s, user) ? {} : { userId: user.user_id };
+        const filter = applyRoleScopeFilter(ownerFilter, getRoleScopeFilter(s, user));
         if (softDelete) filter.deletedAt = null;
         filter.$text = { $search: String(args.q) };
         const sortObject = { score: { $meta: 'textScore' } };
@@ -718,9 +736,13 @@ function registerSchemaTools(server, entry, { schemaLoader, getUser }) {
         },
         handlerOf(async (args) => {
           const user = await requireUser(getUser);
-          const baseQuery = bypassUserScopeForList(s, user)
+          const ownerBase = bypassUserScopeForList(s, user)
             ? { _id: args.id }
             : { _id: args.id, userId: user.user_id };
+          const baseQuery = applyRoleScopeFilter(
+            ownerBase,
+            getRoleScopeFilter(s, user)
+          );
           const parent = await Model.findOne(baseQuery).select('_id').lean();
           if (!parent) throw new NotFoundError(path);
           const wrapper = [{ _id: parent._id }];
@@ -742,9 +764,13 @@ function registerSchemaTools(server, entry, { schemaLoader, getUser }) {
         },
         handlerOf(async (args) => {
           const user = await requireUser(getUser);
-          const baseQuery = bypassUserScopeForList(s, user)
+          const ownerBase = bypassUserScopeForList(s, user)
             ? { _id: args.id }
             : { _id: args.id, userId: user.user_id };
+          const baseQuery = applyRoleScopeFilter(
+            ownerBase,
+            getRoleScopeFilter(s, user)
+          );
           // belongsTo joins on a localKey field on the parent; fetch
           // it (not just _id) so applyIncludes can read the join key.
           const projection =
@@ -847,7 +873,11 @@ function registerSchemaTools(server, entry, { schemaLoader, getUser }) {
         const baseOwner = bypassUserScopeForList(s, user)
           ? { _id: args.id }
           : { _id: args.id, userId: user.user_id };
-        const ownerQuery = softDelete ? { ...baseOwner, deletedAt: null } : baseOwner;
+        const scopedOwner = applyRoleScopeFilter(
+          baseOwner,
+          getRoleScopeFilter(s, user)
+        );
+        const ownerQuery = softDelete ? { ...scopedOwner, deletedAt: null } : scopedOwner;
         const record = await Model.findOne(ownerQuery).lean();
         if (!record) throw new NotFoundError(path);
         const meta = record[f.name];

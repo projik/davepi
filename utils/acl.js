@@ -5,7 +5,7 @@
  * Schemas opt in to ACL by declaring two optional shapes:
  *
  *   field.acl = { read: [...], create: [...], update: [...] }
- *   schema.acl = { list: [...], delete: [...] }
+ *   schema.acl = { list: [...], delete: [...], scope: { role: filter } }
  *
  * `field.acl.read`   — only these roles see the field on responses;
  *                      everyone else gets the projection without it.
@@ -20,6 +20,14 @@
  *                      only) still applies for everyone else.
  * `schema.acl.delete` — these roles BYPASS the userId scope on delete
  *                       and may remove records they don't own.
+ * `schema.acl.scope`  — per-role MANDATORY filter that's `$and`-ed into
+ *                       every read for that role. Use it to expose a
+ *                       subset of a collection to a role that bypasses
+ *                       the userId scope (e.g. an unauthenticated
+ *                       storefront caller mapped via `X-Client-Id` to
+ *                       a `storefront` role should only see published
+ *                       products). The filter is server-controlled and
+ *                       cannot be widened by a caller's own query.
  *
  * Schemas with no `acl` declarations behave exactly as they did before
  * this module landed: full ownership-based access for the authenticated
@@ -174,6 +182,49 @@ function bypassUserScopeForDelete(schema, user) {
  * fields don't pass through it on the way to the wire — those
  * resolvers call this helper at resolve time instead.
  */
+/**
+ * Merge all per-role mandatory filters declared in `schema.acl.scope`
+ * for the roles the caller actually holds. Returns `null` when no
+ * applicable scope exists (so callers can skip the merge entirely),
+ * a single filter object when one role matches, or an `$and` envelope
+ * when multiple roles each declare a scope.
+ *
+ * A scope filter is a Mongo query fragment. It is server-controlled
+ * and `$and`-ed into the request's effective filter AFTER the
+ * caller's own query is parsed, so a public caller cannot widen the
+ * server-imposed predicate.
+ */
+function getRoleScopeFilter(schema, user) {
+  const scope = schema && schema.acl && schema.acl.scope;
+  if (!scope || typeof scope !== 'object') return null;
+  const roles = userRoles(user);
+  const matched = [];
+  for (const r of roles) {
+    if (Object.prototype.hasOwnProperty.call(scope, r) && scope[r]) {
+      matched.push(scope[r]);
+    }
+  }
+  if (matched.length === 0) return null;
+  if (matched.length === 1) return matched[0];
+  return { $and: matched };
+}
+
+/**
+ * Merge a role-scope filter into an existing Mongo query object,
+ * preserving any existing predicates. When the existing query
+ * already contains an `$and`, the scope filter is appended; otherwise
+ * the two are combined under a fresh `$and`. Returns a new object
+ * (does not mutate `query`).
+ */
+function applyRoleScopeFilter(query, scopeFilter) {
+  if (!scopeFilter) return query;
+  if (!query || Object.keys(query).length === 0) return { ...scopeFilter };
+  if (Array.isArray(query.$and)) {
+    return { ...query, $and: [...query.$and, scopeFilter] };
+  }
+  return { $and: [query, scopeFilter] };
+}
+
 function canReadField(field, user) {
   if (!field || !field.acl || !Array.isArray(field.acl.read) || !field.acl.read.length) {
     return true;
@@ -193,4 +244,6 @@ module.exports = {
   PROTECTED_WRITE_FIELDS,
   stampTenantFields,
   stripTenantFields,
+  getRoleScopeFilter,
+  applyRoleScopeFilter,
 };
