@@ -75,6 +75,17 @@ function buildOtpHandlers({ config, state, sendSms }) {
     const E = state.errors && state.errors.ForbiddenError;
     return E ? new E(msg) : Object.assign(new Error(msg), { status: 403, code: 'FORBIDDEN' });
   }
+  // SMS-dispatch / Twilio transport failures surface as 503 via the
+  // framework's AppError so errorHandler renders the canonical
+  // `{ error: { code, message } }` shape. Raw `new Error(...)` would
+  // be caught by errorHandler too, but only as an opaque 500.
+  function ServiceUnavailable(msg, cause) {
+    const A = state.errors && state.errors.AppError;
+    const e = A ? new A(msg, 503, 'SMS_UNAVAILABLE')
+                : Object.assign(new Error(msg), { status: 503, code: 'SMS_UNAVAILABLE' });
+    if (cause) e.cause = cause;
+    return e;
+  }
 
   async function rateLimit(phone) {
     if (!state.OtpRate) return; // misconfig; surface later
@@ -129,13 +140,7 @@ function buildOtpHandlers({ config, state, sendSms }) {
     try {
       await sendSms({ to: phone, body: `${state.appName} code: ${code}` });
     } catch (err) {
-      // Dormant or transient Twilio failure — surface as 503 so the
-      // caller knows to retry.
-      const e = new Error('SMS dispatch failed');
-      e.status = 503;
-      e.code = 'SMS_UNAVAILABLE';
-      e.cause = err;
-      throw e;
+      throw ServiceUnavailable('SMS dispatch failed', err);
     }
 
     res.status(200).json({ ok: true, expiresInSeconds: config.otpTtlSeconds });

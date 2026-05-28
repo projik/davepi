@@ -86,13 +86,35 @@ function buildTotpHandlers({ config, state, verifyTotpForUser }) {
   const UnauthorizedError = err('UnauthorizedError', 401, 'UNAUTHORIZED');
   const NotFoundError     = err('NotFoundError', 404, 'NOT_FOUND');
 
+  // Translate raw crypto failures (missing TOKEN_KEY, tampered or
+  // truncated ciphertext) into typed framework errors. A missing
+  // TOKEN_KEY is operator misconfiguration → 500 AppError; a bad
+  // ciphertext is treated as 401 (an attacker-supplied token).
+  function safeEncrypt(plaintext) {
+    try { return encrypt(plaintext, state.config.tokenKey); }
+    catch (e) {
+      const A = state.errors && state.errors.AppError;
+      throw A ? new A('TOTP secret encryption unavailable', 500, 'TOTP_KEY_MISSING')
+              : Object.assign(new Error('TOTP secret encryption unavailable'), { status: 500, code: 'TOTP_KEY_MISSING', cause: e });
+    }
+  }
+  function safeDecrypt(wire) {
+    try { return decrypt(wire, state.config.tokenKey); }
+    catch (e) {
+      // Either the operator dropped TOKEN_KEY or the stored
+      // ciphertext was tampered/truncated. Both surface to the user
+      // as a generic "invalid code" — we don't leak which.
+      throw UnauthorizedError('invalid code');
+    }
+  }
+
   const enroll = asyncRoute(async (req, res) => {
     if (!req.user || !req.user.user_id) throw UnauthorizedError('authentication required');
     if (!state.totp) throw ValidationError('TOTP not available (otplib not installed)');
     if (!state.User) throw NotFoundError('User');
 
     const secret = state.totp.generateSecret();
-    const totpPendingEnc = encrypt(secret, state.config.tokenKey);
+    const totpPendingEnc = safeEncrypt(secret);
 
     const backupCodes = Array.from({ length: 8 }, () => generateBackupCode());
     const backupCodeHashes = backupCodes.map(sha256);
@@ -122,7 +144,7 @@ function buildTotpHandlers({ config, state, verifyTotpForUser }) {
     const user = await state.User.findById(req.user.user_id);
     if (!user || !user.totpPendingEnc) throw ValidationError('no pending TOTP enrollment');
 
-    const secret = decrypt(user.totpPendingEnc, state.config.tokenKey);
+    const secret = safeDecrypt(user.totpPendingEnc);
     if (!state.totp || !state.totp.verify({ token: String(code), secret })) {
       throw UnauthorizedError('invalid code');
     }
@@ -139,6 +161,38 @@ function buildTotpHandlers({ config, state, verifyTotpForUser }) {
     res.status(200).json({ ok: true });
   });
 
+  // Per-user attempt counter for /auth/2fa/challenge. The route is
+  // anonymous (the whole point is the caller has only the user's id
+  // or phone, plus a 6-digit code) so a global rate limiter doesn't
+  // bind to a useful identity. Reuse the `OtpRate` collection with
+  // a `2fa:<userId>` key so we don't need a second schema. Returns
+  // a thrown ForbiddenError once the per-user budget is spent in
+  // the current 15-minute window. Generic message + no attempts-
+  // remaining count so the endpoint isn't a guess-rate oracle.
+  async function challengeRateLimit(userId) {
+    if (!state.OtpRate) return;
+    const key = `2fa:${userId}`;
+    const now = new Date();
+    const windowMs = 15 * 60 * 1000;
+    const max = 10;
+    const existing = await state.OtpRate.findOneAndUpdate(
+      { phone: key, expiresAt: { $gt: now } },
+      { $inc: { count: 1 } },
+      { new: true }
+    );
+    if (existing) {
+      if (existing.count > max) {
+        throw UnauthorizedError('invalid code');
+      }
+      return;
+    }
+    await state.OtpRate.findOneAndUpdate(
+      { phone: key },
+      { $set: { phone: key, count: 1, windowStart: now, expiresAt: new Date(now.getTime() + windowMs) } },
+      { upsert: true, new: true }
+    );
+  }
+
   // /auth/2fa/challenge: given an already-known user (by id or phone)
   // and a valid TOTP or backup code, issue a fresh JWT. Used after a
   // password login flow that's gated by twofaEnabled.
@@ -152,6 +206,12 @@ function buildTotpHandlers({ config, state, verifyTotpForUser }) {
     if (userId) user = await state.User.findById(userId);
     if (!user && phone) user = await state.User.findOne({ phone });
     if (!user || !user.twofaEnabled) throw UnauthorizedError('2FA not enabled');
+
+    // Charge an attempt before verifying so brute-force callers
+    // burn budget regardless of code correctness. Pinned to user._id
+    // (not the raw `userId`/`phone` argument) so an attacker can't
+    // dilute their budget by alternating identifier shapes.
+    await challengeRateLimit(user._id);
 
     const ok = await verifyTotpForUser(user._id, code);
     if (!ok) throw UnauthorizedError('invalid code');

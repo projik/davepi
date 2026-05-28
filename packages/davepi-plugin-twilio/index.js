@@ -61,6 +61,20 @@ const ENV_KEYS = {
   tokenKey:            'TOKEN_KEY',
 };
 
+// Numeric env reader that falls back to `def` when the value is
+// unset, non-numeric, or outside [min, max]. `parseInt('abc')` is
+// `NaN`, and `NaN`-derived `expiresAt` values and `count > NaN`
+// rate-limit checks silently disable OTP expiry / rate limiting —
+// clamp here so a typo'd env var can never produce that footgun.
+function readInt(raw, def, { min, max } = {}) {
+  if (raw == null || raw === '') return def;
+  const n = parseInt(raw, 10);
+  if (!Number.isFinite(n)) return def;
+  if (min != null && n < min) return def;
+  if (max != null && n > max) return def;
+  return n;
+}
+
 function readConfigFromEnv(env) {
   return {
     accountSid:          env[ENV_KEYS.accountSid] || null,
@@ -70,9 +84,9 @@ function readConfigFromEnv(env) {
     whatsappFrom:        env[ENV_KEYS.whatsappFrom] || null,
     inboundPath:         env[ENV_KEYS.inboundPath] || null,
     otpPath:             env[ENV_KEYS.otpPath] != null ? env[ENV_KEYS.otpPath] : '/auth/otp',
-    otpDigits:           parseInt(env[ENV_KEYS.otpDigits] || '6', 10),
-    otpTtlSeconds:       parseInt(env[ENV_KEYS.otpTtlSeconds] || '600', 10),
-    otpMaxPerHour:       parseInt(env[ENV_KEYS.otpMaxPerHour] || '5', 10),
+    otpDigits:           readInt(env[ENV_KEYS.otpDigits],     6,   { min: 4,  max: 12 }),
+    otpTtlSeconds:       readInt(env[ENV_KEYS.otpTtlSeconds], 600, { min: 30, max: 3600 }),
+    otpMaxPerHour:       readInt(env[ENV_KEYS.otpMaxPerHour], 5,   { min: 1,  max: 100 }),
     twilioAppName:       env[ENV_KEYS.twilioAppName] || null,
     appName:             env[ENV_KEYS.appName] || null,
     tokenKey:            env[ENV_KEYS.tokenKey] || null,
@@ -178,7 +192,13 @@ function createPlugin(opts = {}) {
     if (!state.User) throw new Error('davepi-plugin-twilio: User model not available');
     const user = await state.User.findById(userId);
     if (!user || !user.twofaEnabled || !user.totpSecretEnc) return false;
-    const secret = decrypt(user.totpSecretEnc, state.config.tokenKey);
+    // Treat a decrypt failure (missing TOKEN_KEY or tampered
+    // ciphertext) as "not verified" rather than throwing a raw
+    // Error out of the request handler. The caller (the /challenge
+    // route) maps a `false` return to UnauthorizedError.
+    let secret;
+    try { secret = decrypt(user.totpSecretEnc, state.config.tokenKey); }
+    catch (_) { return false; }
     if (state.totp && state.totp.verify({ token: code, secret })) return true;
     // Backup code fallback: code may be a base32 12-char backup code.
     const codeHash = require('crypto').createHash('sha256').update(String(code || '')).digest('hex');
@@ -191,7 +211,15 @@ function createPlugin(opts = {}) {
   }
 
   async function setup({ app, schemaLoader, bus, log, appName } = {}) {
-    state.log = log || state.log || console;
+    // No console fallback: the framework's pino logger applies
+    // redaction (auth headers, *.token, *.password). A console
+    // fallback would emit unredacted records and break the
+    // observability contract. If no `log` is wired, fall back to a
+    // silent no-op — operators see nothing, but at least nothing
+    // sensitive leaks. The default plugin instance gets the real
+    // logger via `setup({ log })` from the framework's plugin loader.
+    const noopLog = { info: () => {}, warn: () => {}, error: () => {}, debug: () => {}, child: () => noopLog };
+    state.log = log || state.log || noopLog;
 
     if (!config.accountSid) {
       state.log.warn(
