@@ -37,6 +37,7 @@ on:
           - create-davepi-app
           - davepi-plugin-slack
           - davepi-plugin-queue
+          - davepi-plugin-cron
       version:
         description: "Bump kind (patch/minor/major) or explicit x.y.z"
         required: true
@@ -83,6 +84,7 @@ jobs:
             create-davepi-app)   dir="create-davepi-app" ;;
             davepi-plugin-slack) dir="packages/davepi-plugin-slack" ;;
             davepi-plugin-queue) dir="packages/davepi-plugin-queue" ;;
+            davepi-plugin-cron)  dir="packages/davepi-plugin-cron" ;;
             *) echo "::error::unknown package: $PKG"; exit 1 ;;
           esac
           echo "dir=$dir" >> "$GITHUB_OUTPUT"

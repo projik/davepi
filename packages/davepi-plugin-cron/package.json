@@ -1,0 +1,43 @@
+{
+  "name": "davepi-plugin-cron",
+  "version": "0.1.0",
+  "description": "Declarative scheduled jobs for dAvePi with Mongo-backed distributed locking. Read cron schedules from package.json (or register programmatically), only one node in a cluster runs any given tick, per-job timezones, heartbeat-extended leases for long jobs, admin-gated status + manual-run endpoints. Mongo lock means no Redis is required (the queue plugin handles repeat-via-BullMQ for Redis-backed projects).",
+  "license": "ISC",
+  "homepage": "https://docs.davepi.dev/features/plugins/",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/projik/davepi.git",
+    "directory": "packages/davepi-plugin-cron"
+  },
+  "keywords": [
+    "davepi",
+    "davepi-plugin",
+    "cron",
+    "scheduler",
+    "jobs",
+    "distributed-lock"
+  ],
+  "main": "index.js",
+  "files": [
+    "index.js",
+    "lib",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "peerDependencies": {
+    "davepi": ">=1.0.4"
+  },
+  "peerDependenciesMeta": {
+    "davepi": {
+      "optional": false
+    }
+  },
+  "dependencies": {
+    "croner": "^8.0.0"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.js"
+  }
+}
