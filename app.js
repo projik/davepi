@@ -82,7 +82,16 @@ app.use((req, res, next) => {
   return helmetDefault(req, res, next);
 });
 app.use(buildCorsMiddleware());
-app.use(express.json());
+// `verify` stashes the raw body buffer on req.rawBody so plugins
+// that need bytes for HMAC signature verification (Stripe webhooks,
+// GitHub webhooks, ...) can read them post-parse. JSON parsing
+// itself is unchanged for every other handler. Cost is one extra
+// reference held for the duration of the request — negligible.
+app.use(express.json({
+  verify: (req, _res, buf) => {
+    if (buf && buf.length) req.rawBody = buf;
+  },
+}));
 app.use(httpLogger);
 app.use(metricsMiddleware);
 app.use('/api', apiLimiter);
