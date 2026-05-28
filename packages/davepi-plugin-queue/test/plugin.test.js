@@ -124,7 +124,7 @@ test('default export is a plugin object with name + setup + enqueue + registerJo
   assert.equal(typeof queueModule.createPlugin, 'function');
 });
 
-test('dormant when QUEUE_REDIS_URL is unset; enqueue throws; warn logged', async () => {
+test('dormant when QUEUE_REDIS_URL is unset; enqueue + registerJob throw; warn logged', async () => {
   const log = capturingLog();
   const plugin = createPlugin({ env: {}, bullmq: makeBullmqStub() });
   await plugin.setup({ bus: new EventEmitter(), log, appName: 'demo' });
@@ -132,6 +132,13 @@ test('dormant when QUEUE_REDIS_URL is unset; enqueue throws; warn logged', async
   assert.match(log.records.warn[0].msg, /QUEUE_REDIS_URL not set/);
   await assert.rejects(
     () => plugin.enqueue('x', { a: 1 }, { user: { user_id: 'u1' } }),
+    /dormant/,
+  );
+  // registerJob also throws in dormant mode so a worker-only dyno
+  // that forgets to set QUEUE_REDIS_URL fails loudly rather than
+  // silently dropping every registration.
+  assert.throws(
+    () => plugin.registerJob('x', async () => {}),
     /dormant/,
   );
   assert.equal(plugin.isEnabled(), false);
@@ -402,6 +409,10 @@ test('status route returns job state for the owner', async () => {
     req.user = { user_id: uid };
     next();
   };
+  // Mirrors davepi/utils/asyncHandler so a rejection from inside the
+  // route handler reaches our terminal error middleware below.
+  const asyncHandler = (fn) => (req, res, next) =>
+    Promise.resolve(fn(req, res, next)).catch(next);
   // Terminal error handler so our typed errors render as JSON.
   const app = express();
   const plugin = createPlugin({
@@ -410,6 +421,7 @@ test('status route returns job state for the owner', async () => {
     express,
     errors,
     auth,
+    asyncHandler,
   });
   await plugin.setup({ app, bus: new EventEmitter(), log: silentLog(), appName: 'shop' });
   app.use((err, req, res, next) => {
@@ -464,6 +476,7 @@ test('QUEUE_STATUS_PATH empty disables the route', async () => {
     express,
     errors: { NotFoundError: class extends Error {}, ForbiddenError: class extends Error {} },
     auth: () => (req, res, next) => next(),
+    asyncHandler: (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next),
   });
   await plugin.setup({ app, bus: new EventEmitter(), log: silentLog(), appName: 'shop' });
   // Express's default 404 handler responds when no route matches.
@@ -478,3 +491,55 @@ test('QUEUE_STATUS_PATH empty disables the route', async () => {
   assert.equal(status, 404);
   server.close();
 });
+
+test('rule user precedence: built.opts.user > built.user > event.userId', async () => {
+  const bus = new EventEmitter();
+  // Three rules, one per source of tenancy, all listening to the
+  // same event. The job names differ so we can pick each one out
+  // of the queue by handler invocation.
+  const seen = { fromOptsUser: null, fromBuiltUser: null, fromEventUser: null };
+  const plugin = createPlugin({
+    env: { QUEUE_REDIS_URL: REDIS },
+    bullmq: makeBullmqStub(),
+    rules: [
+      {
+        events: 'thing.created',
+        build: () => ({
+          name: 'from-opts-user',
+          data: {},
+          // Explicit opts.user — should win over everything.
+          opts: { user: { user_id: 'opts-winner' } },
+          // ...even when built.user is also present.
+          user: { user_id: 'should-be-ignored' },
+        }),
+      },
+      {
+        events: 'thing.created',
+        build: () => ({
+          name: 'from-built-user',
+          data: {},
+          // Only built.user; should override event.userId.
+          user: { user_id: 'built-winner' },
+        }),
+      },
+      {
+        events: 'thing.created',
+        build: () => ({
+          name: 'from-event-user',
+          data: {},
+          // No user info anywhere; should fall back to event.userId.
+        }),
+      },
+    ],
+  });
+  await plugin.setup({ bus, log: silentLog(), appName: 'shop' });
+  plugin.registerJob('from-opts-user',  async (d) => { seen.fromOptsUser  = d.userId; });
+  plugin.registerJob('from-built-user', async (d) => { seen.fromBuiltUser = d.userId; });
+  plugin.registerJob('from-event-user', async (d) => { seen.fromEventUser = d.userId; });
+  bus.emit('record', { type: 'thing.created', userId: 'event-user' });
+  await flush();
+  assert.equal(seen.fromOptsUser,  'opts-winner');
+  assert.equal(seen.fromBuiltUser, 'built-winner');
+  assert.equal(seen.fromEventUser, 'event-user');
+});
+

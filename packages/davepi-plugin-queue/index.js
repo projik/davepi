@@ -143,6 +143,11 @@ function readConfigFromEnv(env) {
  *   - auth:      function — middleware factory matching the
  *                framework's `middleware/auth.js`. Defaults to a lazy
  *                `require('davepi/middleware/auth')`.
+ *   - asyncHandler: function — the framework's
+ *                `utils/asyncHandler` wrapper. Defaults to a lazy
+ *                `require('davepi/utils/asyncHandler')` at setup
+ *                time. Injected in tests because the package's own
+ *                unit tests run without `davepi` installed.
  *   - rules:     array — record-event auto-enqueue rules. Each rule
  *                is `{ events, build }` where `events` is a string or
  *                array of patterns and `build(event, { appName })`
@@ -156,6 +161,7 @@ function createPlugin(opts = {}) {
   const injectedExpress = opts.express || null;
   const injectedErrors = opts.errors || null;
   const injectedAuth = opts.auth || null;
+  const injectedAsyncHandler = opts.asyncHandler || null;
 
   // Registered handlers live in a Map keyed by job name. Filled by
   // `registerJob` calls; the Worker dispatcher below dispatches the
@@ -261,6 +267,19 @@ function createPlugin(opts = {}) {
     }
     if (typeof handler !== 'function') {
       throw new TypeError('davepi-plugin-queue: registerJob(name, handler) requires a function handler');
+    }
+    // Permanent-dormancy guard: when QUEUE_REDIS_URL is unset there
+    // is no worker to dispatch to, ever — silently accepting
+    // registrations would hide a misconfiguration (especially on a
+    // worker-only dyno that registers handlers but never enqueues).
+    // We check `config.redisUrl`, not `state.enabled`, so registering
+    // before `setup()` runs is still allowed (the framework calls
+    // setup after all plugins import-time-side-effect).
+    if (!config.redisUrl) {
+      throw new Error(
+        'davepi-plugin-queue: registerJob called but plugin is dormant ' +
+        '(QUEUE_REDIS_URL not set) — no worker will ever process this handler'
+      );
     }
     if (handlers.has(name)) {
       // Last-write-wins would be surprising; refusing makes
@@ -467,8 +486,21 @@ function createPlugin(opts = {}) {
           try {
             const built = await rule.build(event, { appName: state.appName });
             if (!built) continue;
-            const stampUser = built.user || { user_id: event.userId };
-            await enqueue(built.name, built.data, { ...(built.opts || {}), user: stampUser });
+            // Tenancy-stamp precedence, most specific first:
+            //   1. built.opts.user (caller stamped it on the BullMQ
+            //      options directly — explicit per-enqueue override)
+            //   2. built.user      (caller stamped at the rule level)
+            //   3. event.userId    (default: inherit from the
+            //      triggering record event)
+            // Honouring all three keeps the rule API consistent with
+            // the README + the docstring on createPlugin, instead of
+            // silently clobbering opts.user as an earlier cut did.
+            const built_opts = built.opts || {};
+            const stampUser =
+              built_opts.user ||
+              built.user ||
+              { user_id: event.userId };
+            await enqueue(built.name, built.data, { ...built_opts, user: stampUser });
           } catch (err) {
             log.error(
               { err, plugin: 'queue', eventType: event.type },
@@ -556,11 +588,23 @@ function createPlugin(opts = {}) {
           );
         }
       }
-      if (express && errors && authFactory && typeof app.use === 'function') {
+      let asyncHandler = injectedAsyncHandler;
+      if (express && errors && authFactory && !asyncHandler) {
+        try {
+          asyncHandler = require('davepi/utils/asyncHandler');
+        } catch (err) {
+          log.error(
+            { err, plugin: 'queue' },
+            "could not require 'davepi/utils/asyncHandler' for status route; skipping"
+          );
+        }
+      }
+      if (express && errors && authFactory && asyncHandler && typeof app.use === 'function') {
         const router = buildStatusRouter({
           express,
           getQueue: () => state.queue,
           errors,
+          asyncHandler,
           log,
         });
         app.use(config.statusPath, authFactory(true), router);

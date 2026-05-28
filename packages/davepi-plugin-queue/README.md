@@ -179,8 +179,16 @@ Each rule has the same shape as
 [`davepi-plugin-postmark`](https://www.npmjs.com/package/davepi-plugin-postmark)'s
 rules. `events` is a string or array of patterns (`user.created`,
 `user.*`, `*`). `build(event, { appName })` returns
-`{ name, data, opts }` (or `null` to skip). `user` defaults to the
-event's `userId` so tenancy is preserved automatically. Rule
+`{ name, data, opts }` (or `null` to skip). The tenancy stamp is
+resolved in this order, most specific first:
+
+1. `built.opts.user` — explicit override stamped onto the BullMQ
+   options.
+2. `built.user`      — shorthand for stamping at the rule level.
+3. `event.userId`    — default; inherits the tenant of the
+   triggering record event.
+
+Most rules omit all three and let `event.userId` flow through. Rule
 subscribers are deliberately skipped for the plugin's own
 `job.completed` / `job.failed` / `job.stalled` rebroadcasts — a
 wildcard rule won't infinite-loop.
