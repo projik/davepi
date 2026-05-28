@@ -1,0 +1,44 @@
+{
+  "name": "davepi-plugin-queue",
+  "version": "0.1.0",
+  "description": "Durable background jobs for dAvePi via BullMQ. Provides enqueue / registerJob for schema lifecycle hooks, a bus-driven job:enqueue channel so hooks can defer slow work without importing the plugin module, optional rule-based auto-enqueue on record events, and a tenant-scoped /api/jobs/:id status endpoint.",
+  "license": "ISC",
+  "homepage": "https://docs.davepi.dev/features/plugins/",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/projik/davepi.git",
+    "directory": "packages/davepi-plugin-queue"
+  },
+  "keywords": [
+    "davepi",
+    "davepi-plugin",
+    "queue",
+    "jobs",
+    "background",
+    "bullmq",
+    "redis"
+  ],
+  "main": "index.js",
+  "files": [
+    "index.js",
+    "lib",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "peerDependencies": {
+    "davepi": ">=1.0.4"
+  },
+  "peerDependenciesMeta": {
+    "davepi": {
+      "optional": false
+    }
+  },
+  "dependencies": {
+    "bullmq": "^5.0.0"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.js"
+  }
+}
