@@ -1,22 +1,33 @@
 'use strict';
 
+const fs = require('node:fs/promises');
+const fsSync = require('node:fs');
 const path = require('node:path');
-const fs = require('node:fs');
 
 /**
- * Pluggable key-value store for per-user auth state. Default is a
- * SQLite file (one row per (channel, channel_user_id) → refresh
- * token plus cached access token + expiry). Swap by setting
- * STORE_URL to a different scheme; for now only `sqlite:` and
- * `memory:` are wired.
+ * Pluggable async key-value store for per-user auth state. Two
+ * backends ship in v1:
  *
- * Rows look like:
- *   { channel, channel_user_id, refresh_token, access_token,
- *     access_expires_at, davepi_user_id, created_at, updated_at }
+ *   memory:   in-process Map. Ephemeral. Used by tests.
+ *   file:     atomic JSON file. Default. One row per
+ *             (channel, channel_user_id) → refresh token plus
+ *             cached access token + expiry. Async via fs.promises.
  *
- * Access tokens are cached so we don't burn a refresh round-trip on
- * every tool call; we still re-mint when the cached one is within
- * `refreshSkewSeconds` of expiry.
+ * The earlier draft used better-sqlite3, which is synchronous and
+ * blocks the event loop inside `async` methods. For the per-user
+ * surface (one row per channel user, low write rate, all-fits-in-
+ * memory) a JSON file is simpler and stays async-clean. Operators
+ * with high write rates can swap in a real DB by writing another
+ * backend behind the same interface.
+ *
+ * Rows: {
+ *   channel, channel_user_id, refresh_token, access_token,
+ *   access_expires_at, davepi_user_id, created_at, updated_at
+ * }
+ *
+ * Writes are atomic: write to a `<path>.tmp` then rename — POSIX
+ * guarantees the rename is observed as a single inode swap, so a
+ * crash mid-write can't leave a half-written file.
  */
 
 function memoryStore() {
@@ -40,83 +51,80 @@ function memoryStore() {
   };
 }
 
-function sqliteStore(filepath) {
-  let Database;
-  try {
-    Database = require('better-sqlite3');
-  } catch (err) {
-    const e = new Error(
-      'STORE_URL is sqlite: but better-sqlite3 is not installed. ' +
-        'Either `npm install better-sqlite3` or set STORE_URL=memory: for ephemeral state.'
-    );
-    e.cause = err;
-    throw e;
+function fileStore(filepath) {
+  const abs = path.isAbsolute(filepath) ? filepath : path.resolve(process.cwd(), filepath);
+  fsSync.mkdirSync(path.dirname(abs), { recursive: true });
+
+  // Serialise reads + writes through a single promise chain so two
+  // concurrent upserts can't race past each other and lose a row.
+  // The whole file is small (one row per linked user), so reading
+  // and writing the lot per mutation is fine.
+  let chain = Promise.resolve();
+  const queue = (fn) => {
+    const next = chain.then(fn, fn);
+    chain = next.catch(() => {});
+    return next;
+  };
+
+  const k = (channel, userId) => `${channel}::${userId}`;
+
+  async function readAll() {
+    try {
+      const text = await fs.readFile(abs, 'utf8');
+      return JSON.parse(text);
+    } catch (err) {
+      if (err.code === 'ENOENT') return {};
+      throw err;
+    }
   }
-  fs.mkdirSync(path.dirname(filepath), { recursive: true });
-  const db = new Database(filepath);
-  db.pragma('journal_mode = WAL');
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS agent_user_links (
-      channel TEXT NOT NULL,
-      channel_user_id TEXT NOT NULL,
-      refresh_token TEXT,
-      access_token TEXT,
-      access_expires_at INTEGER,
-      davepi_user_id TEXT,
-      created_at INTEGER NOT NULL,
-      updated_at INTEGER NOT NULL,
-      PRIMARY KEY (channel, channel_user_id)
-    );
-  `);
-  const get = db.prepare(
-    'SELECT * FROM agent_user_links WHERE channel = ? AND channel_user_id = ?'
-  );
-  const upsert = db.prepare(`
-    INSERT INTO agent_user_links
-      (channel, channel_user_id, refresh_token, access_token, access_expires_at, davepi_user_id, created_at, updated_at)
-    VALUES (@channel, @channel_user_id, @refresh_token, @access_token, @access_expires_at, @davepi_user_id, @created_at, @updated_at)
-    ON CONFLICT (channel, channel_user_id) DO UPDATE SET
-      refresh_token = COALESCE(excluded.refresh_token, agent_user_links.refresh_token),
-      access_token = excluded.access_token,
-      access_expires_at = excluded.access_expires_at,
-      davepi_user_id = COALESCE(excluded.davepi_user_id, agent_user_links.davepi_user_id),
-      updated_at = excluded.updated_at
-  `);
-  const del = db.prepare(
-    'DELETE FROM agent_user_links WHERE channel = ? AND channel_user_id = ?'
-  );
+
+  async function writeAll(data) {
+    const tmp = `${abs}.tmp`;
+    await fs.writeFile(tmp, JSON.stringify(data, null, 2), { mode: 0o600 });
+    await fs.rename(tmp, abs);
+  }
+
   return {
     async get(channel, userId) {
-      return get.get(channel, userId) || null;
+      return queue(async () => {
+        const data = await readAll();
+        return data[k(channel, userId)] || null;
+      });
     },
     async upsert(row) {
-      const now = Date.now();
-      const existing = get.get(row.channel, row.channel_user_id) || null;
-      upsert.run({
-        channel: row.channel,
-        channel_user_id: row.channel_user_id,
-        refresh_token: row.refresh_token ?? null,
-        access_token: row.access_token ?? null,
-        access_expires_at: row.access_expires_at ?? null,
-        davepi_user_id: row.davepi_user_id ?? null,
-        created_at: existing?.created_at || now,
-        updated_at: now,
+      return queue(async () => {
+        const data = await readAll();
+        const id = k(row.channel, row.channel_user_id);
+        const now = Date.now();
+        const prev = data[id];
+        data[id] = { created_at: prev?.created_at || now, ...prev, ...row, updated_at: now };
+        await writeAll(data);
+        return data[id];
       });
-      return get.get(row.channel, row.channel_user_id);
     },
     async delete(channel, userId) {
-      del.run(channel, userId);
+      return queue(async () => {
+        const data = await readAll();
+        delete data[k(channel, userId)];
+        await writeAll(data);
+      });
     },
     async close() {
-      db.close();
+      await chain;
     },
   };
 }
 
 function openStore(url) {
   if (!url || url === 'memory:' || url === 'memory:/') return memoryStore();
-  if (url.startsWith('sqlite:')) return sqliteStore(url.slice('sqlite:'.length));
-  throw new Error(`Unsupported STORE_URL scheme: ${url}`);
+  if (url.startsWith('file:')) return fileStore(url.slice('file:'.length));
+  // Backwards-compat: previously documented `sqlite:` URLs now route
+  // to the file backend. Same path, no native dep.
+  if (url.startsWith('sqlite:')) {
+    const filepath = url.slice('sqlite:'.length).replace(/\.sqlite$/, '.json');
+    return fileStore(filepath);
+  }
+  throw new Error(`Unsupported STORE_URL scheme: ${url}. Use memory: or file:<path>.`);
 }
 
-module.exports = { openStore, memoryStore };
+module.exports = { openStore, memoryStore, fileStore };

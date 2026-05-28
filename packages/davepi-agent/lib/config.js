@@ -64,6 +64,8 @@ function buildConfig(overrides = {}) {
         .split(',')
         .map((s) => s.trim())
         .filter(Boolean),
+      sessionSecret: env.AGENT_SESSION_SECRET || fileConfig.http?.sessionSecret || null,
+      cookieSecure: asBool(env.AGENT_COOKIE_SECURE, fileConfig.http?.cookieSecure ?? true),
     },
 
     slack: {
@@ -76,7 +78,7 @@ function buildConfig(overrides = {}) {
     },
 
     store: {
-      url: env.STORE_URL || fileConfig.store?.url || 'sqlite:./davepi-agent.sqlite',
+      url: env.STORE_URL || fileConfig.store?.url || 'file:./davepi-agent-store.json',
     },
   };
 

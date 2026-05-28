@@ -66,13 +66,11 @@ test('normalizeMcpResult unwraps text JSON, plain text, and error envelopes', ()
   assert.deepEqual(err.content, ['oops']);
 });
 
-test('orchestrator surfaces UNLINKED errors as a link prompt without throwing', async () => {
+test('orchestrator surfaces UnlinkedError as a link prompt without throwing', async () => {
   const { runTurn } = require('../lib/orchestrator');
-  // mcpClient.listTools is called first; throwing UNLINKED there is the
-  // realistic shape (auth.headersFor is invoked inside listTools).
-  const unlinked = Object.assign(new Error('not linked'), { code: 'UNLINKED', linkUrl: 'http://link.example.com/login' });
+  const { UnlinkedError } = require('../lib/errors');
   const mcpClient = {
-    async listTools() { throw unlinked; },
+    async listTools() { throw new UnlinkedError('http://link.example.com/link/abc'); },
     async callTool() { throw new Error('should not be called'); },
   };
   const events = [];
@@ -86,7 +84,7 @@ test('orchestrator surfaces UNLINKED errors as a link prompt without throwing', 
     onEvent: (e) => events.push(e),
   });
   assert.equal(out.unlinked, true);
-  assert.match(out.text, /link.example\.com/);
+  assert.match(out.text, /link\.example\.com\/link\/abc/);
   const final = events.find((e) => e.type === 'final');
   assert.ok(final);
 });

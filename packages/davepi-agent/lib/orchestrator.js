@@ -1,12 +1,7 @@
 'use strict';
 
 const { buildRenderTools } = require('./renderTools');
-const {
-  deriveResources,
-  shouldRoute,
-  buildRouterTools,
-  filterToolsForActiveResource,
-} = require('./toolRouter');
+const { deriveResources, shouldRoute, buildRouterTools } = require('./toolRouter');
 const logger = require('./logger');
 
 const DEFAULT_SYSTEM_PROMPT = `You are an assistant integrated with a dAvePi backend.
@@ -85,19 +80,24 @@ async function runTurn({
   const { streamText, jsonSchema } = await import('ai');
   const allTools = await mcpClient.listTools(channelCtx);
 
-  const routerState = { activeResource: null };
   const routed = shouldRoute(allTools.length, config.tools.limit);
   let exposedMcpTools;
   let routerTools = {};
   if (routed) {
     const resources = deriveResources(allTools);
-    routerTools = buildRouterTools({ resources, state: routerState });
-    exposedMcpTools = adaptMcpTools(
-      filterToolsForActiveResource(allTools, routerState.activeResource),
+    const routerState = { activeResource: null };
+    // In routed mode the model talks to a stable trio (list_resources,
+    // use_resource, call_mcp_tool) rather than the full schema CRUD
+    // surface — the meta-tool pattern keeps the tool count small while
+    // still letting the model reach any underlying MCP tool after
+    // picking a resource.
+    routerTools = buildRouterTools({
+      resources,
+      state: routerState,
       mcpClient,
       channelCtx,
-      jsonSchema
-    );
+    });
+    exposedMcpTools = {};
   } else {
     exposedMcpTools = adaptMcpTools(allTools, mcpClient, channelCtx, jsonSchema);
   }
@@ -149,7 +149,7 @@ async function safeRunTurn(args) {
   try {
     return await runTurn(args);
   } catch (err) {
-    if (err.code === 'UNLINKED' && err.linkUrl) {
+    if ((err.code === 'UNLINKED' || err.name === 'UnlinkedError') && err.linkUrl) {
       const linkMsg =
         `You need to link your account before I can look up your data. ` +
         `Open this link and sign in: ${err.linkUrl}`;

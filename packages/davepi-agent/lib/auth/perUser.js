@@ -1,19 +1,34 @@
 'use strict';
 
 const crypto = require('node:crypto');
+const { UnlinkedError } = require('../errors');
 
 /**
  * Per-user auth strategy. Each (channel, channel_user_id) maps to a
- * davepi user via stored refresh token. Access tokens are minted on
- * demand and cached until they're within `refreshSkewSeconds` of
- * expiry. First contact from an unlinked user returns a link URL
- * that points at davepi's /login with a redirect back to the agent's
- * /oauth/callback.
+ * davepi user via a refresh token stored locally. Access tokens are
+ * minted on demand and cached until they're within
+ * `refreshSkewSeconds` of expiry.
  *
- * Refresh exchange uses davepi's POST /refresh (model/refreshToken.js
- * + utils/tokens.js on the server side). The agent never sees the
- * refresh token after storage — calls just pass it back through the
- * exchange endpoint.
+ * Linking flow (revised after PR #128 review):
+ *
+ *   davepi does NOT have a browser-redirect OAuth-style /login; it
+ *   only exposes POST /login with a JSON body and POST /auth/refresh
+ *   with { refreshToken }. So the agent hosts the link UI itself:
+ *
+ *     1. First contact from an unlinked user → throws UnlinkedError
+ *        with linkUrl = <agent>/link/<one-time-nonce>.
+ *     2. The user opens that page; agent serves a small HTML form
+ *        (email + password).
+ *     3. Form POSTs credentials to <agent>/link/<nonce>; agent calls
+ *        davepi's POST /login server-to-server, receives the refresh
+ *        token in the JSON response, stores it against the
+ *        (channel, channel_user_id) that the nonce was issued for.
+ *     4. The user's refresh token never crosses the browser query
+ *        string or referer header.
+ *
+ * Token refresh uses POST /auth/refresh with body { refreshToken }
+ * (the actual davepi route — the earlier draft hit /refresh, which
+ * doesn't exist).
  */
 
 function createPerUserAuth({
@@ -22,19 +37,20 @@ function createPerUserAuth({
   refreshSkewSeconds = 60,
   linkBaseUrl = null,
   fetchImpl = globalThis.fetch,
+  nonceTtlSeconds = 15 * 60,
 } = {}) {
   if (!davepiUrl) throw new Error('per-user auth requires davepiUrl');
   if (!store) throw new Error('per-user auth requires a store');
   if (!fetchImpl) throw new Error('per-user auth requires fetch (Node >= 18)');
 
-  const pendingNonces = new Map(); // nonce → { channel, channel_user_id, createdAt }
+  const pendingNonces = new Map(); // nonce → { channel, channelUserId, createdAt }
 
   async function exchangeRefresh(refreshToken) {
-    const url = new URL('/refresh', davepiUrl).toString();
+    const url = new URL('/auth/refresh', davepiUrl).toString();
     const res = await fetchImpl(url, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ token: refreshToken, refreshToken }),
+      body: JSON.stringify({ refreshToken }),
     });
     if (!res.ok) {
       const text = await res.text().catch(() => '');
@@ -51,6 +67,31 @@ function createPerUserAuth({
     };
   }
 
+  async function loginAndGetRefreshToken({ email, password }) {
+    const url = new URL('/login', davepiUrl).toString();
+    const res = await fetchImpl(url, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ email, password }),
+    });
+    if (!res.ok) {
+      const text = await res.text().catch(() => '');
+      const err = new Error(`davepi login failed: ${res.status} ${text}`);
+      err.status = res.status;
+      err.code = 'LOGIN_FAILED';
+      throw err;
+    }
+    const body = await res.json();
+    const refreshToken = body.refreshToken || body.refresh_token;
+    const davepiUserId = body.user?._id || body.user?.user_id || null;
+    if (!refreshToken) {
+      const err = new Error('davepi /login response missing refreshToken');
+      err.code = 'LOGIN_FAILED';
+      throw err;
+    }
+    return { refreshToken, accessToken: body.token, davepiUserId };
+  }
+
   async function getFreshAccessToken(row) {
     const now = Date.now();
     const skewMs = refreshSkewSeconds * 1000;
@@ -60,7 +101,7 @@ function createPerUserAuth({
     const exchanged = await exchangeRefresh(row.refresh_token);
     const expiresAt = exchanged.expiresIn
       ? now + exchanged.expiresIn * 1000
-      : now + 14 * 60 * 1000; // assume 15m TTL, refresh 1m early
+      : now + 14 * 60 * 1000;
     await store.upsert({
       channel: row.channel,
       channel_user_id: row.channel_user_id,
@@ -75,32 +116,44 @@ function createPerUserAuth({
     if (!linkBaseUrl) {
       throw new Error('AGENT_LINK_BASE_URL must be set to support per-user linking');
     }
+    pruneExpiredNonces();
     const nonce = crypto.randomBytes(16).toString('hex');
     pendingNonces.set(nonce, { channel, channelUserId, createdAt: Date.now() });
-    const redirect = new URL('/oauth/callback', linkBaseUrl);
-    redirect.searchParams.set('nonce', nonce);
-    const login = new URL('/login', davepiUrl);
-    login.searchParams.set('redirect_uri', redirect.toString());
-    return { url: login.toString(), nonce };
+    const url = new URL(`/link/${nonce}`, linkBaseUrl).toString();
+    return { url, nonce };
   }
 
-  async function completeLink({ nonce, refreshToken, davepiUserId }) {
-    const pending = pendingNonces.get(nonce);
+  function pruneExpiredNonces() {
+    const cutoff = Date.now() - nonceTtlSeconds * 1000;
+    for (const [n, v] of pendingNonces) {
+      if (v.createdAt < cutoff) pendingNonces.delete(n);
+    }
+  }
+
+  function lookupNonce(nonce) {
+    pruneExpiredNonces();
+    return pendingNonces.get(nonce) || null;
+  }
+
+  async function completeLinkWithCredentials({ nonce, email, password }) {
+    const pending = lookupNonce(nonce);
     if (!pending) {
       const err = new Error('Unknown or expired link nonce');
       err.code = 'BAD_NONCE';
       throw err;
     }
+    const { refreshToken, accessToken, davepiUserId } = await loginAndGetRefreshToken({ email, password });
     pendingNonces.delete(nonce);
+    const expiresAt = accessToken ? Date.now() + 14 * 60 * 1000 : null;
     await store.upsert({
       channel: pending.channel,
       channel_user_id: pending.channelUserId,
       refresh_token: refreshToken,
-      access_token: null,
-      access_expires_at: null,
-      davepi_user_id: davepiUserId || null,
+      access_token: accessToken || null,
+      access_expires_at: expiresAt,
+      davepi_user_id: davepiUserId,
     });
-    return pending;
+    return { channel: pending.channel, channelUserId: pending.channelUserId, davepiUserId };
   }
 
   return {
@@ -115,10 +168,7 @@ function createPerUserAuth({
       const row = await store.get(channel, channelUserId);
       if (!row || !row.refresh_token) {
         const link = startLink({ channel, channelUserId });
-        const err = new Error('User is not linked to davepi yet');
-        err.code = 'UNLINKED';
-        err.linkUrl = link.url;
-        throw err;
+        throw new UnlinkedError(link.url);
       }
       const accessToken = await getFreshAccessToken(row);
       return { authorization: `Bearer ${accessToken}` };
@@ -133,7 +183,9 @@ function createPerUserAuth({
         channelUserId: channelCtx.channelUserId,
       }).url;
     },
-    completeLink,
+    startLink,
+    lookupNonce,
+    completeLinkWithCredentials,
     async unlink(channelCtx) {
       await store.delete(channelCtx.channel, channelCtx.channelUserId);
     },
@@ -141,6 +193,7 @@ function createPerUserAuth({
       if (store.close) await store.close();
     },
     _exchangeRefresh: exchangeRefresh,
+    _loginAndGetRefreshToken: loginAndGetRefreshToken,
   };
 }
 

@@ -81,11 +81,22 @@ Service auth (default) — set one of:
 
 Per-user auth:
 
-| Variable                | Purpose                                                                 |
-| ----------------------- | ----------------------------------------------------------------------- |
-| `AGENT_AUTH_MODE=per-user` | Switch on per-user mode                                              |
-| `AGENT_LINK_BASE_URL`   | Public URL where davepi can redirect back to the agent (`/oauth/callback`) |
-| `STORE_URL`             | Where to store refresh tokens. `sqlite:./davepi-agent.sqlite` (default) or `memory:` |
+| Variable                   | Purpose                                                                       |
+| -------------------------- | ----------------------------------------------------------------------------- |
+| `AGENT_AUTH_MODE=per-user` | Switch on per-user mode                                                       |
+| `AGENT_LINK_BASE_URL`      | Public base URL of the agent itself (where `GET /link/:nonce` is served)      |
+| `AGENT_SESSION_SECRET`     | Required for HTTP per-user mode — HMAC key for the signed session cookie      |
+| `AGENT_COOKIE_SECURE`      | `true` (default) — emits `Secure` on the session cookie. Set `false` for HTTP-only dev |
+| `STORE_URL`                | Where to persist refresh tokens. `file:./davepi-agent-store.json` (default) or `memory:` |
+
+Linking flow (per-user mode): on first contact from an unlinked user the
+agent returns a one-time link URL (`<agent>/link/<nonce>`). The user opens
+it, signs in via a small HTML form, and the agent calls davepi's
+`POST /login` server-side to obtain the refresh token. The refresh token
+never crosses the browser. For HTTP-channel users, link completion sets
+an HMAC-signed `davepi_agent_session` cookie (HttpOnly, SameSite=Lax)
+that `/chat` reads on every subsequent request. `/chat` ignores any
+caller-supplied `channelUserId` — the cookie is the trust boundary.
 
 Channels:
 
