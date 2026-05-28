@@ -220,6 +220,53 @@ Include the token in the Authorization header for all protected endpoints:
 Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
 ```
 
+#### Public read access (no login, no JWT)
+
+For storefronts, marketing sites, and any other unauthenticated frontend, dAvePi resolves an `X-Client-Id` request header into a role. The header value is a public client ID issued through the admin-only `apiClient` resource — bake it into your SPA bundle.
+
+1. As an admin, issue a client ID:
+
+```bash
+curl -X POST http://localhost:5050/api/v1/apiClient \
+  -H "Authorization: Bearer $ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "_id": "pk_storefront_live_abc123",
+    "name": "storefront-prod",
+    "role": "storefront"
+  }'
+```
+
+2. On the schema you want exposed, declare which role bypasses owner scope and the mandatory filter that limits what they can see:
+
+```js
+module.exports = {
+  path: 'product',
+  fields: [
+    { name: 'userId', type: String, required: true },
+    { name: 'name', type: String, required: true },
+    { name: 'price', type: Number },
+    { name: 'published', type: Boolean, default: false },
+    { name: 'cost', type: Number, acl: { read: ['admin', 'user'] } },
+  ],
+  acl: {
+    list: ['storefront', 'admin'],
+    scope: { storefront: { published: true } },
+  },
+};
+```
+
+3. From the storefront, send the header:
+
+```bash
+curl http://localhost:5050/api/v1/product \
+  -H "X-Client-Id: pk_storefront_live_abc123"
+```
+
+The role sees only records matching `acl.scope.storefront` (here: `published: true`), and fields without `storefront` in their `acl.read` are stripped from responses. The filter is server-controlled and cannot be widened by the caller. Writes from client-authed callers are refused with 403. When both `Authorization` and `X-Client-Id` are present, the Bearer wins.
+
+Client IDs are public identifiers (not secrets). Rotate by flipping the row's `status` to `"revoked"` and redeploying with a fresh ID.
+
 ### Working with Resources
 
 #### Create a Record

@@ -87,6 +87,8 @@ const {
   bypassUserScopeForDelete,
   stampTenantFields,
   stripTenantFields,
+  getRoleScopeFilter,
+  applyRoleScopeFilter,
 } = require('./acl');
 const {
   wrapFilter,
@@ -718,7 +720,11 @@ function createSchemaLoader({ app, apiSpec, setApolloRouter, buildGraphqlContext
           const baseOwner = bypassUserScopeForList(s, req.user)
             ? { _id: req.params.id }
             : { _id: req.params.id, userId: req.user.user_id };
-          const ownerQuery = softDeleteEnabled ? { ...baseOwner, deletedAt: null } : baseOwner;
+          const scopedOwner = applyRoleScopeFilter(
+            baseOwner,
+            getRoleScopeFilter(s, req.user)
+          );
+          const ownerQuery = softDeleteEnabled ? { ...scopedOwner, deletedAt: null } : scopedOwner;
           const record = await model.findOne(ownerQuery).lean();
           if (!record) throw new NotFoundError(path);
           const meta = record[fieldName];
@@ -880,6 +886,11 @@ function createSchemaLoader({ app, apiSpec, setApolloRouter, buildGraphqlContext
         if (!bypassUserScopeForList(s, req.user)) {
           query['userId'] = req.user.user_id;
         }
+        // Apply schema.acl.scope[role] for any role the caller holds —
+        // a server-controlled filter the caller cannot widen via their
+        // own query (e.g. storefront role limited to `{ published:
+        // true }` on the product collection).
+        query = applyRoleScopeFilter(query, getRoleScopeFilter(s, req.user));
         // Full-text search: only valid when the schema has at least
         // one searchable field. The framework owns the text index;
         // schemas without one quietly ignore __q to keep the surface
@@ -997,7 +1008,11 @@ function createSchemaLoader({ app, apiSpec, setApolloRouter, buildGraphqlContext
         const baseQuery = bypassUserScopeForList(s, req.user)
           ? { _id: req.params.id }
           : { userId: req.user.user_id, _id: req.params.id };
-        const query = applySoftDeleteFilter(baseQuery, req);
+        const scoped = applyRoleScopeFilter(
+          baseQuery,
+          getRoleScopeFilter(s, req.user)
+        );
+        const query = applySoftDeleteFilter(scoped, req);
         const record = await model.findOne(query);
         if (!record) throw new NotFoundError(path);
 
@@ -1186,10 +1201,18 @@ function createSchemaLoader({ app, apiSpec, setApolloRouter, buildGraphqlContext
         const page = parseInt(req.query.__page) || 1;
         // Authorization: must be able to read the record (deleted or
         // not). Bypass for acl.list roles, otherwise the caller must
-        // own the record.
-        const ownerQuery = bypassUserScopeForList(s, req.user)
+        // own the record. Role-scope filter is applied on top so a
+        // role with acl.list bypass still cannot see history for
+        // records outside its acl.scope predicate — without this the
+        // history endpoint would be an alternate read surface that
+        // leaks before/after/diff for out-of-scope records.
+        const baseOwner = bypassUserScopeForList(s, req.user)
           ? { _id: req.params.id }
           : { _id: req.params.id, userId: req.user.user_id };
+        const ownerQuery = applyRoleScopeFilter(
+          baseOwner,
+          getRoleScopeFilter(s, req.user)
+        );
         const exists = await model.findOne(ownerQuery).select('_id').lean();
         if (!exists) throw new NotFoundError(path);
 

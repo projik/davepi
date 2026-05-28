@@ -122,6 +122,42 @@ All auto-generated endpoints enforce user isolation:
 - `POST` requests: Automatically set `userId` and `accountId` to `req.user.user_id`
 - `GET/PUT/DELETE` requests: Filter by `userId` to ensure users only access their own data
 
+### Public read access via `X-Client-Id`
+
+Unauthenticated frontends (storefronts, marketing sites, embedded widgets) read collections by sending an `X-Client-Id` header. The header value is a public client ID issued through the admin-only `apiClient` resource (e.g. `pk_storefront_live_abc123`); `middleware/clientAuth.js` resolves it into a synthetic `req.user = { user_id: <id>, roles: [<role>], isClient: true }`. The existing role-based ACL surface then governs what the role can read:
+
+- `schema.acl.list: ['storefront']` lets the role bypass the per-user owner scope and see records across tenants.
+- `schema.acl.scope.storefront = { published: true }` declares a **server-controlled mandatory filter** that's `$and`-ed into every read for that role — callers cannot widen it via their own query.
+- `field.acl.read: ['storefront', 'user', 'admin']` whitelists which fields the role sees; everything else is stripped from responses.
+
+Client IDs are identifiers, **not** secrets — they're meant to be baked into SPA bundles and are world-readable. The security boundary is the role's ACL + scope, not the ID itself. Rotate by setting `status: 'revoked'` on the row (or deleting it) and redeploying with a fresh ID.
+
+Writes from client-authed callers are refused outright — REST returns 403 in `clientAuth`, and the GraphQL `wrapCreateOne` / `wrapCreateMany` / `wrapByIdMutation` / `wrapFilter` write paths refuse `user.isClient`. When both a Bearer token and `X-Client-Id` are sent, the Bearer wins (the user's real roles apply); the client ID stays attached as audit context.
+
+The TypeScript SDK takes a `clientId` option on `createDavepiClient({ baseUrl, clientId, getToken })` and stamps it onto every request automatically — no per-call wiring.
+
+Example storefront schema:
+
+```js
+module.exports = {
+  path: 'product',
+  collection: 'product',
+  fields: [
+    { name: 'userId', type: String, required: true },
+    { name: 'name', type: String, required: true },
+    { name: 'price', type: Number },
+    { name: 'published', type: Boolean, default: false },
+    { name: 'cost', type: Number, acl: { read: ['admin', 'user'] } },
+  ],
+  acl: {
+    list: ['storefront', 'admin'],
+    scope: { storefront: { published: true } },
+  },
+};
+```
+
+`acl.scope` supports equality, `$in`, `$nin`, `$ne`, `$exists`, and `$or` / `$and` envelopes — these cover the common storefront predicates and are validated by the in-process matcher used for GraphQL `findById`. Exotic operators (regex, geospatial) only work on REST list queries.
+
 ## Query Features
 
 ### mongo-querystring
