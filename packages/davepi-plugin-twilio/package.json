@@ -1,0 +1,47 @@
+{
+  "name": "davepi-plugin-twilio",
+  "version": "0.1.0",
+  "description": "Twilio integration for dAvePi. Exposes sendSms / sendWhatsApp for transactional messaging, an OTP-over-SMS passwordless login route pair, TOTP-based 2FA enrollment/verify/challenge, and an inbound SMS webhook handler. Dormant when TWILIO_ACCOUNT_SID is unset.",
+  "license": "ISC",
+  "homepage": "https://docs.davepi.dev/features/plugins/",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/projik/davepi.git",
+    "directory": "packages/davepi-plugin-twilio"
+  },
+  "keywords": [
+    "davepi",
+    "davepi-plugin",
+    "twilio",
+    "sms",
+    "whatsapp",
+    "otp",
+    "2fa",
+    "totp"
+  ],
+  "main": "index.js",
+  "files": [
+    "index.js",
+    "lib",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "peerDependencies": {
+    "davepi": ">=1.0.4"
+  },
+  "peerDependenciesMeta": {
+    "davepi": {
+      "optional": false
+    }
+  },
+  "dependencies": {
+    "twilio": "^4.20.0",
+    "otplib": "^12.0.1",
+    "libphonenumber-js": "^1.10.0"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.js"
+  }
+}
