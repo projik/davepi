@@ -1,0 +1,50 @@
+{
+  "name": "davepi-plugin-object-storage",
+  "version": "0.1.0",
+  "description": "Presigned-URL object-storage uploads for dAvePi. Auto-registers a generic `file` schema, mounts upload-url / complete / download-url routes that hand the client a presigned URL so bytes travel client→bucket without proxying through the API. Pluggable backend supports AWS S3, Cloudflare R2, MinIO, and Google Cloud Storage.",
+  "license": "ISC",
+  "homepage": "https://docs.davepi.dev/features/plugins/",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/projik/davepi.git",
+    "directory": "packages/davepi-plugin-object-storage"
+  },
+  "keywords": [
+    "davepi",
+    "davepi-plugin",
+    "object-storage",
+    "s3",
+    "r2",
+    "minio",
+    "gcs",
+    "uploads",
+    "presigned-url"
+  ],
+  "main": "index.js",
+  "files": [
+    "index.js",
+    "lib",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "@aws-sdk/client-s3": "^3.583.0",
+    "@aws-sdk/s3-request-presigner": "^3.583.0"
+  },
+  "optionalDependencies": {
+    "@google-cloud/storage": "^7.11.0"
+  },
+  "peerDependencies": {
+    "davepi": ">=1.0.5"
+  },
+  "peerDependenciesMeta": {
+    "davepi": {
+      "optional": false
+    }
+  },
+  "scripts": {
+    "test": "node --test test/*.test.js"
+  }
+}
