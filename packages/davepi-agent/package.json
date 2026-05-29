@@ -1,0 +1,61 @@
+{
+  "name": "@davepi/agent",
+  "version": "0.1.0",
+  "description": "Chat agent that ships pre-wired against a dAvePi backend. HTTP /chat + Slack channels, OpenAI + Anthropic providers, service-account or per-user OAuth-link auth. Consumes the dAvePi MCP server, so ACL/scope/tenant isolation are enforced server-side and the JWT (or X-Client-Id) is the access boundary.",
+  "license": "ISC",
+  "homepage": "https://docs.davepi.dev/surfaces/agent/",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/projik/davepi.git",
+    "directory": "packages/davepi-agent"
+  },
+  "keywords": [
+    "davepi",
+    "agent",
+    "ai",
+    "llm",
+    "mcp",
+    "anthropic",
+    "openai",
+    "slack",
+    "chatbot",
+    "customer-service"
+  ],
+  "main": "index.js",
+  "bin": {
+    "davepi-agent": "bin/davepi-agent.js"
+  },
+  "files": [
+    "index.js",
+    "bin",
+    "lib",
+    "demo",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "start": "node bin/davepi-agent.js",
+    "test": "node --test test/*.test.js",
+    "demo": "node demo/server.js"
+  },
+  "dependencies": {
+    "@ai-sdk/anthropic": "^1.0.0",
+    "@ai-sdk/openai": "^1.0.0",
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "@slack/bolt": "^4.1.0",
+    "ai": "^4.0.0",
+    "express": "^4.22.2",
+    "pino": "^10.3.1",
+    "zod": "^3.23.0"
+  },
+  "peerDependencies": {
+    "davepi": ">=1.0.5"
+  },
+  "peerDependenciesMeta": {
+    "davepi": {
+      "optional": true
+    }
+  }
+}

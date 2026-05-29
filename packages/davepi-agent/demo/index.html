@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>davepi-agent demo</title>
+    <script src="https://cdn.jsdelivr.net/npm/vega@5"></script>
+    <script src="https://cdn.jsdelivr.net/npm/vega-lite@5"></script>
+    <script src="https://cdn.jsdelivr.net/npm/vega-embed@6"></script>
+    <style>
+      body { font-family: system-ui, sans-serif; max-width: 720px; margin: 2rem auto; padding: 0 1rem; }
+      #log { border: 1px solid #ccc; padding: 1rem; min-height: 240px; white-space: pre-wrap; }
+      .tool { color: #888; font-size: 0.85em; }
+      .err { color: #c00; }
+      table { border-collapse: collapse; margin: 0.5rem 0; }
+      th, td { border: 1px solid #ddd; padding: 4px 8px; text-align: left; }
+      th { background: #f4f4f4; }
+      form { display: flex; gap: 0.5rem; margin-top: 1rem; }
+      input { flex: 1; padding: 0.5rem; font-size: 1rem; }
+      button { padding: 0.5rem 1rem; font-size: 1rem; }
+    </style>
+  </head>
+  <body>
+    <h1>davepi-agent demo</h1>
+    <p>Streams from <code>POST /chat</code> over SSE. Renders <code>render_table</code> and <code>render_chart</code> events.</p>
+    <div id="log"></div>
+    <form id="f">
+      <input id="msg" placeholder="ask me about your backend data" autofocus />
+      <button>Send</button>
+    </form>
+    <script>
+      const log = document.getElementById('log');
+      const history = [];
+      function append(node) { log.appendChild(node); log.scrollTop = log.scrollHeight; }
+      function text(t, cls) { const s = document.createElement('span'); if (cls) s.className = cls; s.textContent = t; return s; }
+
+      async function send(message) {
+        const turnDiv = document.createElement('div');
+        turnDiv.appendChild(text('\n> ' + message + '\n\n', ''));
+        append(turnDiv);
+        const replyDiv = document.createElement('div');
+        append(replyDiv);
+
+        const res = await fetch('/chat', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ message, history, stream: true }),
+        });
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let buf = '';
+        let finalText = '';
+        while (true) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          buf += decoder.decode(value, { stream: true });
+          const events = buf.split('\n\n');
+          buf = events.pop();
+          for (const block of events) {
+            const lines = block.split('\n');
+            const evType = (lines.find((l) => l.startsWith('event:')) || '').slice(6).trim();
+            const data = JSON.parse((lines.find((l) => l.startsWith('data:')) || '{}').slice(5).trim() || '{}');
+            if (evType === 'token') { replyDiv.appendChild(text(data.text)); finalText += data.text; }
+            else if (evType === 'tool_call') { replyDiv.appendChild(text(`[tool ${data.name}(${JSON.stringify(data.args)})]\n`, 'tool')); }
+            else if (evType === 'render') { renderPayload(replyDiv, data.payload); }
+            else if (evType === 'error') { replyDiv.appendChild(text(`error: ${data.message}\n`, 'err')); }
+            else if (evType === 'final') { history.push({ role: 'user', content: message }); history.push({ role: 'assistant', content: finalText }); }
+          }
+        }
+      }
+
+      function renderPayload(parent, payload) {
+        if (payload.type === 'table') {
+          const t = document.createElement('table');
+          const thead = t.createTHead().insertRow();
+          for (const c of payload.columns) {
+            const th = document.createElement('th'); th.textContent = c.label; thead.appendChild(th);
+          }
+          const tbody = t.createTBody();
+          for (const row of payload.rows) {
+            const tr = tbody.insertRow();
+            for (const c of payload.columns) {
+              const td = tr.insertCell();
+              const v = row[c.key];
+              td.textContent = v == null ? '' : (typeof v === 'object' ? JSON.stringify(v) : String(v));
+            }
+          }
+          parent.appendChild(t);
+        } else if (payload.type === 'chart') {
+          const div = document.createElement('div');
+          parent.appendChild(div);
+          window.vegaEmbed(div, payload.vegaLiteSpec, { actions: false }).catch((e) => {
+            div.textContent = 'chart render failed: ' + e.message;
+          });
+        }
+      }
+
+      document.getElementById('f').addEventListener('submit', (e) => {
+        e.preventDefault();
+        const v = document.getElementById('msg').value.trim();
+        if (!v) return;
+        document.getElementById('msg').value = '';
+        send(v).catch((err) => append(text('\nerror: ' + err.message + '\n', 'err')));
+      });
+    </script>
+  </body>
+</html>
