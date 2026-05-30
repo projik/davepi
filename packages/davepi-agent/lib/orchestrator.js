@@ -2,15 +2,8 @@
 
 const { buildRenderTools } = require('./renderTools');
 const { deriveResources, shouldRoute, buildRouterTools } = require('./toolRouter');
+const { assembleSystemPrompt } = require('./promptAssembly');
 const logger = require('./logger');
-
-const DEFAULT_SYSTEM_PROMPT = `You are an assistant integrated with a dAvePi backend.
-You have tools that read and (when authorized) write the backend's data.
-Tenant isolation and access control are enforced server-side by the user's
-JWT or client identity — you don't need to add "for user X" filters; the
-server already does. If a tool returns empty, trust that result instead of
-re-asking with looser filters. Prefer the render_table / render_chart tools
-to present data instead of dumping raw JSON in your reply.`;
 
 function adaptMcpTools(tools, mcpClient, channelCtx, jsonSchemaHelper) {
   const adapted = {};
@@ -50,6 +43,33 @@ function normalizeMcpResult(result) {
     }
   }
   return result;
+}
+
+/**
+ * Build a persona loader for `assembleSystemPrompt`, or `null` when no
+ * `agentKey` is configured (nothing to look up — stay zero-config).
+ *
+ * The persona is read through the agent's own MCP identity via the
+ * schema-generated `list_agentPersona` tool, so tenant isolation, ACL,
+ * and scope are enforced server-side exactly like every other read. A
+ * backend without the agentPersona schema (older davepi) makes the tool
+ * call fail; `assembleSystemPrompt` swallows the throw and falls back to
+ * the default prompt.
+ */
+function makePersonaFetcher({ config, mcpClient, channelCtx }) {
+  const agentKey = config && config.agent && config.agent.key;
+  if (!agentKey) return null;
+  return async () => {
+    const raw = await mcpClient.callTool(
+      'list_agentPersona',
+      { filter: { agentKey, status: 'active' }, perPage: 1 },
+      channelCtx
+    );
+    const norm = normalizeMcpResult(raw);
+    if (!norm || norm.error) return null;
+    const rows = norm.results || norm.records || [];
+    return Array.isArray(rows) ? rows[0] || null : null;
+  };
 }
 
 /**
@@ -112,10 +132,19 @@ async function runTurn({
 
   const messages = [...history, { role: 'user', content: userMessage }];
 
+  // Persona is prompt slot #1: assemble it ahead of the operating
+  // contract. Falls back to the default prompt when there's no persona
+  // row (or no agentKey configured).
+  const system = await assembleSystemPrompt({
+    config,
+    fetchPersona: makePersonaFetcher({ config, mcpClient, channelCtx }),
+    log: logger,
+  });
+
   let assembledText = '';
   const result = await streamText({
     model,
-    system: config.llm.systemPrompt || DEFAULT_SYSTEM_PROMPT,
+    system,
     messages,
     tools,
     maxSteps: config.llm.maxSteps,
