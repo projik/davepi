@@ -20,6 +20,8 @@
  *   3. Parsing + validating the model's JSON verdict defensively.
  */
 
+const { NOOP_LOG } = require('./logger');
+
 const DEFAULT_MIN_MESSAGES = 4;
 
 const EXTRACTION_SYSTEM_PROMPT = [
@@ -133,7 +135,7 @@ async function extractSkill({
   agentKey,
   runExtraction,
   minMessages = DEFAULT_MIN_MESSAGES,
-  log = console,
+  log = NOOP_LOG,
 }) {
   if (typeof runExtraction !== 'function') {
     throw new TypeError('extractSkill requires a runExtraction function');
@@ -154,11 +156,7 @@ async function extractSkill({
       agentKey,
     });
   } catch (err) {
-    (log.warn || log.error || (() => {})).call(
-      log,
-      { err: err && err.message, agentKey },
-      'skill extraction LLM call failed'
-    );
+    log.warn({ err: err && err.message, agentKey }, 'skill extraction LLM call failed');
     return null;
   }
   const verdict = parseVerdict(raw);

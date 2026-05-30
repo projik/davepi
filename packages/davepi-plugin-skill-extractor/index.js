@@ -36,6 +36,7 @@
 const { extractSkill, DEFAULT_MIN_MESSAGES } = require('./lib/extract');
 const { persistDraftSkill } = require('./lib/persist');
 const { createDefaultExtraction } = require('./lib/agent');
+const { NOOP_LOG } = require('./lib/logger');
 
 const DEFAULT_JOB_NAME = 'skill.extract';
 const RESOLVED_EVENT = 'conversation.resolved';
@@ -83,7 +84,7 @@ function createPlugin(opts = {}) {
   // The job handler: extract a skill from the transcript and persist a
   // draft. Runs in the queue worker, off the request thread.
   async function handleExtractJob(data, ctx) {
-    const log = (ctx && ctx.log) || state.log || console;
+    const log = (ctx && ctx.log) || state.log || NOOP_LOG;
     const agentKey = data && data.agentKey;
     const skill = await extractSkill({
       history: data && data.history,
@@ -112,7 +113,7 @@ function createPlugin(opts = {}) {
   // conversation, so it never blocks the response.
   function onRecord(event) {
     if (!event || event.type !== RESOLVED_EVENT) return;
-    const log = state.log || console;
+    const log = state.log || NOOP_LOG;
     if (!state.enabled || !state.queue) return; // dormant: nothing to do
     const record = event.record || {};
     const userId = event.userId != null ? String(event.userId) : record.userId;
@@ -140,7 +141,7 @@ function createPlugin(opts = {}) {
   }
 
   async function setup({ schemaLoader, bus, log }) {
-    state.log = log || console;
+    state.log = log || NOOP_LOG;
     state.getModel =
       opts.getSkillModel ||
       (() => {
