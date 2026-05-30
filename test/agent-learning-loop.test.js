@@ -30,6 +30,7 @@ const auth = (req, token) => req.set('Authorization', `Bearer ${token}`);
 function makeQueueStub() {
   const handlers = new Map();
   const enqueued = [];
+  const jobs = []; // in-flight handler promises, so the test can await them
   return {
     handlers,
     enqueued,
@@ -39,7 +40,17 @@ function makeQueueStub() {
     async enqueue(name, data, opts) {
       enqueued.push({ name, data, opts });
       const handler = handlers.get(name);
-      return handler ? handler(data, { log: console, attempt: 1, jobId: '1', name }) : null;
+      const p = handler ? handler(data, { log: console, attempt: 1, jobId: '1', name }) : null;
+      jobs.push(Promise.resolve(p).catch(() => {}));
+      return p;
+    },
+    // The worker now does a DB findOne → extract → create chain, so the
+    // test waits on the actual job promises rather than racing setImmediate.
+    async settled() {
+      // A microtask hop lets onRecord's synchronous enqueue register the
+      // job before we await; loop in case a job enqueues another.
+      await new Promise((r) => setImmediate(r));
+      while (jobs.length) await jobs.shift();
     },
   };
 }
@@ -131,9 +142,9 @@ describe('learning loop: skill extraction on resolution', () => {
     ).send({ status: 'resolved' });
     expect(resolved.status).toBe(200);
 
-    // Let the onEnter emit + the (synchronous-stub) enqueue/handler run.
-    await new Promise((r) => setImmediate(r));
-    await new Promise((r) => setImmediate(r));
+    // Let the onEnter emit fire, then await the worker's full
+    // findOne → extract → create chain.
+    await queue.settled();
 
     expect(queue.enqueued).toHaveLength(1);
     expect(queue.enqueued[0].name).toBe('skill.extract');
@@ -168,8 +179,7 @@ describe('learning loop: skill extraction on resolution', () => {
     ).send({ status: 'resolved' });
     expect(resolved.status).toBe(200);
 
-    await new Promise((r) => setImmediate(r));
-    await new Promise((r) => setImmediate(r));
+    await queue.settled();
 
     const rows = await skillModel().find({ userId: owner._id }).lean();
     expect(rows).toHaveLength(0);
@@ -188,8 +198,7 @@ describe('learning loop: skill extraction on resolution', () => {
     ).send({ status: 'abandoned' });
     expect(res.status).toBe(200);
 
-    await new Promise((r) => setImmediate(r));
-    await new Promise((r) => setImmediate(r));
+    await queue.settled();
 
     expect(queue.enqueued).toHaveLength(0);
     const rows = await skillModel().find({ userId: owner._id }).lean();

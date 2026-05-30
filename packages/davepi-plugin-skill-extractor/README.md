@@ -34,6 +34,15 @@ resolving a conversation emits an event and returns immediately; the
 queue worker does the extraction later. Resolving a conversation never
 blocks the response.
 
+The queue **job carries only identifiers + tenancy** (`userId`,
+`accountId`, `agentKey`, `recordId`) — never the transcript itself. The
+conversation `history` is the full JSON transcript, re-serialized every
+turn, so it grows without bound; copying it into every Redis job would
+bloat the queue. The worker re-reads `history` from the (already
+persisted) conversation record by id instead. If the record is gone by
+the time the job runs (deleted between resolution and extraction), the
+worker logs and skips — best-effort, as everywhere else.
+
 ## Requirements
 
 - The **`skill` schema** (#131) and the **`conversation` schema** with
@@ -100,6 +109,7 @@ module.exports = createPlugin({
 | `queue`         | `require('davepi-plugin-queue')`         | The queue instance to enqueue on / register with. |
 | `runExtraction` | fresh Anthropic call (`lib/agent.js`)    | The LLM call. Inject to swap providers / in tests.|
 | `getSkillModel` | looks up `skill` off `schemaLoader`      | Override the model source.                        |
+| `getConversationModel` | looks up `conversation` off `schemaLoader` | Source for re-reading the transcript by id. |
 | `jobName`       | `skill.extract`                          | Queue job name.                                   |
 | `minMessages`   | `4`                                      | Pre-filter: shorter chats never spend an LLM call.|
 | `modelId`       | `SKILL_EXTRACT_MODEL` or `claude-sonnet-4-5` | Model for the default agent.                  |

@@ -68,13 +68,38 @@ function makeModel() {
   };
 }
 
+// Conversation-model stub. The worker re-reads the transcript by id, so
+// the stub resolves a conversation row from `findOne({ _id, userId })`.
+// Pass `null` rows to simulate a missing (e.g. deleted) conversation.
+function makeConversationModel(rows = []) {
+  return {
+    rows,
+    findOne(q) {
+      const hit = rows.find(
+        (r) => r._id === q._id && (q.userId == null || r.userId === q.userId)
+      );
+      return { lean: async () => hit || null };
+    },
+  };
+}
+
+const sixTurns = JSON.stringify(
+  Array.from({ length: 6 }, (_, i) => ({
+    role: i % 2 ? 'assistant' : 'user',
+    content: `msg ${i}`,
+  }))
+);
+
+// A conversation model holding one row (id `conv-1`, tenant `acct-A`)
+// whose transcript the worker will load.
+function convModel(history = sixTurns) {
+  return makeConversationModel([
+    { _id: 'conv-1', userId: 'acct-A', agentKey: 'support', history },
+  ]);
+}
+
 function resolvedEvent(overrides = {}) {
-  const history = JSON.stringify(
-    Array.from({ length: 6 }, (_, i) => ({
-      role: i % 2 ? 'assistant' : 'user',
-      content: `msg ${i}`,
-    }))
-  );
+  const history = sixTurns;
   return {
     type: 'conversation.resolved',
     version: 'v1',
@@ -107,6 +132,7 @@ test('non-trivial resolved conversation → a tenant-scoped draft skill', async 
   const plugin = createPlugin({
     queue,
     getSkillModel: () => model,
+    getConversationModel: () => convModel(),
     runExtraction: async () =>
       JSON.stringify({
         skill: { name: 'Reset a locked account', description: 'unlock', body: '1. verify\n2. unlock' },
@@ -123,6 +149,12 @@ test('non-trivial resolved conversation → a tenant-scoped draft skill', async 
   assert.equal(queue.enqueued.length, 1);
   assert.equal(queue.enqueued[0].name, 'skill.extract');
   assert.equal(queue.enqueued[0].opts.user.user_id, 'acct-A');
+
+  // The transcript is NOT carried in the job payload — only identifiers
+  // + tenancy, so an unbounded history never lands in Redis.
+  assert.equal(queue.enqueued[0].data.history, undefined);
+  assert.equal(queue.enqueued[0].data.recordId, 'conv-1');
+  assert.equal(queue.enqueued[0].data.userId, 'acct-A');
 
   // A draft skill was created, scoped to the account.
   assert.equal(model.rows.length, 1);
@@ -142,6 +174,7 @@ test('trivial chat → no skill', async () => {
   const plugin = createPlugin({
     queue,
     getSkillModel: () => model,
+    getConversationModel: () => convModel(),
     runExtraction: async () => '{"skill": null}',
   });
   await plugin.setup({ bus, log: silentLog });
@@ -153,7 +186,7 @@ test('trivial chat → no skill', async () => {
   assert.equal(model.rows.length, 0, 'no skill persisted');
 });
 
-test('short transcript is filtered before the LLM and creates no skill', async () => {
+test('a missing conversation (deleted before extraction) → no skill, no throw', async () => {
   const queue = makeQueueStub();
   const model = makeModel();
   const bus = new EventEmitter();
@@ -161,6 +194,32 @@ test('short transcript is filtered before the LLM and creates no skill', async (
   const plugin = createPlugin({
     queue,
     getSkillModel: () => model,
+    getConversationModel: () => makeConversationModel([]), // not found
+    runExtraction: async () => {
+      llmCalled = true;
+      return '{"skill": {"name":"x","body":"y"}}';
+    },
+  });
+  await plugin.setup({ bus, log: silentLog });
+
+  bus.emit('record', resolvedEvent());
+  await flush();
+
+  assert.equal(queue.enqueued.length, 1);
+  assert.equal(llmCalled, false, 'no transcript to extract from');
+  assert.equal(model.rows.length, 0);
+});
+
+test('short transcript is filtered before the LLM and creates no skill', async () => {
+  const queue = makeQueueStub();
+  const model = makeModel();
+  const bus = new EventEmitter();
+  let llmCalled = false;
+  const short = JSON.stringify([{ role: 'user', content: 'hi' }, { role: 'assistant', content: 'bye' }]);
+  const plugin = createPlugin({
+    queue,
+    getSkillModel: () => model,
+    getConversationModel: () => convModel(short),
     runExtraction: async () => {
       llmCalled = true;
       return JSON.stringify({ skill: { name: 'x', body: 'y' } });
@@ -168,8 +227,7 @@ test('short transcript is filtered before the LLM and creates no skill', async (
   });
   await plugin.setup({ bus, log: silentLog });
 
-  const short = JSON.stringify([{ role: 'user', content: 'hi' }, { role: 'assistant', content: 'bye' }]);
-  bus.emit('record', resolvedEvent({ record: { ...resolvedEvent().record, history: short } }));
+  bus.emit('record', resolvedEvent());
   await flush();
 
   assert.equal(llmCalled, false);
@@ -183,6 +241,7 @@ test('re-resolution does not duplicate an existing skill', async () => {
   const plugin = createPlugin({
     queue,
     getSkillModel: () => model,
+    getConversationModel: () => convModel(),
     runExtraction: async () =>
       JSON.stringify({ skill: { name: 'Same runbook', body: 'steps' } }),
   });

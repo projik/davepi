@@ -41,6 +41,7 @@ const { NOOP_LOG } = require('./lib/logger');
 const DEFAULT_JOB_NAME = 'skill.extract';
 const RESOLVED_EVENT = 'conversation.resolved';
 const SKILL_REGISTRY_KEY = 'v1/skill';
+const CONVERSATION_REGISTRY_KEY = 'v1/conversation';
 
 /**
  * Build a plugin instance.
@@ -56,6 +57,8 @@ const SKILL_REGISTRY_KEY = 'v1/skill';
  *                    Anthropic call (`lib/agent.js`). Inject in tests.
  *   - getSkillModel: `() => MongooseModel` override. Defaults to looking
  *                    the `skill` model up off `schemaLoader`.
+ *   - getConversationModel: `() => MongooseModel` override. Defaults to
+ *                    looking the `conversation` model up off `schemaLoader`.
  *   - jobName:       queue job name (default `skill.extract`).
  *   - minMessages:   pre-filter — transcripts shorter than this skip
  *                    extraction entirely (default 4).
@@ -68,7 +71,13 @@ function createPlugin(opts = {}) {
     : DEFAULT_MIN_MESSAGES;
   const runExtraction = opts.runExtraction || createDefaultExtraction({ modelId: opts.modelId });
 
-  const state = { queue: null, enabled: false, getModel: null, log: null };
+  const state = {
+    queue: null,
+    enabled: false,
+    getModel: null,
+    getConversationModel: null,
+    log: null,
+  };
 
   function resolveQueue() {
     if (opts.queue) return opts.queue;
@@ -83,11 +92,47 @@ function createPlugin(opts = {}) {
 
   // The job handler: extract a skill from the transcript and persist a
   // draft. Runs in the queue worker, off the request thread.
+  //
+  // The transcript is re-read from the conversation record here rather
+  // than carried on the job payload: the full JSON `history` grows
+  // unbounded (it's the whole transcript, re-serialized every turn), so
+  // putting it in the job would duplicate a large, ever-growing blob
+  // into Redis on every resolution. The job carries only identifiers +
+  // tenancy; the worker fetches the (already-persisted) transcript by id.
   async function handleExtractJob(data, ctx) {
     const log = (ctx && ctx.log) || state.log || NOOP_LOG;
     const agentKey = data && data.agentKey;
+    const recordId = data && data.recordId;
+    const userId = data && data.userId;
+
+    const conversationModel = state.getConversationModel ? state.getConversationModel() : null;
+    if (!conversationModel) {
+      log.warn({ agentKey, recordId }, 'skill-extractor: no conversation model available; skipping');
+      return { drafted: false };
+    }
+    let conversation;
+    try {
+      // Scope by userId (tenant) and exclude soft-deleted rows; a missing
+      // `deletedAt` matches `null`, so this also covers the common case.
+      conversation = await conversationModel
+        .findOne({ _id: recordId, userId, deletedAt: null })
+        .lean();
+    } catch (err) {
+      log.warn(
+        { err: err && err.message, recordId },
+        'skill-extractor: failed to load conversation; skipping'
+      );
+      return { drafted: false };
+    }
+    if (!conversation) {
+      // Resolved row gone (deleted between resolution and extraction) —
+      // best-effort, nothing to extract from.
+      log.warn({ recordId }, 'skill-extractor: conversation not found; skipping');
+      return { drafted: false };
+    }
+
     const skill = await extractSkill({
-      history: data && data.history,
+      history: conversation.history,
       agentKey,
       runExtraction,
       minMessages,
@@ -100,7 +145,7 @@ function createPlugin(opts = {}) {
     const model = state.getModel ? state.getModel() : null;
     const result = await persistDraftSkill({
       model,
-      tenant: { userId: data && data.userId, accountId: data && data.accountId },
+      tenant: { userId, accountId: data && data.accountId },
       agentKey,
       skill,
       log,
@@ -122,14 +167,14 @@ function createPlugin(opts = {}) {
       return;
     }
     const accountId = record.accountId != null ? String(record.accountId) : userId;
+    // Identifiers + tenancy only — never the transcript. The worker
+    // re-reads `history` from the conversation record by id, so an
+    // unbounded transcript is never copied into the Redis job payload.
     const data = {
       userId,
       accountId,
       agentKey: record.agentKey,
-      channel: record.channel,
-      conversationId: record.conversationId,
       recordId: event.recordId,
-      history: record.history,
     };
     // Enqueue under the originating tenant so the queue's status route
     // (and any audit) stays correctly scoped.
@@ -142,14 +187,13 @@ function createPlugin(opts = {}) {
 
   async function setup({ schemaLoader, bus, log }) {
     state.log = log || NOOP_LOG;
-    state.getModel =
-      opts.getSkillModel ||
-      (() => {
-        const entry = schemaLoader && schemaLoader.getEntry
-          ? schemaLoader.getEntry(SKILL_REGISTRY_KEY)
-          : null;
-        return entry && entry.model ? entry.model : null;
-      });
+    const modelFrom = (key) => () => {
+      const entry = schemaLoader && schemaLoader.getEntry ? schemaLoader.getEntry(key) : null;
+      return entry && entry.model ? entry.model : null;
+    };
+    state.getModel = opts.getSkillModel || modelFrom(SKILL_REGISTRY_KEY);
+    state.getConversationModel =
+      opts.getConversationModel || modelFrom(CONVERSATION_REGISTRY_KEY);
 
     const queue = resolveQueue();
     if (!queue || typeof queue.registerJob !== 'function') {
