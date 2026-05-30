@@ -68,6 +68,61 @@ function chartToBlocks(payload) {
   ];
 }
 
+/**
+ * Translate one `render` event payload into Block Kit blocks, reusing the
+ * same table/chart rendering the interactive handler uses. Unknown render
+ * types yield no blocks. Shared so the proactive (cron) poster renders
+ * identically to a reply in a thread.
+ */
+function renderEventToBlocks(payload) {
+  if (!payload || typeof payload !== 'object') return [];
+  if (payload.type === 'table') return tableToBlocks(payload);
+  if (payload.type === 'chart') return chartToBlocks(payload);
+  return [];
+}
+
+/**
+ * Compose the final message blocks for an agent turn: the reply text as a
+ * mrkdwn section (when non-empty) followed by any render blocks. Returns
+ * `undefined` when there's nothing to render, so callers can fall back to
+ * a plain-text post.
+ */
+function buildResultBlocks({ text, renderBlocks = [] } = {}) {
+  const blocks = [];
+  if (text) blocks.push({ type: 'section', text: { type: 'mrkdwn', text } });
+  blocks.push(...renderBlocks);
+  return blocks.length ? blocks : undefined;
+}
+
+/**
+ * A minimal Slack poster built on the same `@slack/bolt`-bundled
+ * `@slack/web-api` client the interactive channel uses. The proactive
+ * (cron) surface has no inbound event to reply to, so it posts to a
+ * configured channel directly rather than going through the bolt event
+ * loop — but it reuses this package's block rendering so a scheduled
+ * digest looks like any other agent reply.
+ */
+function createSlackPoster({ botToken } = {}) {
+  if (!botToken) {
+    throw new Error('createSlackPoster requires a Slack bot token (config.slack.botToken).');
+  }
+  const { WebClient } = require('@slack/web-api');
+  const client = new WebClient(botToken);
+  return {
+    client,
+    async post({ channel, text, renderBlocks = [], threadTs } = {}) {
+      if (!channel) throw new Error('slack poster: a target channel is required');
+      const blocks = buildResultBlocks({ text, renderBlocks });
+      return client.chat.postMessage({
+        channel,
+        thread_ts: threadTs || undefined,
+        text: text || ' ',
+        blocks,
+      });
+    },
+  };
+}
+
 async function handleMessage({ app, event, client, config, model, mcpClient, auth }) {
   const slackUserId = event.user;
   const text = (event.text || '').replace(/<@[^>]+>/g, '').trim();
@@ -118,16 +173,11 @@ async function handleMessage({ app, event, client, config, model, mcpClient, aut
 
     conversationHistory.set(key, out.history);
 
-    const finalBlocks = [];
-    if (out.text) {
-      finalBlocks.push({ type: 'section', text: { type: 'mrkdwn', text: out.text } });
-    }
-    finalBlocks.push(...renderBlocks);
     await client.chat.update({
       channel: event.channel,
       ts: placeholderTs,
       text: out.text || ' ',
-      blocks: finalBlocks.length ? finalBlocks : undefined,
+      blocks: buildResultBlocks({ text: out.text, renderBlocks }),
     });
   } catch (err) {
     logger.error({ err: err.message, code: err.code }, 'slack handler failed');
@@ -180,4 +230,11 @@ async function startSlackChannel({ config, model, mcpClient, auth }) {
   return app;
 }
 
-module.exports = { startSlackChannel, tableToBlocks, chartToBlocks };
+module.exports = {
+  startSlackChannel,
+  tableToBlocks,
+  chartToBlocks,
+  renderEventToBlocks,
+  buildResultBlocks,
+  createSlackPoster,
+};

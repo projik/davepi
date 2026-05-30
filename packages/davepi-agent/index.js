@@ -7,6 +7,7 @@ const { resolveModel } = require('./lib/llm');
 const { createHttpApp, startHttpServer } = require('./lib/channels/http');
 const { startSlackChannel } = require('./lib/channels/slack');
 const { runTurn } = require('./lib/orchestrator');
+const { createScheduledHandler, runScheduledSkill } = require('./lib/proactive');
 const logger = require('./lib/logger');
 
 async function createAgent(overrides = {}) {
@@ -19,7 +20,11 @@ async function createAgent(overrides = {}) {
   });
   const { model, modelId, provider } = resolveModel(config);
   logger.info({ provider, modelId, auth: auth.mode, davepiUrl: config.davepiUrl }, 'agent built');
-  return { config, auth, mcpClient, model, modelId, provider };
+  const agent = { config, auth, mcpClient, model, modelId, provider };
+  // Convenience: build a cron handler bound to this agent. Hand the
+  // result to `davepi-plugin-cron`'s `register(name, { schedule, handler })`.
+  agent.scheduledSkill = (opts) => createScheduledHandler({ agent, ...opts });
+  return agent;
 }
 
 async function startAgent(overrides = {}) {
@@ -40,4 +45,6 @@ module.exports = {
   createHttpApp,
   runTurn,
   buildConfig,
+  createScheduledHandler,
+  runScheduledSkill,
 };

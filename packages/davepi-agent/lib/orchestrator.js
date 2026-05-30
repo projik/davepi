@@ -222,9 +222,19 @@ async function runTurn({
   history = [],
   userMessage,
   onEvent = () => {},
+  // Optional cooperative-cancellation signal (e.g. a cron lease's
+  // `AbortSignal`). When supplied it's forwarded to MCP tool calls (via the
+  // channel context) and to the model stream, so a lost lease stops the run
+  // promptly instead of letting tool calls / generation continue.
+  signal,
 }) {
   const { streamText, jsonSchema } = await import('ai');
-  const allTools = await mcpClient.listTools(channelCtx);
+  // Carry the abort signal on the context the MCP client reads, so in-flight
+  // tool calls are cancellable. Merge non-destructively when the caller
+  // hasn't already attached it.
+  const ctx =
+    signal && !(channelCtx && channelCtx.signal) ? { ...channelCtx, signal } : channelCtx;
+  const allTools = await mcpClient.listTools(ctx);
 
   const routed = shouldRoute(allTools.length, config.tools.limit);
   let exposedMcpTools;
@@ -232,10 +242,10 @@ async function runTurn({
   if (routed) {
     const resources = deriveResources(allTools);
     const routerState = { activeResource: null };
-    routerTools = buildRouterTools({ resources, state: routerState, mcpClient, channelCtx });
+    routerTools = buildRouterTools({ resources, state: routerState, mcpClient, channelCtx: ctx });
     exposedMcpTools = {};
   } else {
-    exposedMcpTools = adaptMcpTools(allTools, mcpClient, channelCtx, jsonSchema);
+    exposedMcpTools = adaptMcpTools(allTools, mcpClient, ctx, jsonSchema);
   }
 
   const renderTools = config.tools.includeRender
@@ -252,11 +262,11 @@ async function runTurn({
   const session = await startSession({
     config,
     mcpClient,
-    channelCtx,
-    fetchPersona: makePersonaFetcher({ config, mcpClient, channelCtx }),
-    fetchSkills: makeSkillsFetcher({ config, mcpClient, channelCtx }),
-    fetchMemory: makeMemoryFetcher({ config, mcpClient, channelCtx }),
-    fetchProfile: makeProfileFetcher({ mcpClient, channelCtx }),
+    channelCtx: ctx,
+    fetchPersona: makePersonaFetcher({ config, mcpClient, channelCtx: ctx }),
+    fetchSkills: makeSkillsFetcher({ config, mcpClient, channelCtx: ctx }),
+    fetchMemory: makeMemoryFetcher({ config, mcpClient, channelCtx: ctx }),
+    fetchProfile: makeProfileFetcher({ mcpClient, channelCtx: ctx }),
     passedHistory: history,
     log: logger,
   });
@@ -274,6 +284,7 @@ async function runTurn({
     tools,
     maxSteps: config.llm.maxSteps,
     temperature: config.llm.temperature,
+    abortSignal: signal,
     onStepFinish({ toolCalls, toolResults }) {
       if (Array.isArray(toolCalls)) {
         for (const c of toolCalls) onEvent({ type: 'tool_call', name: c.toolName, args: c.args });
