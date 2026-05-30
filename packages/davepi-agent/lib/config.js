@@ -31,6 +31,20 @@ function buildConfig(overrides = {}) {
     davepiUrl: env.DAVEPI_URL || fileConfig.davepiUrl || 'http://localhost:5050',
     mcpPath: env.DAVEPI_MCP_PATH || fileConfig.mcpPath || '/mcp',
 
+    // Which agent this process is. Keys the persona (and, in later
+    // tickets, memory/skills) row this agent reads as prompt slot #1.
+    // Unset → no persona lookup, default prompt (zero-config).
+    agent: {
+      key: env.AGENT_KEY || fileConfig.agent?.key || null,
+      // Per-process persona cache TTL. Personas are near-static, so the
+      // lookup is cached per agentKey to avoid an MCP round-trip every
+      // turn. Set 0 to disable and fetch on every turn (strict immediacy).
+      personaCacheTtlSeconds: asInt(
+        env.AGENT_PERSONA_CACHE_TTL_SECONDS,
+        fileConfig.agent?.personaCacheTtlSeconds ?? 60
+      ),
+    },
+
     auth: {
       mode: env.AGENT_AUTH_MODE || fileConfig.auth?.mode || 'service',
       bearer: env.DAVEPI_BEARER || fileConfig.auth?.bearer || null,

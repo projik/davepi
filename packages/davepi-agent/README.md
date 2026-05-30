@@ -89,6 +89,13 @@ Per-user auth:
 | `AGENT_COOKIE_SECURE`      | `true` (default) — emits `Secure` on the session cookie. Set `false` for HTTP-only dev |
 | `STORE_URL`                | Where to persist refresh tokens. `file:./davepi-agent-store.json` (default) or `memory:` |
 
+Persona (optional):
+
+| Variable                            | Purpose                                                                                          |
+| ----------------------------------- | ------------------------------------------------------------------------------------------------ |
+| `AGENT_KEY`                         | Which agent this process is (e.g. `support`). Selects the `agentPersona` row used as prompt slot #1. Unset → built-in default prompt |
+| `AGENT_PERSONA_CACHE_TTL_SECONDS`   | Per-process cache TTL for the persona lookup (default `60`). Set `0` to fetch on every turn (strict immediacy) |
+
 Linking flow (per-user mode): on first contact from an unlinked user the
 agent returns a one-time link URL (`<agent>/link/<nonce>`). The user opens
 it, signs in via a small HTML form, and the agent calls davepi's
