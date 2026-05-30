@@ -61,7 +61,8 @@ if (String(process.env.TRUST_PROXY || '').toLowerCase() === 'true') {
 }
 
 // Default helmet (CSP enabled) for all routes. Swagger UI, Apollo's
-// GraphQL Playground, and the admin SPA need inline scripts / styles
+// embedded Sandbox (served at /graphql when introspection is on), and
+// the admin SPA need inline scripts / styles
 // that the default CSP would block, so CSP and
 // crossOriginEmbedderPolicy are dropped only for those paths.
 // (ant-design in particular renders inline styles for every dynamic
@@ -130,7 +131,14 @@ app.use((req, res, next) => {
   return next();
 });
 
-const buildGraphqlContext = ({ req }) => {
+// Apollo Server v4 takes the context resolver on the Express
+// integration (`expressMiddleware`) rather than the server
+// constructor, and the resolver is async. The return shape is
+// unchanged — `{ user }` — so scopeResolver's `ctx.user` reads exactly
+// as before. clientAuth (mounted on /graphql above) has already
+// resolved an X-Client-Id header into a synthetic req.user by the time
+// this runs, so the Bearer-less fallback keeps public-read parity.
+const buildGraphqlContext = async ({ req }) => {
   const header = req.headers.authorization || '';
   const token = header.replace(/^bearer\s+/i, '').trim();
   if (!token) {

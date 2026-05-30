@@ -20,7 +20,8 @@ beforeAll(async () => {
   app = require('../app');
   request = require('supertest');
 
-  // Apollo applyMiddleware mounts /graphql asynchronously
+  // Apollo's expressMiddleware mounts /graphql asynchronously
+  // (await server.start() runs inside rebuildGraphQL)
   if (app.locals && app.locals.ready) await app.locals.ready;
 }, 60000);
 

@@ -193,7 +193,7 @@ NODE_ENV=<development|production>
 
 - **express**: Web framework
 - **mongoose**: MongoDB ODM
-- **apollo-server-express**: GraphQL server
+- **@apollo/server** + **@as-integrations/express4**: GraphQL server (Apollo Server v5)
 - **graphql-compose-mongoose**: Auto-generate GraphQL from Mongoose
 - **jsonwebtoken**: JWT authentication
 - **bcryptjs**: Password hashing
@@ -224,7 +224,7 @@ npm run dev        # Dev mode (ignores swagger changes)
 ### Testing Endpoints
 
 - **Swagger UI**: `http://localhost:{port}/api-docs`
-- **GraphQL Playground**: `http://localhost:{port}/graphql`
+- **Apollo Sandbox**: `http://localhost:{port}/graphql/` (when introspection is on — i.e. outside production)
 - **Swagger JSON**: `http://localhost:{port}/api-docs/swagger.json`
 
 ## Important Patterns
@@ -392,7 +392,7 @@ Plugins run after every initial schema is loaded, in declaration order, and are 
 
 ## GraphQL Usage
 
-Access GraphQL Playground at `http://localhost:{port}/graphql`
+Access Apollo Sandbox at `http://localhost:{port}/graphql/` (served outside production, gated on `introspection`)
 
 Example queries:
 ```graphql
