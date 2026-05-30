@@ -53,26 +53,37 @@ function persistenceEnabled(config) {
 }
 
 function sessionKeyParts(config, channelCtx) {
+  // A conversation is finer-grained than an end-user: Slack scopes by
+  // thread (`channel::thread_ts`), so two threads from the same user are
+  // distinct transcripts and must NOT share a row (cross-thread / DM →
+  // public-channel context leakage). Channels supply `conversationId`
+  // for that scope; we fall back to `channelUserId` for channels with no
+  // sub-user concept (e.g. one ongoing HTTP conversation per logged-in
+  // user). `channelUserId` is still recorded for the per-user profile
+  // lookup and audit, but it is NOT the persistence key.
+  const channelUserId = (channelCtx && channelCtx.channelUserId) || null;
   return {
     agentKey: (config && config.agent && config.agent.key) || null,
     channel: (channelCtx && channelCtx.channel) || null,
-    channelUserId: (channelCtx && channelCtx.channelUserId) || null,
+    channelUserId,
+    conversationId: (channelCtx && channelCtx.conversationId) || channelUserId,
   };
 }
 
-// Persist only when we have a stable identity to key the row on. Service
-// mode (no channelUserId) keeps the channel-managed round-trip instead.
+// Persist only when we have a stable conversation scope to key the row
+// on. Service mode (no channelUserId / conversationId) keeps the
+// channel-managed round-trip instead.
 function canPersist(config, channelCtx) {
   if (!persistenceEnabled(config)) return false;
-  const { agentKey, channel, channelUserId } = sessionKeyParts(config, channelCtx);
-  return Boolean(agentKey && channel && channelUserId);
+  const { agentKey, channel, conversationId } = sessionKeyParts(config, channelCtx);
+  return Boolean(agentKey && channel && conversationId);
 }
 
 async function loadConversationRecord({ mcpClient, channelCtx, parts }) {
   const raw = await mcpClient.callTool(
     'list_conversation',
     {
-      filter: { agentKey: parts.agentKey, channel: parts.channel, channelUserId: parts.channelUserId },
+      filter: { agentKey: parts.agentKey, channel: parts.channel, conversationId: parts.conversationId },
       perPage: 1,
     },
     channelCtx
@@ -119,7 +130,7 @@ async function startSession({
 
   if (!canPersist(config, channelCtx)) {
     const parts = sessionKeyParts(config, channelCtx);
-    const key = `${parts.agentKey || '-'}::${parts.channel || '-'}::${parts.channelUserId || '-'}`;
+    const key = `${parts.agentKey || '-'}::${parts.channel || '-'}::${parts.conversationId || '-'}`;
     const ttl = sessionIdleMs(config);
     const now = Date.now();
     let system;
@@ -190,6 +201,7 @@ async function startSession({
               record: {
                 agentKey: parts.agentKey,
                 channel: parts.channel,
+                conversationId: parts.conversationId,
                 channelUserId: parts.channelUserId,
                 ...fields,
               },

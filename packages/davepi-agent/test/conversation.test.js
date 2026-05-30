@@ -4,11 +4,13 @@
  * Frozen-snapshot session + conversation persistence (ticket B).
  *
  * Exercises lib/conversation.js against an mcpClient stub so we can assert
- * the three behavioural acceptance criteria without a live backend:
+ * the behavioural acceptance criteria without a live backend:
  *   - a fact taught in session 1 appears (via a re-frozen snapshot) in
  *     session 2;
  *   - the prefix is reused byte-for-byte within a session;
- *   - mid-session memory writes do NOT change the in-flight prefix.
+ *   - mid-session memory writes do NOT change the in-flight prefix;
+ *   - conversations are scoped per conversationId (Slack thread), so two
+ *     threads from one user do not share a transcript.
  */
 
 const test = require('node:test');
@@ -20,29 +22,45 @@ const quietLog = { warn() {}, info() {}, error() {} };
 
 const persona = (row) => async () => row;
 const memory = (row) => async () => row;
-const profile = (row) => async () => row;
 
-// A minimal mcpClient stub backed by a single in-memory conversation row,
-// so update_conversation/create_conversation/list_conversation round-trip.
+// A minimal mcpClient stub backed by a Map of conversation rows keyed by
+// conversationId, so list/create/update round-trip and distinct
+// conversations stay distinct.
 function convoStub(initial = null) {
-  let row = initial; // { _id, history, systemSnapshot, lastTurnAt, ... } | null
+  const rows = new Map(); // conversationId -> row
+  let lastTouched = null;
+  let idSeq = 0;
   const calls = [];
   const wrap = (obj) => ({ content: [{ type: 'text', text: JSON.stringify(obj) }] });
+  if (initial) {
+    rows.set(initial.conversationId, initial);
+    lastTouched = initial;
+  }
   return {
-    get row() { return row; },
+    get row() { return lastTouched; },
+    rowFor(cid) { return rows.get(cid) || null; },
     calls,
     async callTool(name, args) {
       calls.push({ name, args });
       if (name === 'list_conversation') {
+        const cid = args.filter && args.filter.conversationId;
+        const row = rows.get(cid) || null;
         return wrap({ results: row ? [row] : [], totalResults: row ? 1 : 0 });
       }
       if (name === 'create_conversation') {
-        row = { _id: 'c1', ...args.record };
+        const row = { _id: `c${++idSeq}`, ...args.record };
+        rows.set(row.conversationId, row);
+        lastTouched = row;
         return wrap(row);
       }
       if (name === 'update_conversation') {
-        row = { ...row, ...args.record };
-        return wrap(row);
+        let target = null;
+        for (const r of rows.values()) if (r._id === args.id) target = r;
+        if (target) {
+          Object.assign(target, args.record);
+          lastTouched = target;
+        }
+        return wrap(target || {});
       }
       return wrap({});
     },
@@ -50,10 +68,13 @@ function convoStub(initial = null) {
 }
 
 const baseConfig = { agent: { key: 'support', sessionIdleSeconds: 1800 }, llm: {} };
-const ctx = { channel: 'slack', channelUserId: 'U1' };
+const ctx = { channel: 'slack', channelUserId: 'U1', conversationId: 'C1::T1' };
 
-test('canPersist requires agentKey + channel + channelUserId', () => {
+test('canPersist requires agentKey + channel + a conversation scope', () => {
   assert.equal(canPersist(baseConfig, ctx), true);
+  // No conversationId, but channelUserId is a valid fallback scope.
+  assert.equal(canPersist(baseConfig, { channel: 'slack', channelUserId: 'U1' }), true);
+  // Service mode: neither conversationId nor channelUserId → no persistence.
   assert.equal(canPersist(baseConfig, { channel: 'http', channelUserId: null }), false);
   assert.equal(canPersist({ agent: {} }, ctx), false);
   assert.equal(
@@ -78,26 +99,30 @@ test('first turn snapshots, persists the prefix, and stores history', async () =
   assert.deepEqual(session.history, []);
 
   await session.commit([{ role: 'user', content: 'hi' }, { role: 'assistant', content: 'hello' }]);
-  // A conversation row now exists carrying the frozen snapshot + history.
-  assert.ok(mcp.row);
-  assert.equal(mcp.row.systemSnapshot, session.system);
-  assert.deepEqual(JSON.parse(mcp.row.history).length, 2);
+  // A conversation row now exists carrying the frozen snapshot + history,
+  // keyed by the conversationId (not just the user).
+  const row = mcp.rowFor('C1::T1');
+  assert.ok(row);
+  assert.equal(row.conversationId, 'C1::T1');
+  assert.equal(row.channelUserId, 'U1');
+  assert.equal(row.systemSnapshot, session.system);
+  assert.deepEqual(JSON.parse(row.history).length, 2);
 });
 
 test('a continuing turn reuses the frozen snapshot byte-for-byte', async () => {
   _resetSessionCaches();
-  // Existing row from a recent turn (lastTurnAt = now) with a stored snapshot.
   const frozen = 'FROZEN PREFIX v1';
   const mcp = convoStub({
     _id: 'c1',
     agentKey: 'support',
     channel: 'slack',
+    conversationId: 'C1::T1',
     channelUserId: 'U1',
     history: JSON.stringify([{ role: 'user', content: 'earlier' }]),
     systemSnapshot: frozen,
     lastTurnAt: new Date().toISOString(),
   });
-  // Memory now holds a DIFFERENT fact — but the in-flight prefix must not change.
+  // Memory now holds a DIFFERENT fact — the in-flight prefix must not change.
   const session = await startSession({
     config: baseConfig,
     mcpClient: mcp,
@@ -109,25 +134,22 @@ test('a continuing turn reuses the frozen snapshot byte-for-byte', async () => {
   assert.equal(session.isNewSession, false);
   assert.equal(session.system, frozen); // reused, not reassembled
   assert.doesNotMatch(session.system, /Fact B/);
-  // Persisted history is loaded as the base, not the (empty) passed history.
   assert.equal(session.history.length, 1);
 });
 
 test('a fact taught in session 1 appears in session 2 (after an idle gap)', async () => {
   _resetSessionCaches();
-  // Row from session 1: stale lastTurnAt (2 hours ago) and an old snapshot.
   const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
   const mcp = convoStub({
     _id: 'c1',
     agentKey: 'support',
     channel: 'slack',
+    conversationId: 'C1::T1',
     channelUserId: 'U1',
     history: JSON.stringify([{ role: 'user', content: 's1' }]),
     systemSnapshot: 'OLD PREFIX (no fact)',
     lastTurnAt: twoHoursAgo,
   });
-  // Session 2: the idle gap exceeds sessionIdleSeconds, so the snapshot is
-  // re-frozen and picks up the fact recorded during session 1.
   const session = await startSession({
     config: baseConfig,
     mcpClient: mcp,
@@ -138,14 +160,38 @@ test('a fact taught in session 1 appears in session 2 (after an idle gap)', asyn
   });
   assert.equal(session.isNewSession, true);
   assert.match(session.system, /taught in session 1/);
-  // History from session 1 still carries over.
   assert.equal(session.history.length, 1);
+});
+
+test('two Slack threads from the same user do not share a transcript', async () => {
+  _resetSessionCaches();
+  const mcp = convoStub(null);
+  const u = 'U1';
+  const thread1 = { channel: 'slack', channelUserId: u, conversationId: 'C::T1' };
+  const thread2 = { channel: 'slack', channelUserId: u, conversationId: 'C::T2' };
+
+  // Thread 1 records a (private) transcript.
+  const s1 = await startSession({
+    config: baseConfig, mcpClient: mcp, channelCtx: thread1, passedHistory: [], log: quietLog,
+  });
+  await s1.commit([{ role: 'user', content: 'secret in thread 1' }]);
+
+  // Thread 2 is a separate conversation: brand-new, empty history — it
+  // must NOT inherit thread 1's transcript.
+  const s2 = await startSession({
+    config: baseConfig, mcpClient: mcp, channelCtx: thread2, passedHistory: [], log: quietLog,
+  });
+  assert.equal(s2.isNewSession, true);
+  assert.deepEqual(s2.history, []);
+  // Each thread has its own row.
+  assert.ok(mcp.rowFor('C::T1'));
+  assert.equal(mcp.rowFor('C::T2'), null); // not created until s2 commits
 });
 
 test('service-mode (no channelUserId) freezes a snapshot in-process and never persists', async () => {
   _resetSessionCaches();
   const mcp = convoStub(null);
-  const serviceCtx = { channel: 'http', channelUserId: null };
+  const serviceCtx = { channel: 'http', channelUserId: null, conversationId: null };
   const first = await startSession({
     config: baseConfig,
     mcpClient: mcp,
@@ -157,11 +203,8 @@ test('service-mode (no channelUserId) freezes a snapshot in-process and never pe
   });
   assert.equal(first.persisted, false);
   assert.match(first.system, /Tenant fact\./);
-  // Channel-supplied history passes straight through.
   assert.deepEqual(first.history, [{ role: 'user', content: 'seed' }]);
 
-  // Second turn within the idle window reuses the cached snapshot even if
-  // memory changed — frozen for cache stability.
   const second = await startSession({
     config: baseConfig,
     mcpClient: mcp,
@@ -172,9 +215,7 @@ test('service-mode (no channelUserId) freezes a snapshot in-process and never pe
   });
   assert.equal(second.system, first.system);
   assert.doesNotMatch(second.system, /Changed fact/);
-  // No conversation row was ever written.
-  assert.equal(mcp.calls.filter((c) => c.name !== undefined && c.name.endsWith('_conversation') && c.name.startsWith('create')).length, 0);
-  assert.equal(mcp.row, null);
+  assert.equal(mcp.calls.length, 0); // nothing ever written or read
 });
 
 test('a conversation load failure degrades to non-persistent rather than throwing', async () => {

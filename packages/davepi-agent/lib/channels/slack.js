@@ -73,11 +73,15 @@ async function handleMessage({ app, event, client, config, model, mcpClient, aut
   const text = (event.text || '').replace(/<@[^>]+>/g, '').trim();
   if (!text) return;
 
+  const key = threadKey(event);
   const channelCtx = {
     channel: 'slack',
     channelUserId: slackUserId,
+    // Conversation scope is the thread, not the user: keeps each
+    // thread/DM a separate persisted transcript so context can't leak
+    // across them. (Mirrors the in-memory `key` used below.)
+    conversationId: key,
   };
-  const key = threadKey(event);
   const history = conversationHistory.get(key) || [];
 
   let assembledText = '';

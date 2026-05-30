@@ -54,6 +54,7 @@ describe('conversation: tenant isolation', () => {
       {
         agentKey: 'support',
         channel: 'slack',
+        conversationId: 'C1::T1',
         channelUserId: 'U1',
         history: JSON.stringify([{ role: 'user', content: 'hi' }]),
       },
@@ -79,6 +80,7 @@ describe('conversation: agent persists and resumes its own history', () => {
             record: {
               agentKey: 'support',
               channel: 'slack',
+              conversationId: 'C1::T1',
               channelUserId: 'U1',
               history: JSON.stringify([{ role: 'user', content: 'first' }]),
               systemSnapshot: 'FROZEN PREFIX',
@@ -93,7 +95,7 @@ describe('conversation: agent persists and resumes its own history', () => {
       const list = parseStructured(
         await mcp.client.callTool({
           name: 'list_conversation',
-          arguments: { filter: { agentKey: 'support', channel: 'slack', channelUserId: 'U1' } },
+          arguments: { filter: { agentKey: 'support', channel: 'slack', conversationId: 'C1::T1' } },
         })
       );
       expect(list.results.length).toBe(1);
@@ -115,12 +117,22 @@ describe('conversation: agent persists and resumes its own history', () => {
     }
   });
 
-  test('one conversation per (tenant, agentKey, channel, channelUserId)', async () => {
+  test('one conversation per (tenant, agentKey, channel, conversationId)', async () => {
     const a = await registerUser(ctx.request, ctx.app);
-    const body = { agentKey: 'support', channel: 'slack', channelUserId: 'U7' };
+    const body = { agentKey: 'support', channel: 'slack', conversationId: 'C9::T1', channelUserId: 'U7' };
     const first = await post(PATH, body, a.token);
     expect(first.status).toBe(201);
     const dup = await post(PATH, body, a.token);
     expect(dup.status).toBe(409);
+  });
+
+  test('same user, different Slack threads → distinct conversation rows', async () => {
+    const a = await registerUser(ctx.request, ctx.app);
+    const base = { agentKey: 'support', channel: 'slack', channelUserId: 'U7' };
+    const t1 = await post(PATH, { ...base, conversationId: 'C::T1' }, a.token);
+    const t2 = await post(PATH, { ...base, conversationId: 'C::T2' }, a.token);
+    expect(t1.status).toBe(201);
+    expect(t2.status).toBe(201); // not a 409 — different thread, different row
+    expect(t1.body._id).not.toBe(t2.body._id);
   });
 });
