@@ -35,7 +35,31 @@
  * `history` and `systemSnapshot` are stored as JSON / text strings so
  * the transcript shape stays opaque to the framework's GraphQL type
  * generation (the same approach `agentPersona.proposedPatch` takes).
+ *
+ * **Resolution is the learning-loop trigger (docs/agent-learning-layer.md
+ * §7, #132).** `status` is a one-way state machine — `open → resolved`
+ * (the conversation reached a good outcome) or `open → abandoned` (it
+ * petered out / was dropped); both are terminal. The agent (or an
+ * operator) closes a conversation by transitioning `status` over the
+ * normal update surface, which is davepi-native and works on REST,
+ * GraphQL, *and* MCP alike. There's no field ACL on `status`, so the
+ * agent's service role can resolve its own conversations.
+ *
+ * Arriving at `resolved` fires an `onEnter` hook that emits a dedicated
+ * `conversation.resolved` record event on `utils/events.js` carrying the
+ * **full transcript**. We emit our own event rather than leaning on the
+ * generic `${path}.transitioned` one for two reasons: it's the exact
+ * semantic signal the learning loop subscribes to, and — critically —
+ * the MCP/GraphQL `transitioned` events deliberately omit the `record`
+ * payload, so a subscriber there would have no `history` to extract a
+ * skill from. The event is the seam the queue plugin consumes
+ * **off-thread** (extraction is slow + best-effort), so resolving a
+ * conversation never blocks the response. `userId` rides as the tenant
+ * owner so the extraction worker can scope any proposed skill back to
+ * the originating account.
  */
+const { emitRecordEvent } = require('../../../utils/events');
+
 module.exports = {
   path: 'conversation',
   collection: 'conversation',
@@ -56,6 +80,46 @@ module.exports = {
     { name: 'systemSnapshot', type: String },
     { name: 'snapshotAt', type: Date },
     { name: 'lastTurnAt', type: Date },
+    // Lifecycle. `stampInitialStates` forces `open` on every create
+    // surface; the agent (or an operator) drives the one-way close.
+    // `resolved` is the learning-loop trigger; `abandoned` lets a
+    // conversation be retired without proposing a skill. Both are
+    // terminal — a closed conversation isn't reopened in place.
+    {
+      name: 'status',
+      type: String,
+      enum: ['open', 'resolved', 'abandoned'],
+      default: 'open',
+      stateMachine: {
+        initial: 'open',
+        states: ['open', 'resolved', 'abandoned'],
+        transitions: {
+          open: ['resolved', 'abandoned'],
+          resolved: [],
+          abandoned: [],
+        },
+        onEnter: {
+          // Best-effort: a thrown emit must never roll back the
+          // transition (same posture as audit / afterUpdate). The
+          // queue plugin's `conversation.resolved` subscriber turns
+          // this into a background skill-extraction job.
+          resolved: async (record) => {
+            emitRecordEvent({
+              type: 'conversation.resolved',
+              version: 'v1',
+              // The conversation owner is the tenant; scope any proposed
+              // skill back to this account, not the resolver's identity.
+              userId: record && record.userId != null ? String(record.userId) : null,
+              recordId: record && record._id != null ? String(record._id) : null,
+              // Full row (incl. the serialized `history` transcript) so a
+              // subscriber has everything the extraction worker needs
+              // without a follow-up read.
+              record,
+            });
+          },
+        },
+      },
+    },
   ],
   compositeIndex: [
     { userId: 1, agentKey: 1, channel: 1, conversationId: 1 },

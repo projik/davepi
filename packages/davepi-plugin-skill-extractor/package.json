@@ -1,0 +1,53 @@
+{
+  "name": "davepi-plugin-skill-extractor",
+  "version": "0.1.0",
+  "description": "The learning loop for @davepi/agent: resolved conversations are queued to a fresh extraction agent that proposes reusable runbooks as governed draft skills (a human approves before they reach the prompt). Subscribes to conversation.resolved on the record bus and runs off-thread via davepi-plugin-queue.",
+  "license": "ISC",
+  "homepage": "https://docs.davepi.dev/features/plugins/",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/projik/davepi.git",
+    "directory": "packages/davepi-plugin-skill-extractor"
+  },
+  "keywords": [
+    "davepi",
+    "davepi-plugin",
+    "agent",
+    "ai",
+    "llm",
+    "skills",
+    "learning"
+  ],
+  "main": "index.js",
+  "files": [
+    "index.js",
+    "lib",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "peerDependencies": {
+    "davepi": ">=1.0.5",
+    "davepi-plugin-queue": ">=0.1.0",
+    "ai": "^4.0.0",
+    "@ai-sdk/anthropic": "^1.0.0"
+  },
+  "peerDependenciesMeta": {
+    "davepi": {
+      "optional": false
+    },
+    "davepi-plugin-queue": {
+      "optional": false
+    },
+    "ai": {
+      "optional": true
+    },
+    "@ai-sdk/anthropic": {
+      "optional": true
+    }
+  },
+  "scripts": {
+    "test": "node --test test/*.test.js"
+  }
+}
