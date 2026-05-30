@@ -37,9 +37,24 @@ const DEFAULT_SESSION_IDLE_SECONDS = 30 * 60;
 // prefix stays byte-stable within a session even without a DB row.
 const snapshotCache = new Map();
 
-// Test seam: drop cached snapshots so a unit test starts cold.
+// Test seams: drop cached snapshots so a unit test starts cold, and peek
+// at the cache size to assert eviction.
 function _resetSessionCaches() {
   snapshotCache.clear();
+}
+function _snapshotCacheSize() {
+  return snapshotCache.size;
+}
+
+// Drop every entry past TTL. Run opportunistically when a new snapshot is
+// assembled (i.e. on the new-session rate, not every turn), so a
+// long-lived process with churning session keys can't grow the Map
+// without bound — without it, keys that are never revisited live forever.
+function sweepSnapshotCache(ttl, now) {
+  if (ttl <= 0) return;
+  for (const [k, v] of snapshotCache) {
+    if (now - v.at >= ttl) snapshotCache.delete(k);
+  }
 }
 
 function sessionIdleMs(config) {
@@ -133,19 +148,28 @@ async function startSession({
     const key = `${parts.agentKey || '-'}::${parts.channel || '-'}::${parts.conversationId || '-'}`;
     const ttl = sessionIdleMs(config);
     const now = Date.now();
-    let system;
     const hit = snapshotCache.get(key);
-    if (ttl > 0 && hit && now - hit.at < ttl) {
+    // Reused only when there's a *live* (non-expired) entry. An expired
+    // hit is a new session: we reassemble below, so isNewSession must be
+    // true (the earlier `!hit` reported a stale entry as a continuation).
+    const reused = ttl > 0 && hit && now - hit.at < ttl;
+    let system;
+    if (reused) {
       system = hit.system;
     } else {
       system = await assemble();
-      if (ttl > 0) snapshotCache.set(key, { system, at: now });
+      if (ttl > 0) {
+        sweepSnapshotCache(ttl, now); // bound growth: drop other expired keys
+        snapshotCache.set(key, { system, at: now }); // overwrites an expired entry
+      } else {
+        snapshotCache.delete(key); // ttl 0: never cache
+      }
     }
     return {
       persisted: false,
       system,
       history: passedHistory,
-      isNewSession: !hit,
+      isNewSession: !reused,
       async commit() {},
     };
   }
@@ -222,4 +246,5 @@ module.exports = {
   parseHistory,
   sessionIdleMs,
   _resetSessionCaches,
+  _snapshotCacheSize,
 };

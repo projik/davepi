@@ -16,7 +16,12 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-const { startSession, canPersist, _resetSessionCaches } = require('../lib/conversation');
+const {
+  startSession,
+  canPersist,
+  _resetSessionCaches,
+  _snapshotCacheSize,
+} = require('../lib/conversation');
 
 const quietLog = { warn() {}, info() {}, error() {} };
 
@@ -216,6 +221,65 @@ test('service-mode (no channelUserId) freezes a snapshot in-process and never pe
   assert.equal(second.system, first.system);
   assert.doesNotMatch(second.system, /Changed fact/);
   assert.equal(mcp.calls.length, 0); // nothing ever written or read
+});
+
+test('non-persistent snapshot: an expired entry is reassembled and flagged as a new session', async () => {
+  _resetSessionCaches();
+  const mcp = convoStub(null);
+  const cfg = { agent: { key: 'support', sessionIdleSeconds: 0.02 }, llm: {} };
+  const serviceCtx = { channel: 'http', channelUserId: null, conversationId: null };
+
+  const s1 = await startSession({
+    config: cfg, mcpClient: mcp, channelCtx: serviceCtx,
+    fetchMemory: memory({ body: 'v1' }), passedHistory: [], log: quietLog,
+  });
+  assert.equal(s1.isNewSession, true);
+  assert.match(s1.system, /v1/);
+
+  // Within TTL → reused, not a new session.
+  const s1b = await startSession({
+    config: cfg, mcpClient: mcp, channelCtx: serviceCtx,
+    fetchMemory: memory({ body: 'v2 (ignored while frozen)' }), passedHistory: [], log: quietLog,
+  });
+  assert.equal(s1b.isNewSession, false);
+  assert.equal(s1b.system, s1.system);
+
+  // Past TTL → reassembled with the new memory AND flagged new (the bug
+  // was reporting isNewSession=false here because a stale hit existed).
+  await new Promise((r) => setTimeout(r, 40));
+  const s2 = await startSession({
+    config: cfg, mcpClient: mcp, channelCtx: serviceCtx,
+    fetchMemory: memory({ body: 'v3' }), passedHistory: [], log: quietLog,
+  });
+  assert.equal(s2.isNewSession, true);
+  assert.match(s2.system, /v3/);
+});
+
+test('non-persistent snapshot cache evicts expired keys (bounded growth)', async () => {
+  _resetSessionCaches();
+  const mcp = convoStub(null);
+  // persistConversations:false forces the in-process cache path even
+  // though a conversationId is present, giving distinct cache keys.
+  const cfg = { agent: { key: 'support', sessionIdleSeconds: 0.02, persistConversations: false }, llm: {} };
+
+  for (let i = 0; i < 5; i++) {
+    await startSession({
+      config: cfg, mcpClient: mcp,
+      channelCtx: { channel: 'http', channelUserId: `u${i}`, conversationId: `u${i}` },
+      fetchMemory: memory({ body: 'x' }), passedHistory: [], log: quietLog,
+    });
+  }
+  assert.equal(_snapshotCacheSize(), 5);
+
+  // Let them all expire, then assemble one more — the opportunistic sweep
+  // drops the 5 stale keys, leaving only the fresh one.
+  await new Promise((r) => setTimeout(r, 40));
+  await startSession({
+    config: cfg, mcpClient: mcp,
+    channelCtx: { channel: 'http', channelUserId: 'fresh', conversationId: 'fresh' },
+    fetchMemory: memory({ body: 'x' }), passedHistory: [], log: quietLog,
+  });
+  assert.equal(_snapshotCacheSize(), 1);
 });
 
 test('a conversation load failure degrades to non-persistent rather than throwing', async () => {
