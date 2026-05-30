@@ -1,5 +1,6 @@
 const { setupTestApp, registerUser } = require('./helpers');
 const ApiKey = require('../model/apiKey');
+const ApiClient = require('../model/apiClient');
 const { sha256 } = require('../utils/tokens');
 
 const ctx = setupTestApp();
@@ -237,6 +238,57 @@ describe('API keys: privilege boundaries', () => {
     ).send({ name: 'second-gen' });
     expect(res.status).toBe(403);
     expect(res.body.error.code).toBe('FORBIDDEN');
+  });
+
+  test('an X-Client-Id caller cannot list or manage API keys', async () => {
+    // Public client IDs (storefronts etc.) resolve to a synthetic
+    // req.user for GET requests; the key-management routes must refuse
+    // them outright rather than running a tenant query under the
+    // client principal.
+    const clientId = 'pk_apikey_probe_001';
+    await ApiClient.deleteOne({ _id: clientId });
+    await ApiClient.create({
+      _id: clientId,
+      name: 'apikey-probe',
+      role: 'storefront',
+      status: 'active',
+      userId: 'system',
+    });
+
+    const res = await ctx
+      .request(ctx.app)
+      .get('/api/auth/api-keys')
+      .set('X-Client-Id', clientId);
+    expect(res.status).toBe(403);
+    expect(res.body.error.code).toBe('FORBIDDEN');
+  });
+
+  test('an X-Client-Id caller cannot run a GraphQL state-transition mutation', async () => {
+    // wrapStateTransition is a write path — client-authed callers must
+    // be refused before any record lookup, like every other write
+    // wrapper. `skill.status` carries a state machine, so the
+    // skillTransitionStatus mutation exists.
+    const clientId = 'pk_apikey_probe_002';
+    await ApiClient.deleteOne({ _id: clientId });
+    await ApiClient.create({
+      _id: clientId,
+      name: 'apikey-probe-2',
+      role: 'storefront',
+      status: 'active',
+      userId: 'system',
+    });
+
+    const res = await ctx
+      .request(ctx.app)
+      .post('/graphql/')
+      .set('X-Client-Id', clientId)
+      .send({
+        query:
+          'mutation { skillTransitionStatus(_id: "0123456789abcdef01234567", to: approved) { _id } }',
+      });
+    expect(res.status).toBe(200);
+    expect(res.body.errors).toBeDefined();
+    expect(res.body.errors[0].message).toMatch(/read-only/i);
   });
 
   test('tenant isolation: user A\'s key cannot read user B\'s docs', async () => {

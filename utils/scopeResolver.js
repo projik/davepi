@@ -621,6 +621,9 @@ const wrapStateTransition = ({
       throw new AuthenticationError('Authentication required');
     }
     requireScope(ctx.user, 'write');
+    // A transition is a write — refuse client-authed (X-Client-Id)
+    // callers, same as every other GraphQL write wrapper.
+    refuseClientWrite(ctx.user);
     const ownership = { _id: params._id, userId: ctx.user.user_id };
     const before = await Model.findOne(ownership).lean();
     if (!before) throw new ForbiddenError('Record not found');

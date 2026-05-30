@@ -409,9 +409,25 @@ app.post(
 const apiKeyAuth = require("./middleware/auth")(true);
 const SCOPE_VALUES = ["read", "write"];
 
+// Credential management is for real account principals only. These
+// routes live under `/api`, so `clientAuth` runs ahead of them and can
+// synthesise a `req.user` from an `X-Client-Id` header on GET requests;
+// `auth(true)` then skips its Bearer check because `req.user.user_id`
+// is already set. Guard explicitly — before any ApiKey query — so a
+// public client ID can neither enumerate nor manage account API keys.
+const rejectClientAuth = (req, res, next) => {
+  if (req.user && req.user.isClient) {
+    return next(
+      new ForbiddenError("Client-authenticated requests cannot manage API keys")
+    );
+  }
+  return next();
+};
+
 app.post(
   "/api/auth/api-keys",
   apiKeyAuth,
+  rejectClientAuth,
   asyncHandler(async (req, res) => {
     if (req.user.authMethod === "apiKey") {
       throw new ForbiddenError("API keys cannot mint other API keys");
@@ -472,6 +488,7 @@ app.post(
 app.get(
   "/api/auth/api-keys",
   apiKeyAuth,
+  rejectClientAuth,
   asyncHandler(async (req, res) => {
     const keys = await ApiKey.find({ userId: req.user.user_id })
       .select("-tokenHash")
@@ -484,6 +501,7 @@ app.get(
 app.delete(
   "/api/auth/api-keys/:id",
   apiKeyAuth,
+  rejectClientAuth,
   asyncHandler(async (req, res) => {
     const record = await ApiKey.findOneAndUpdate(
       { _id: req.params.id, userId: req.user.user_id, revokedAt: null },
