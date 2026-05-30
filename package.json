@@ -49,8 +49,9 @@
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1045.0",
     "@aws-sdk/s3-request-presigner": "^3.1045.0",
+    "@apollo/server": "^5.5.1",
+    "@as-integrations/express4": "^1.1.2",
     "@modelcontextprotocol/sdk": "^1.29.0",
-    "apollo-server-express": "^3.6.3",
     "async": "^3.2.3",
     "bcryptjs": "^2.4.3",
     "chokidar": "^5.0.0",
@@ -59,6 +60,7 @@
     "dotenv": "^10.0.0",
     "express": "^4.22.2",
     "express-rate-limit": "^8.5.1",
+    "graphql": "^16.11.0",
     "graphql-compose": "^9.0.7",
     "graphql-compose-mongoose": "^9.7.1",
     "helmet": "^8.1.0",
@@ -101,7 +103,7 @@
     ]
   },
   "engines": {
-    "node": ">=18"
+    "node": ">=20"
   },
   "repository": {
     "type": "git",

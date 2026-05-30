@@ -1,9 +1,10 @@
 ---
 title: GraphQL API
-description: Apollo Server v3 with auto-generated types and resolvers from every schema, every resolver wrapped for tenant scoping.
+description: Apollo Server v5 with auto-generated types and resolvers from every schema, every resolver wrapped for tenant scoping.
 ---
 
-Apollo Server v3 ships out of the box at `/graphql/`. The framework
+Apollo Server v5 (`@apollo/server` + `@as-integrations/express4`) ships
+out of the box at `/graphql/`. The framework
 walks the schema registry once at boot (and on every change in
 dev), composes a Mongoose-derived TC per schema via
 `graphql-compose-mongoose`, wraps every resolver in
@@ -79,15 +80,20 @@ supply them — the wrappers stamp them server-side.
 
 ## Auth
 
-Bearer JWT — exactly the same as REST. Apollo Server's request
-context picks up `Authorization: Bearer ...`, verifies it against
-`TOKEN_KEY`, and exposes `ctx.user` with `{ user_id, email, roles }`.
+Bearer JWT — exactly the same as REST. The context resolver (passed to
+`expressMiddleware`, not the server constructor, in v4+) picks up
+`Authorization: Bearer ...`, verifies it against `TOKEN_KEY`, and
+exposes `ctx.user` with `{ user_id, email, roles }`.
 
 ```js
-context: ({ req }) => ({
-  user: req.user,   // populated by auth middleware
-  // ... other things resolvers might need
-}),
+// Apollo Server v4+ takes the (async) context resolver on the Express
+// integration rather than the ApolloServer constructor.
+app.use('/graphql', expressMiddleware(server, {
+  context: async ({ req }) => ({
+    user: req.user,   // populated by auth middleware
+    // ... other things resolvers might need
+  }),
+}));
 ```
 
 Resolvers without auth context are rejected before they run via

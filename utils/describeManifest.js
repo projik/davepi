@@ -352,7 +352,7 @@ function buildManifest({ schemaLoader, appName, version } = {}) {
     },
     graphql: {
       endpoint: 'POST /graphql/',
-      playground: 'GET /graphql/ (development only — gated on NODE_ENV !== production)',
+      sandbox: 'GET /graphql/ — Apollo Sandbox (development only — gated on NODE_ENV !== production)',
     },
     schemas,
   };
