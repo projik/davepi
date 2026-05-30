@@ -135,13 +135,14 @@ async function startSession({
   mcpClient,
   channelCtx,
   fetchPersona,
+  fetchSkills,
   fetchMemory,
   fetchProfile,
   passedHistory = [],
   log = logger,
 }) {
   const assemble = () =>
-    assembleSystemPrompt({ config, fetchPersona, fetchMemory, fetchProfile, log });
+    assembleSystemPrompt({ config, fetchPersona, fetchSkills, fetchMemory, fetchProfile, log });
 
   if (!canPersist(config, channelCtx)) {
     const parts = sessionKeyParts(config, channelCtx);

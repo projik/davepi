@@ -338,11 +338,15 @@ describe('MCP server: restore / history / search / relation / file tools', () =>
     }
   });
 
-  test('search_<path>: not registered when no field is searchable', async () => {
+  test('search_<path>: not registered for a schema with no searchable field', async () => {
     const names = listToolNames(ctx.app.locals.schemaLoader);
-    // The seed schemas don't declare any `searchable: true` fields,
-    // so the search tool should be absent for every one of them.
-    expect(names.find((n) => n.startsWith('search_'))).toBeUndefined();
+    // Most seed schemas declare no `searchable: true` field, so they get
+    // no search tool. (`skill` is the exception — its name/description
+    // are searchable for the L0 index — and its `search_skill` tool is
+    // exercised by the schema-driven case below.)
+    expect(names).not.toContain('search_product');
+    expect(names).not.toContain('search_agentMemory');
+    expect(names).not.toContain('search_customerProfile');
   });
 
   test('search_<path>: registered and runs full-text when a field is searchable', async () => {

@@ -109,6 +109,31 @@ function makeMemoryFetcher({ config, mcpClient, channelCtx }) {
 }
 
 /**
+ * Build the L0 skill-index loader (prompt slot #3), or `null` when no
+ * `agentKey` is configured. Lists the `approved` skills for the agent
+ * through the schema-generated `list_skill` tool — the server-side
+ * `status: 'approved'` filter is what keeps draft/deprecated runbooks out
+ * of the prompt index, so an unreviewed self-authored skill never reaches
+ * a customer. Resolves to the full array of rows (capped by the prompt
+ * renderer), not just the first; a throw or empty result omits the slot.
+ */
+function makeSkillsFetcher({ config, mcpClient, channelCtx }) {
+  const agentKey = config && config.agent && config.agent.key;
+  if (!agentKey) return null;
+  return async () => {
+    const raw = await mcpClient.callTool(
+      'list_skill',
+      { filter: { agentKey, status: 'approved' }, perPage: 100, sort: 'useCount:desc' },
+      channelCtx
+    );
+    const norm = normalizeMcpResult(raw);
+    if (!norm || norm.error) return [];
+    const rows = norm.results || norm.records || [];
+    return Array.isArray(rows) ? rows : [];
+  };
+}
+
+/**
  * Build a customer-profile loader (prompt slot #5), or `null` when there
  * is no end-user to key on (service mode has none, so per-user profile
  * simply doesn't apply).
@@ -221,13 +246,15 @@ async function runTurn({
 
   // Start/resume the session: assemble (or reuse) the frozen prompt
   // snapshot and load durable history. The snapshot reads persona
-  // (slot 1), memory (slot 4) and customer profile (slot 5) once at
-  // session start and freezes them for the conversation.
+  // (slot 1), the approved-skill L0 index (slot 3), memory (slot 4) and
+  // customer profile (slot 5) once at session start and freezes them for
+  // the conversation.
   const session = await startSession({
     config,
     mcpClient,
     channelCtx,
     fetchPersona: makePersonaFetcher({ config, mcpClient, channelCtx }),
+    fetchSkills: makeSkillsFetcher({ config, mcpClient, channelCtx }),
     fetchMemory: makeMemoryFetcher({ config, mcpClient, channelCtx }),
     fetchProfile: makeProfileFetcher({ mcpClient, channelCtx }),
     passedHistory: history,
@@ -325,6 +352,7 @@ module.exports = {
   adaptMcpTools,
   normalizeMcpResult,
   makePersonaFetcher,
+  makeSkillsFetcher,
   makeMemoryFetcher,
   makeProfileFetcher,
   promptCachingEnabled,

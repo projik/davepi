@@ -10,9 +10,9 @@ const logger = require('./logger');
  *
  *   1. Persona (SOUL)            — identity, ticket A
  *   2. Operating contract        — the static framing (DEFAULT_*)
- *   3. Skill index (L0)          — ticket C (not yet)
- *   4. Agent memory (MEMORY)     — `agentMemory.body`, this ticket
- *   5. Customer profile (USER)   — `customerProfile`, this ticket
+ *   3. Skill index (L0)          — `approved` skills, ticket C
+ *   4. Agent memory (MEMORY)     — `agentMemory.body`, ticket B
+ *   5. Customer profile (USER)   — `customerProfile`, ticket B
  *   — volatile: history + new turn (added by the orchestrator)
  *
  * Slots 1–5 are snapshotted **once at session start** and frozen for the
@@ -54,6 +54,15 @@ const PROFILE_SECTIONS = [
   ['preferences', 'Preferences'],
   ['notes', 'Notes'],
 ];
+
+// Slot #3 caps. The skill index is an L0 teaser, not the runbook itself,
+// so each name/description line is held short and the whole index is
+// bounded — a tenant with hundreds of approved skills shouldn't flood the
+// cache-stable prefix. Beyond the cap the index truncates with a note so
+// the model knows more skills exist than are listed.
+const MAX_SKILL_NAME_CHARS = 120;
+const MAX_SKILL_DESC_CHARS = 300;
+const MAX_SKILLS_IN_INDEX = 50;
 
 // Per-section length cap. Text past this is almost certainly an accident
 // (or an attempt to flood the prefix), so we truncate and log rather than
@@ -142,6 +151,47 @@ function renderMemory(memory, { onTrip } = {}) {
 }
 
 /**
+ * Render the L0 skill index (slot #3) from a list of `approved` skill
+ * rows, or `null` when there are none usable. Each line carries the
+ * skill's `_id`, `name`, and `description` — enough for the model to
+ * decide to follow a skill and call `get_skill` for its full `body`
+ * (L1). The body itself is deliberately NOT in the index: that's the
+ * whole point of progressive disclosure.
+ *
+ * `name`/`description` come from agent-authored rows, so both pass
+ * through `sanitizeText` (capped tighter than a prose section — these are
+ * teasers) before they enter the prompt.
+ */
+function renderSkills(skills, { onTrip } = {}) {
+  if (!Array.isArray(skills) || skills.length === 0) return null;
+  const lines = [];
+  for (const skill of skills) {
+    if (!skill || typeof skill !== 'object') continue;
+    const name = sanitizeText(skill.name, { maxChars: MAX_SKILL_NAME_CHARS, onTrip });
+    if (!name) continue; // a skill with no name can't be referenced
+    const desc = sanitizeText(skill.description, { maxChars: MAX_SKILL_DESC_CHARS, onTrip });
+    const id = skill._id != null ? String(skill._id) : '';
+    const idTag = id ? ` (id: ${id})` : '';
+    lines.push(desc ? `- ${name}${idTag} — ${desc}` : `- ${name}${idTag}`);
+    if (lines.length >= MAX_SKILLS_IN_INDEX) break;
+  }
+  if (!lines.length) return null;
+  const more =
+    skills.length > lines.length
+      ? `\n\n(${skills.length - lines.length} more not shown — search with the skill list tool.)`
+      : '';
+  return (
+    '# Skills\n' +
+    'Approved runbooks you can follow. Each line is a name and what it is for; ' +
+    'when one fits the task, call `get_skill` with its id to read the full ' +
+    'procedure (the `body`) before following it — do not act from the summary ' +
+    'alone.\n\n' +
+    lines.join('\n') +
+    more
+  );
+}
+
+/**
  * Render a customerProfile row into the slot #5 block, or `null` when
  * there's nothing usable.
  */
@@ -184,24 +234,29 @@ async function loadBlock(fetch, render, { log, label }) {
  *
  *   - `config.llm.systemPrompt` is the operator's explicit override and,
  *     when set, becomes the operating-contract base (slot #2).
- *   - `fetchPersona` / `fetchMemory` / `fetchProfile`, when provided, are
- *     awaited to load each snapshot row. A throw or null result simply
- *     omits that slot, so a backend missing any of the schemas (or with
- *     no rows) degrades gracefully and the zero-config path is unchanged.
- *   - Order: persona (slot 1), operating contract (slot 2), memory
- *     (slot 4), profile (slot 5). With no rows at all the result is
- *     exactly the base prompt.
+ *   - `fetchPersona` / `fetchSkills` / `fetchMemory` / `fetchProfile`,
+ *     when provided, are awaited to load each snapshot. A throw or
+ *     null/empty result simply omits that slot, so a backend missing any
+ *     of the schemas (or with no rows) degrades gracefully and the
+ *     zero-config path is unchanged. `fetchSkills` resolves to a *list*
+ *     of `approved` skill rows (the L0 index); the rest resolve to a
+ *     single row.
+ *   - Order: persona (slot 1), operating contract (slot 2), skill index
+ *     (slot 3), memory (slot 4), profile (slot 5). With no rows at all
+ *     the result is exactly the base prompt.
  */
-async function assembleSystemPrompt({ config, fetchPersona, fetchMemory, fetchProfile, log = logger } = {}) {
+async function assembleSystemPrompt({ config, fetchPersona, fetchSkills, fetchMemory, fetchProfile, log = logger } = {}) {
   const base = (config && config.llm && config.llm.systemPrompt) || DEFAULT_SYSTEM_PROMPT;
 
   const personaBlock = await loadBlock(fetchPersona, renderPersona, { log, label: 'persona' });
+  const skillsBlock = await loadBlock(fetchSkills, renderSkills, { log, label: 'skills' });
   const memoryBlock = await loadBlock(fetchMemory, renderMemory, { log, label: 'memory' });
   const profileBlock = await loadBlock(fetchProfile, renderProfile, { log, label: 'profile' });
 
   const sections = [];
   if (personaBlock) sections.push(personaBlock); // slot 1
   sections.push(base); // slot 2
+  if (skillsBlock) sections.push(skillsBlock); // slot 3
   if (memoryBlock) sections.push(memoryBlock); // slot 4
   if (profileBlock) sections.push(profileBlock); // slot 5
 
@@ -211,6 +266,7 @@ async function assembleSystemPrompt({ config, fetchPersona, fetchMemory, fetchPr
 module.exports = {
   assembleSystemPrompt,
   renderPersona,
+  renderSkills,
   renderMemory,
   renderProfile,
   sanitizeText,
