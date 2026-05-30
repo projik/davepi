@@ -220,6 +220,50 @@ Include the token in the Authorization header for all protected endpoints:
 Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
 ```
 
+#### API keys (long-lived programmatic access)
+
+JWTs are short-lived and meant for interactive sessions. For CI jobs, scripts, and server-to-server callers, mint a long-lived, revocable, scope-limited **API key**. A request bearing an API key resolves to the same identity a JWT would, so tenant scoping, ACLs, and field-level visibility all apply unchanged — on REST **and** GraphQL.
+
+Mint a key (requires a JWT — an API key cannot mint another API key):
+
+```bash
+curl -X POST http://localhost:5050/api/auth/api-keys \
+  -H "Authorization: Bearer $JWT" \
+  -H "Content-Type: application/json" \
+  -d '{ "name": "CI deploy bot", "scopes": ["read", "write"], "expiresInDays": 90 }'
+```
+
+The response includes the plaintext key **once** — store it now; it is never retrievable again:
+
+```json
+{ "id": "663...", "prefix": "dpk_a1b2", "key": "dpk_a1b2c3...<96 hex chars>" }
+```
+
+Use it exactly like a JWT — as a bearer token:
+
+```bash
+curl http://localhost:5050/api/v1/product \
+  -H "Authorization: Bearer dpk_a1b2c3..."
+```
+
+- **Body fields:** `name` (required), `scopes` (optional, a non-empty subset of `["read", "write"]`; defaults to both), `expiresInDays` (optional, positive number; omit for a non-expiring key).
+- **Scopes** are coarse: `read` permits `GET` / GraphQL queries, `write` permits `POST`/`PUT`/`DELETE` / GraphQL mutations. A key missing the required scope is refused with `403`. (JWT sessions carry both scopes implicitly — no behaviour change.)
+- **Roles** are frozen from the minting user at creation and read from the key on every request, so a key can never be elevated past what its owner held when it was minted.
+- Only the SHA-256 hash of the key is stored. A revoked or expired key returns `401`.
+
+List your keys (the secret and its hash are never returned):
+
+```bash
+curl http://localhost:5050/api/auth/api-keys -H "Authorization: Bearer $JWT"
+```
+
+Revoke a key:
+
+```bash
+curl -X DELETE http://localhost:5050/api/auth/api-keys/$KEY_ID \
+  -H "Authorization: Bearer $JWT"
+```
+
 #### Public read access (no login, no JWT)
 
 For storefronts, marketing sites, and any other unauthenticated frontend, dAvePi resolves an `X-Client-Id` request header into a role. The header value is a public client ID issued through the admin-only `apiClient` resource — bake it into your SPA bundle.

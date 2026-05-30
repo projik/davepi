@@ -12,6 +12,7 @@ const {
 } = require('./acl');
 const { emitRecordEvent } = require('./events');
 const { runBeforeHook, runAfterHook } = require('./hooks');
+const { hasScope } = require('./scopes');
 const logger = require('./logger');
 
 const STAMPED_FIELDS = ['userId', 'accountId'];
@@ -19,6 +20,19 @@ const STAMPED_FIELDS = ['userId', 'accountId'];
 const refuseClientWrite = (user) => {
   if (user && user.isClient) {
     throw new ForbiddenError('Client-authenticated requests are read-only');
+  }
+};
+
+/**
+ * Gate a resolver on a coarse API-key scope. JWT and client-id
+ * sessions carry no `scopes` array and pass through unchanged (see
+ * utils/scopes.js); a scope-limited API key missing the required
+ * scope is refused. Mirrors the REST `requireScope` middleware so both
+ * surfaces enforce scopes identically.
+ */
+const requireScope = (user, scope) => {
+  if (!hasScope(user, scope)) {
+    throw new ForbiddenError(`API key missing required scope: ${scope}`);
   }
 };
 
@@ -232,6 +246,10 @@ const wrapFilter = (resolver, { schema, action, kind = 'write' } = {}) => {
     const userId = requireUser(rp);
     const user = userFromContext(rp);
 
+    // API-key scope: reads need 'read', every write-class kind
+    // (update / delete via updateMany/removeMany) needs 'write'.
+    requireScope(user, kind === 'read' ? 'read' : 'write');
+
     // Refuse client-authed callers on any mutation surface this
     // wrapper covers (updateMany/removeMany). Read-class kinds are
     // allowed through.
@@ -290,6 +308,7 @@ const wrapCreateOne = (resolver, { schema } = {}) => {
   return resolver.wrapResolve((next) => async (rp) => {
     const userId = requireUser(rp);
     const user = userFromContext(rp);
+    requireScope(user, 'write');
     refuseClientWrite(user);
     const filtered = filterWritable(rp.args.record || {}, schema, user, 'create');
     let stamped = { ...filtered, ...stampedValues(userId) };
@@ -323,6 +342,7 @@ const wrapCreateMany = (resolver, { schema } = {}) => {
   return resolver.wrapResolve((next) => async (rp) => {
     const userId = requireUser(rp);
     const user = userFromContext(rp);
+    requireScope(user, 'write');
     refuseClientWrite(user);
     rp.args.records = (rp.args.records || []).map((r) => {
       const filtered = filterWritable(r, schema, user, 'create');
@@ -349,6 +369,7 @@ const wrapFindById = (resolver, { schema } = {}) =>
   resolver.wrapResolve((next) => async (rp) => {
     const userId = requireUser(rp);
     const user = userFromContext(rp);
+    requireScope(user, 'read');
     ensureProjection(rp, ['userId']);
     const result = await next(rp);
     if (!result) return null;
@@ -365,6 +386,7 @@ const wrapFindByIds = (resolver, { schema } = {}) =>
   resolver.wrapResolve((next) => async (rp) => {
     const userId = requireUser(rp);
     const user = userFromContext(rp);
+    requireScope(user, 'read');
     ensureProjection(rp, ['userId']);
     const results = await next(rp);
     const bypass = bypassUserScopeForList(schema, user);
@@ -387,6 +409,8 @@ const wrapByIdMutation = (Model) => (resolver, { schema, action, kind = 'write' 
   return resolver.wrapResolve((next) => async (rp) => {
     const userId = requireUser(rp);
     const user = userFromContext(rp);
+    // updateById / removeById are both write-class — gate on 'write'.
+    requireScope(user, 'write');
     refuseClientWrite(user);
 
     const bypass =
@@ -497,6 +521,7 @@ const wrapAggregation = ({ type, args, description, runner }) => ({
     if (!ctx || !ctx.user || !ctx.user.user_id) {
       throw new AuthenticationError('Authentication required');
     }
+    requireScope(ctx.user, 'read');
     return runner({ user: ctx.user, params });
   },
 });
@@ -595,6 +620,7 @@ const wrapStateTransition = ({
     if (!ctx || !ctx.user || !ctx.user.user_id) {
       throw new AuthenticationError('Authentication required');
     }
+    requireScope(ctx.user, 'write');
     const ownership = { _id: params._id, userId: ctx.user.user_id };
     const before = await Model.findOne(ownership).lean();
     if (!before) throw new ForbiddenError('Record not found');

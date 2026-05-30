@@ -2,6 +2,7 @@ const crypto = require('crypto');
 const jwt = require('jsonwebtoken');
 const mongoose = require('mongoose');
 const RefreshToken = require('../model/refreshToken');
+const ApiKey = require('../model/apiKey');
 const { UnauthorizedError } = require('./errors');
 
 const ACCESS_TTL = process.env.ACCESS_TOKEN_TTL || '15m';
@@ -14,6 +15,50 @@ const sha256 = (input) =>
   crypto.createHash('sha256').update(input).digest('hex');
 
 const generateRefreshToken = () => crypto.randomBytes(48).toString('hex');
+
+// Programmatic API keys are prefixed so the auth middleware can route
+// a bearer value to the API-key path (Mongo lookup) instead of
+// jwt.verify by inspecting the first few characters alone — JWTs never
+// start with this. Public namespace, not a secret.
+const API_KEY_PREFIX = 'dpk_';
+
+const generateApiKey = () =>
+  `${API_KEY_PREFIX}${crypto.randomBytes(48).toString('hex')}`;
+
+/**
+ * Resolve a plaintext API key into the synthetic user shape used by
+ * both `req.user` (REST, via middleware/auth.js) and GraphQL
+ * `ctx.user` (via app.js's buildGraphqlContext). Atomically rejects
+ * revoked / expired keys and bumps `lastUsedAt` in one round-trip.
+ * Returns null on miss so each caller can shape its own auth failure.
+ *
+ * Roles and email come from the key record itself — never re-fetched
+ * from the User — so a key can't be elevated beyond what it was minted
+ * with even if the owner later gains roles.
+ */
+async function resolveApiKeyUser(token) {
+  const now = new Date();
+  const record = await ApiKey.findOneAndUpdate(
+    {
+      tokenHash: sha256(token),
+      revokedAt: null,
+      $or: [{ expiresAt: null }, { expiresAt: { $gt: now } }],
+    },
+    { $set: { lastUsedAt: now } },
+    { new: true }
+  );
+  if (!record) return null;
+  return {
+    user_id: record.userId,
+    email: record.email,
+    roles:
+      Array.isArray(record.roles) && record.roles.length
+        ? record.roles
+        : ['user'],
+    scopes: Array.isArray(record.scopes) ? record.scopes : [],
+    authMethod: 'apiKey',
+  };
+}
 
 const signAccessToken = (user) =>
   jwt.sign(
@@ -150,6 +195,9 @@ module.exports = {
   REFRESH_TTL_DAYS,
   signAccessToken,
   generateRefreshToken,
+  API_KEY_PREFIX,
+  generateApiKey,
+  resolveApiKeyUser,
   issueTokenPair,
   rotateRefreshToken,
   revokeRefreshToken,

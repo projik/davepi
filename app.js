@@ -25,12 +25,18 @@ const logger = require("./utils/logger");
 const {
   ValidationError,
   ConflictError,
+  ForbiddenError,
+  NotFoundError,
 } = require("./utils/errors");
 const {
   issueTokenPair,
   rotateRefreshToken,
   revokeRefreshToken,
+  generateApiKey,
+  resolveApiKeyUser,
+  API_KEY_PREFIX,
 } = require("./utils/tokens");
+const ApiKey = require("./model/apiKey");
 const { sendMail } = require("./utils/mailer");
 const PasswordResetToken = require("./model/passwordResetToken");
 const RefreshToken = require("./model/refreshToken");
@@ -130,7 +136,7 @@ app.use((req, res, next) => {
   return next();
 });
 
-const buildGraphqlContext = ({ req }) => {
+const buildGraphqlContext = async ({ req }) => {
   const header = req.headers.authorization || '';
   const token = header.replace(/^bearer\s+/i, '').trim();
   if (!token) {
@@ -140,6 +146,19 @@ const buildGraphqlContext = ({ req }) => {
     // call via `X-Client-Id` works on both.
     if (req.user && req.user.user_id) return { user: req.user };
     return { user: null };
+  }
+  // API-key path: a `dpk_`-prefixed bearer resolves to the same
+  // synthetic user (with `scopes`) the REST middleware produces, so the
+  // scopeResolver wrappers enforce coarse read/write scopes on GraphQL
+  // too. A miss yields an unauthenticated context, mirroring the JWT
+  // failure path below.
+  if (token.startsWith(API_KEY_PREFIX)) {
+    try {
+      const user = await resolveApiKeyUser(token);
+      return { user: user || null };
+    } catch (err) {
+      return { user: null };
+    }
   }
   try {
     const decoded = jwt.verify(token, process.env.TOKEN_KEY, { algorithms: ['HS256'] });
@@ -378,6 +397,100 @@ app.post(
       { $set: { revokedAt: new Date() } }
     );
 
+    res.status(204).end();
+  })
+);
+
+// API keys: long-lived, revocable, scope-limited credentials for
+// programmatic access. Minting requires a JWT — an API key cannot mint
+// another API key (no privilege bootstrapping). Listing and revoking
+// are scoped to the caller's own keys. The plaintext key is shown
+// exactly once, here, at creation; only its SHA-256 hash is persisted.
+const apiKeyAuth = require("./middleware/auth")(true);
+const SCOPE_VALUES = ["read", "write"];
+
+app.post(
+  "/api/auth/api-keys",
+  apiKeyAuth,
+  asyncHandler(async (req, res) => {
+    if (req.user.authMethod === "apiKey") {
+      throw new ForbiddenError("API keys cannot mint other API keys");
+    }
+    const { name, scopes, expiresInDays } = req.body || {};
+    if (!name || typeof name !== "string") {
+      throw new ValidationError("name is required");
+    }
+
+    let finalScopes = ["read", "write"];
+    if (scopes !== undefined) {
+      if (
+        !Array.isArray(scopes) ||
+        scopes.length === 0 ||
+        !scopes.every((sc) => SCOPE_VALUES.includes(sc))
+      ) {
+        throw new ValidationError(
+          'scopes must be a non-empty subset of ["read", "write"]'
+        );
+      }
+      finalScopes = [...new Set(scopes)];
+    }
+
+    let expiresAt = null;
+    if (expiresInDays !== undefined && expiresInDays !== null) {
+      const days = Number(expiresInDays);
+      if (!Number.isFinite(days) || days <= 0) {
+        throw new ValidationError("expiresInDays must be a positive number");
+      }
+      expiresAt = new Date(Date.now() + days * 24 * 60 * 60 * 1000);
+    }
+
+    // Roles are frozen from the minting user — a key can never be
+    // elevated beyond what its owner held at creation time.
+    const roles =
+      Array.isArray(req.user.roles) && req.user.roles.length
+        ? req.user.roles
+        : ["user"];
+
+    const key = generateApiKey();
+    const record = await ApiKey.create({
+      userId: req.user.user_id,
+      email: req.user.email || null,
+      name,
+      prefix: key.slice(0, 8),
+      tokenHash: sha256(key),
+      scopes: finalScopes,
+      roles,
+      expiresAt,
+    });
+
+    // `key` is returned ONCE and never again — there is no endpoint
+    // that can recover it, by design.
+    res.status(201).json({ id: record._id, prefix: record.prefix, key });
+  })
+);
+
+app.get(
+  "/api/auth/api-keys",
+  apiKeyAuth,
+  asyncHandler(async (req, res) => {
+    const keys = await ApiKey.find({ userId: req.user.user_id })
+      .select("-tokenHash")
+      .sort({ createdAt: -1 })
+      .lean();
+    res.status(200).json(keys);
+  })
+);
+
+app.delete(
+  "/api/auth/api-keys/:id",
+  apiKeyAuth,
+  asyncHandler(async (req, res) => {
+    const record = await ApiKey.findOneAndUpdate(
+      { _id: req.params.id, userId: req.user.user_id, revokedAt: null },
+      { $set: { revokedAt: new Date() } },
+      { new: true }
+    );
+    if (!record) throw new NotFoundError("API key");
     res.status(204).end();
   })
 );

@@ -9,6 +9,7 @@ const apollo = require('apollo-server-express');
 const MongoQS = require('mongo-querystring');
 
 const auth = require('../middleware/auth');
+const requireScope = require('../middleware/requireScope');
 const asyncHandler = require('./asyncHandler');
 const logger = require('./logger');
 const { NotFoundError, ValidationError, InvalidTransitionError } = require('./errors');
@@ -600,6 +601,14 @@ function createSchemaLoader({ app, apiSpec, setApolloRouter, buildGraphqlContext
     const PAGE_SIZE = process.env.PAGE_SIZE;
     const storage = getStorageDriver();
 
+    // Auth + API-key scope stacks. Reads gate on 'read', writes
+    // (POST / PUT / DELETE) on 'write'. requireScope is a no-op for
+    // JWT and X-Client-Id callers (they carry no scopes array) — only
+    // scope-limited API keys are constrained. auth(true) runs first so
+    // req.user is populated before the scope check.
+    const authRead = [auth(true), requireScope('read')];
+    const authWrite = [auth(true), requireScope('write')];
+
     // Per-File-field upload / download / delete routes. Multer is
     // configured per-field so maxBytes and accept apply at parse time.
     for (const ff of fileFields || []) {
@@ -624,7 +633,7 @@ function createSchemaLoader({ app, apiSpec, setApolloRouter, buildGraphqlContext
       // the record. Owner-only.
       router.post(
         `/api/${s.version}/${path}/:id/${fieldName}`,
-        auth(true),
+        authWrite,
         (req, res, next) => upload.single('file')(req, res, (err) => {
           // multer's MulterError wraps size limit etc.; surface as
           // ValidationError so errorHandler returns 400.
@@ -715,7 +724,7 @@ function createSchemaLoader({ app, apiSpec, setApolloRouter, buildGraphqlContext
       // S3 directly.
       router.get(
         `/api/${s.version}/${path}/:id/${fieldName}`,
-        auth(true),
+        authRead,
         asyncHandler(async (req, res) => {
           const baseOwner = bypassUserScopeForList(s, req.user)
             ? { _id: req.params.id }
@@ -740,7 +749,7 @@ function createSchemaLoader({ app, apiSpec, setApolloRouter, buildGraphqlContext
       // DELETE the blob and clear the metadata sub-doc on the record.
       router.delete(
         `/api/${s.version}/${path}/:id/${fieldName}`,
-        auth(true),
+        authWrite,
         asyncHandler(async (req, res) => {
           const baseOwner = bypassUserScopeForDelete(s, req.user)
             ? { _id: req.params.id }
@@ -762,7 +771,7 @@ function createSchemaLoader({ app, apiSpec, setApolloRouter, buildGraphqlContext
 
     router.get(
       `/api/${s.version}/${path}-schema`,
-      auth(true),
+      authRead,
       asyncHandler(async (req, res) => {
         const jsSchema = mongooseSchema.jsonSchema();
         ['_id', 'createdAt', 'updatedAt', '__v'].forEach((k) => {
@@ -785,7 +794,7 @@ function createSchemaLoader({ app, apiSpec, setApolloRouter, buildGraphqlContext
 
     router.post(
       `/api/${s.version}/${path}`,
-      auth(true),
+      authWrite,
       idempotencyMiddleware,
       asyncHandler(async (req, res) => {
         const writable = filterWritable(req.body, s, req.user, 'create');
@@ -850,7 +859,7 @@ function createSchemaLoader({ app, apiSpec, setApolloRouter, buildGraphqlContext
 
     router.get(
       `/api/${s.version}/${path}`,
-      auth(true),
+      authRead,
       asyncHandler(async (req, res) => {
         const pageSize = parseInt(PAGE_SIZE);
         const page = parseInt(req.query.__page) || 1;
@@ -946,7 +955,7 @@ function createSchemaLoader({ app, apiSpec, setApolloRouter, buildGraphqlContext
 
     router.put(
       `/api/${s.version}/${path}`,
-      auth(true),
+      authWrite,
       asyncHandler(async (req, res) => {
         // The query predicate doubles as the create-time payload on
         // upsert (Mongo seeds new docs with the predicate's equality
@@ -1003,7 +1012,7 @@ function createSchemaLoader({ app, apiSpec, setApolloRouter, buildGraphqlContext
 
     router.get(
       `/api/${s.version}/${path}/:id`,
-      auth(true),
+      authRead,
       asyncHandler(async (req, res) => {
         const baseQuery = bypassUserScopeForList(s, req.user)
           ? { _id: req.params.id }
@@ -1040,7 +1049,7 @@ function createSchemaLoader({ app, apiSpec, setApolloRouter, buildGraphqlContext
 
     router.delete(
       `/api/${s.version}/${path}/:id`,
-      auth(true),
+      authWrite,
       asyncHandler(async (req, res) => {
         const baseQuery = bypassUserScopeForDelete(s, req.user)
           ? { _id: req.params.id }
@@ -1168,7 +1177,7 @@ function createSchemaLoader({ app, apiSpec, setApolloRouter, buildGraphqlContext
     if (softDeleteEnabled) {
       router.post(
         `/api/${s.version}/${path}/:id/restore`,
-        auth(true),
+        authWrite,
         asyncHandler(async (req, res) => {
           const baseQuery = bypassUserScopeForDelete(s, req.user)
             ? { _id: req.params.id }
@@ -1195,7 +1204,7 @@ function createSchemaLoader({ app, apiSpec, setApolloRouter, buildGraphqlContext
 
     router.get(
       `/api/${s.version}/${path}/:id/history`,
-      auth(true),
+      authRead,
       asyncHandler(async (req, res) => {
         const pageSize = parseInt(PAGE_SIZE);
         const page = parseInt(req.query.__page) || 1;
@@ -1268,7 +1277,7 @@ function createSchemaLoader({ app, apiSpec, setApolloRouter, buildGraphqlContext
 
     router.put(
       `/api/${s.version}/${path}/:id`,
-      auth(true),
+      authWrite,
       asyncHandler(async (req, res) => {
         // Updates stay strictly owner-bound. acl.list grants read
         // visibility; the spec doesn't define a write-bypass slot, so
@@ -1489,7 +1498,7 @@ function createSchemaLoader({ app, apiSpec, setApolloRouter, buildGraphqlContext
       }
       router.get(
         `/api/${s.version}/${path}/aggregations/${agg.name}`,
-        auth(true),
+        authRead,
         asyncHandler(async (req, res) => {
           const result = await runAggregation({
             agg,
