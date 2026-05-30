@@ -43,6 +43,20 @@ function buildConfig(overrides = {}) {
         env.AGENT_PERSONA_CACHE_TTL_SECONDS,
         fileConfig.agent?.personaCacheTtlSeconds ?? 60
       ),
+      // Persist conversation history (and the frozen prompt snapshot) to
+      // davepi's `conversation` schema so it survives across requests.
+      // Set false to keep the channel-managed in-memory round-trip only.
+      persistConversations: asBool(
+        env.AGENT_PERSIST_CONVERSATIONS,
+        fileConfig.agent?.persistConversations ?? true
+      ),
+      // Idle gap after which a returning user is treated as a NEW session
+      // and the prompt snapshot is re-frozen (picking up memory/profile
+      // writes from the prior session). Default 30 min.
+      sessionIdleSeconds: asInt(
+        env.AGENT_SESSION_IDLE_SECONDS,
+        fileConfig.agent?.sessionIdleSeconds ?? 30 * 60
+      ),
     },
 
     auth: {
@@ -63,6 +77,10 @@ function buildConfig(overrides = {}) {
         env.LLM_TEMPERATURE !== undefined
           ? Number.parseFloat(env.LLM_TEMPERATURE)
           : fileConfig.llm?.temperature ?? undefined,
+      // Anthropic prompt caching on the frozen snapshot prefix. On by
+      // default (Anthropic provider only); set LLM_PROMPT_CACHING=false
+      // to disable.
+      promptCaching: asBool(env.LLM_PROMPT_CACHING, fileConfig.llm?.promptCaching ?? true),
     },
 
     tools: {

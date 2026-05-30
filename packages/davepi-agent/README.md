@@ -89,12 +89,33 @@ Per-user auth:
 | `AGENT_COOKIE_SECURE`      | `true` (default) — emits `Secure` on the session cookie. Set `false` for HTTP-only dev |
 | `STORE_URL`                | Where to persist refresh tokens. `file:./davepi-agent-store.json` (default) or `memory:` |
 
-Persona (optional):
+Persona & memory (optional):
 
 | Variable                            | Purpose                                                                                          |
 | ----------------------------------- | ------------------------------------------------------------------------------------------------ |
-| `AGENT_KEY`                         | Which agent this process is (e.g. `support`). Selects the `agentPersona` row used as prompt slot #1. Unset → built-in default prompt |
+| `AGENT_KEY`                         | Which agent this process is (e.g. `support`). Selects the `agentPersona` / `agentMemory` rows used as prompt slots. Unset → built-in default prompt and no persisted snapshot |
 | `AGENT_PERSONA_CACHE_TTL_SECONDS`   | Per-process cache TTL for the persona lookup (default `60`). Set `0` to fetch on every turn (strict immediacy) |
+| `AGENT_PERSIST_CONVERSATIONS`       | Persist history + the frozen prompt snapshot to davepi's `conversation` schema (default `true`). `false` keeps the channel-managed in-memory round-trip only |
+| `AGENT_SESSION_IDLE_SECONDS`        | Idle gap after which a returning user is a **new** session and the snapshot is re-frozen, picking up memory/profile writes from the prior session (default `1800`) |
+| `LLM_PROMPT_CACHING`                | Anthropic prompt caching on the frozen snapshot prefix (default `true`, Anthropic provider only). `false` to disable |
+
+### Memory & the frozen snapshot
+
+Once `AGENT_KEY` is set the agent reads a per-tenant **memory** row (`agentMemory`,
+slow-changing facts about the account) and a per-end-user **profile** row
+(`customerProfile`, preferences/notes — shared across the tenant's agents) and
+folds them into the system prompt alongside the persona. These five slots are
+**snapshotted once at session start and frozen** for the whole conversation, so
+the prefix stays byte-stable and Anthropic prompt caching keeps hitting. The
+agent self-authors memory/profiles through the schema-generated MCP tools (e.g.
+`update_agentMemory`); because the snapshot is frozen, a write takes effect on
+the **next** session, never mid-conversation.
+
+**Live vs. remembered.** Treat memory/profile/persona as slow-changing
+background that may be slightly stale — never as live system state. For anything
+that changes (order status, ticket state, inventory, balances), the agent calls
+a tool to read it fresh. Snapshotted text shapes tone and recall; it is never an
+access-control or live-data mechanism (the JWT / client id remains the boundary).
 
 Linking flow (per-user mode): on first contact from an unlinked user the
 agent returns a one-time link URL (`<agent>/link/<nonce>`). The user opens

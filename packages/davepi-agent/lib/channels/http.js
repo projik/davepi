@@ -207,7 +207,11 @@ function createHttpApp({ config, model, mcpClient, auth }) {
       }
     }
 
-    const channelCtx = { channel: 'http', channelUserId };
+    // The HTTP channel has no thread concept: one ongoing conversation
+    // per logged-in (cookie-identified) user. Service mode has no
+    // channelUserId, so nothing is persisted (the client round-trips
+    // history itself).
+    const channelCtx = { channel: 'http', channelUserId, conversationId: channelUserId };
     const collectedEvents = [];
     let resHeadersWritten = false;
     let postFinalErrorSent = false;

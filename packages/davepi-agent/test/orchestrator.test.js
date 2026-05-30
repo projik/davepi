@@ -15,6 +15,10 @@ const {
   adaptMcpTools,
   normalizeMcpResult,
   makePersonaFetcher,
+  makeMemoryFetcher,
+  makeProfileFetcher,
+  promptCachingEnabled,
+  buildModelInput,
   _resetPersonaCache,
 } = require('../lib/orchestrator');
 
@@ -166,6 +170,51 @@ test('an expired entry triggers a refetch', async () => {
   await new Promise((r) => setTimeout(r, 25));
   await fetcher();
   assert.equal(stub.calls.length, 2);
+});
+
+test('memory fetcher reads list_agentMemory; null when no agentKey', async () => {
+  const stub = personaMcpStub([{ agentKey: 'support', body: 'mem' }]);
+  assert.equal(makeMemoryFetcher({ config: { agent: {} }, mcpClient: stub }), null);
+  const fetch = makeMemoryFetcher({ config: { agent: { key: 'support' } }, mcpClient: stub, channelCtx: {} });
+  const row = await fetch();
+  assert.deepEqual(row, { agentKey: 'support', body: 'mem' });
+  assert.equal(stub.calls[0].name, 'list_agentMemory');
+  assert.equal(stub.calls[0].args.filter.agentKey, 'support');
+});
+
+test('profile fetcher keys on the channel-prefixed endUserKey; null in service mode', async () => {
+  const stub = personaMcpStub([{ endUserKey: 'slack:U1', preferences: 'email' }]);
+  assert.equal(makeProfileFetcher({ mcpClient: stub, channelCtx: { channelUserId: null } }), null);
+  const fetch = makeProfileFetcher({ mcpClient: stub, channelCtx: { channel: 'slack', channelUserId: 'U1' } });
+  const row = await fetch();
+  assert.deepEqual(row, { endUserKey: 'slack:U1', preferences: 'email' });
+  assert.equal(stub.calls[0].name, 'list_customerProfile');
+  // Canonical key matches the schema example / backend tests (`slack:U1`).
+  assert.equal(stub.calls[0].args.filter.endUserKey, 'slack:U1');
+});
+
+test('promptCachingEnabled: on for anthropic by default, off for other providers', () => {
+  assert.equal(promptCachingEnabled({ llm: {} }), true);
+  assert.equal(promptCachingEnabled({ llm: { provider: 'anthropic' } }), true);
+  assert.equal(promptCachingEnabled({ llm: { provider: 'anthropic', promptCaching: false } }), false);
+  assert.equal(promptCachingEnabled({ llm: { provider: 'openai' } }), false);
+});
+
+test('buildModelInput places a cacheControl system message ahead of the turns', () => {
+  const messages = [{ role: 'user', content: 'hi' }];
+  const cached = buildModelInput({ system: 'PREFIX', messages, caching: true });
+  assert.equal(cached.system, undefined);
+  assert.equal(cached.messages[0].role, 'system');
+  assert.equal(cached.messages[0].content, 'PREFIX');
+  assert.deepEqual(cached.messages[0].providerOptions, {
+    anthropic: { cacheControl: { type: 'ephemeral' } },
+  });
+  assert.deepEqual(cached.messages.slice(1), messages);
+
+  // Caching off: system stays a top-level string, messages untouched.
+  const plain = buildModelInput({ system: 'PREFIX', messages, caching: false });
+  assert.equal(plain.system, 'PREFIX');
+  assert.deepEqual(plain.messages, messages);
 });
 
 test('distinct agentKeys are cached independently', async () => {
