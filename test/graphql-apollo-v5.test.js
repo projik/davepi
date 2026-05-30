@@ -53,7 +53,8 @@ beforeAll(async () => {
 afterAll(async () => {
   await mongoose.disconnect();
   if (mongo) await mongo.stop();
-  process.env.NODE_ENV = prevNodeEnv;
+  if (prevNodeEnv === undefined) delete process.env.NODE_ENV;
+  else process.env.NODE_ENV = prevNodeEnv;
   if (prevLogLevel === undefined) delete process.env.LOG_LEVEL;
   else process.env.LOG_LEVEL = prevLogLevel;
 });
