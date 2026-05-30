@@ -11,9 +11,10 @@ const { InMemoryTransport } = require('@modelcontextprotocol/sdk/inMemory.js');
  * The acceptance bar this file covers:
  *   - Tenant isolation across REST, GraphQL, AND MCP — account A can't
  *     read account B's persona on any of the three surfaces.
- *   - The `beforeUpdate` hook routes agent-authored edits into
- *     `proposedPatch` (live identity untouched) while operator edits
- *     write through.
+ *   - Operators own the persona; an `agent`-role caller is write-gated
+ *     on every surface (field-level ACL strips live fields on
+ *     REST/GraphQL/MCP create+update; a beforeDelete hook refuses agent
+ *     deletes) and can only write `proposedPatch` for operator review.
  *   - `agentKey` is unique per account.
  *
  * The prompt-assembly / sanitizer / fallback half lives in the agent
@@ -163,42 +164,15 @@ describe('agentPersona: agentKey uniqueness', () => {
   });
 });
 
-describe('agentPersona: beforeUpdate routes agent edits to proposedPatch', () => {
-  test('agent-authored update parks the edit in proposedPatch; live persona unchanged', async () => {
-    // Owner of the persona, whose service token carries the `agent` role.
-    const owner = await registerUser(ctx.request, ctx.app);
-    const agentToken = tokenFor(owner._id, ['agent']);
+describe('agentPersona: operators own the persona, agents are write-gated', () => {
+  // The agent's service token shares the operator's user_id (so it can
+  // read the persona it owns) but carries only the `agent` role.
+  const agentTokenFor = (owner) => tokenFor(owner._id, ['agent']);
+  const agentUserFor = (owner) => ({ user_id: owner._id, email: `${owner._id}@svc`, roles: ['agent'] });
 
-    const created = await post(
-      PATH,
-      { agentKey: 'support', identity: 'approved identity', avoid: 'never promise refunds' },
-      agentToken
-    );
-    expect(created.status).toBe(201);
-    const id = created.body._id;
-
-    const upd = await put(
-      `${PATH}/${id}`,
-      { identity: 'rogue identity', avoid: 'promise anything' },
-      agentToken
-    );
-    expect(upd.status).toBe(200);
-
-    const after = await get(`${PATH}/${id}`, agentToken);
-    expect(after.body.identity).toBe('approved identity'); // unchanged
-    expect(after.body.avoid).toBe('never promise refunds'); // unchanged
-    const patch = JSON.parse(after.body.proposedPatch);
-    expect(patch).toEqual({ identity: 'rogue identity', avoid: 'promise anything' });
-  });
-
-  test('operator (no agent role) update writes through directly', async () => {
+  test('operator can author and update the live persona directly', async () => {
     const owner = await registerUser(ctx.request, ctx.app); // default role: ['user']
-
-    const created = await post(
-      PATH,
-      { agentKey: 'sales', identity: 'draft identity' },
-      owner.token
-    );
+    const created = await post(PATH, { agentKey: 'sales', identity: 'draft identity' }, owner.token);
     expect(created.status).toBe(201);
     const id = created.body._id;
 
@@ -208,5 +182,124 @@ describe('agentPersona: beforeUpdate routes agent edits to proposedPatch', () =>
     const after = await get(`${PATH}/${id}`, owner.token);
     expect(after.body.identity).toBe('final identity');
     expect(after.body.proposedPatch == null).toBe(true);
+  });
+
+  test('agent-authored create is refused (field ACL strips agentKey; hook 403s)', async () => {
+    const owner = await registerUser(ctx.request, ctx.app);
+    const res = await post(
+      PATH,
+      { agentKey: 'support', identity: 'rogue persona' },
+      agentTokenFor(owner)
+    );
+    expect(res.status).toBe(403);
+    // Nothing was persisted.
+    const list = await get(PATH, owner.token);
+    expect(list.body.results || list.body).toEqual([]);
+  });
+
+  test('agent cannot mutate live persona fields via REST update (stripped by ACL)', async () => {
+    const owner = await registerUser(ctx.request, ctx.app);
+    const created = await post(
+      PATH,
+      { agentKey: 'support', identity: 'approved identity', avoid: 'never promise refunds' },
+      owner.token
+    );
+    const id = created.body._id;
+
+    const upd = await put(
+      `${PATH}/${id}`,
+      { identity: 'rogue identity', avoid: 'promise anything', status: 'archived' },
+      agentTokenFor(owner)
+    );
+    expect(upd.status).toBe(200); // accepted, but every live field was stripped
+
+    const after = await get(`${PATH}/${id}`, owner.token);
+    expect(after.body.identity).toBe('approved identity');
+    expect(after.body.avoid).toBe('never promise refunds');
+    expect(after.body.status).toBe('active');
+  });
+
+  test('agent proposes edits by writing proposedPatch; live persona untouched', async () => {
+    const owner = await registerUser(ctx.request, ctx.app);
+    const created = await post(PATH, { agentKey: 'support', identity: 'approved' }, owner.token);
+    const id = created.body._id;
+
+    const proposal = JSON.stringify({ identity: 'suggested identity' });
+    const upd = await put(`${PATH}/${id}`, { proposedPatch: proposal }, agentTokenFor(owner));
+    expect(upd.status).toBe(200);
+
+    const after = await get(`${PATH}/${id}`, owner.token);
+    expect(after.body.identity).toBe('approved'); // unchanged
+    expect(after.body.proposedPatch).toBe(proposal); // proposal recorded for review
+  });
+
+  test('an agent update that omits proposedPatch does not clobber a pending one', async () => {
+    const owner = await registerUser(ctx.request, ctx.app);
+    const created = await post(PATH, { agentKey: 'support', identity: 'approved' }, owner.token);
+    const id = created.body._id;
+    // Seed a pending proposal as the operator.
+    await put(`${PATH}/${id}`, { proposedPatch: '{"identity":"pending"}' }, owner.token);
+
+    // Agent updates something else (everything but proposedPatch is ACL-stripped,
+    // so this is effectively a no-op) — the pending patch must survive.
+    const upd = await put(`${PATH}/${id}`, { identity: 'x', status: 'archived' }, agentTokenFor(owner));
+    expect(upd.status).toBe(200);
+
+    const after = await get(`${PATH}/${id}`, owner.token);
+    expect(after.body.proposedPatch).toBe('{"identity":"pending"}');
+  });
+
+  test('agent cannot delete a persona; operator can', async () => {
+    const owner = await registerUser(ctx.request, ctx.app);
+    const created = await post(PATH, { agentKey: 'support', identity: 'approved' }, owner.token);
+    const id = created.body._id;
+
+    const agentDel = await auth(ctx.request(ctx.app).delete(`${PATH}/${id}`), agentTokenFor(owner));
+    expect(agentDel.status).toBe(403);
+    expect((await get(`${PATH}/${id}`, owner.token)).status).toBe(200); // still there
+
+    const opDel = await auth(ctx.request(ctx.app).delete(`${PATH}/${id}`), owner.token);
+    expect(opDel.status).toBe(200);
+  });
+
+  test('agent cannot mutate live fields via MCP update or create', async () => {
+    const owner = await registerUser(ctx.request, ctx.app);
+    const created = await post(PATH, { agentKey: 'support', identity: 'approved' }, owner.token);
+    const id = created.body._id;
+
+    const agentMcp = await connectMcp(agentUserFor(owner));
+    try {
+      // Update: live fields stripped, proposedPatch allowed through.
+      await agentMcp.client.callTool({
+        name: 'update_agentPersona',
+        arguments: { id, record: { identity: 'rogue', proposedPatch: '{"identity":"rogue"}' } },
+      });
+      const after = await get(`${PATH}/${id}`, owner.token);
+      expect(after.body.identity).toBe('approved');
+      expect(after.body.proposedPatch).toBe('{"identity":"rogue"}');
+
+      // Create: agentKey stripped (required) → validation error, nothing live authored.
+      const createRes = await agentMcp.client.callTool({
+        name: 'create_agentPersona',
+        arguments: { record: { agentKey: 'sales', identity: 'rogue' } },
+      });
+      expect(createRes.isError).toBe(true);
+    } finally {
+      await agentMcp.close();
+    }
+  });
+
+  test('agent cannot mutate live fields via GraphQL updateById', async () => {
+    const owner = await registerUser(ctx.request, ctx.app);
+    const created = await post(PATH, { agentKey: 'support', identity: 'approved' }, owner.token);
+    const id = created.body._id;
+
+    const res = await gql(
+      agentTokenFor(owner),
+      'mutation($id: MongoID!) { agentPersonaUpdateById(_id: $id, record: { identity: "rogue" }) { record { identity } } }',
+      { id }
+    );
+    expect(res.body.errors).toBeUndefined();
+    expect(res.body.data.agentPersonaUpdateById.record.identity).toBe('approved');
   });
 });
