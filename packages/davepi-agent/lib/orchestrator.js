@@ -45,6 +45,39 @@ function normalizeMcpResult(result) {
   return result;
 }
 
+// Per-process persona cache: agentKey -> { persona, fetchedAt }.
+// Personas are near-static, tenant-level records, but the lookup was
+// running on every turn, adding an MCP round-trip per user message. A
+// short TTL collapses that to one fetch per window while still letting
+// operator edits take effect quickly. The cache is keyed by agentKey
+// only (persona is tenant-scoped, not per end-user, so channelCtx
+// doesn't change the result).
+const personaCache = new Map();
+const DEFAULT_PERSONA_TTL_SECONDS = 60;
+
+// Test seam: drop cached personas so a unit test starts cold.
+function _resetPersonaCache() {
+  personaCache.clear();
+}
+
+function personaTtlMs(config) {
+  const ttl = config && config.agent && config.agent.personaCacheTtlSeconds;
+  const seconds = Number.isFinite(ttl) ? ttl : DEFAULT_PERSONA_TTL_SECONDS;
+  return Math.max(0, seconds) * 1000;
+}
+
+async function fetchPersonaFromMcp({ mcpClient, channelCtx, agentKey }) {
+  const raw = await mcpClient.callTool(
+    'list_agentPersona',
+    { filter: { agentKey, status: 'active' }, perPage: 1 },
+    channelCtx
+  );
+  const norm = normalizeMcpResult(raw);
+  if (!norm || norm.error) return null;
+  const rows = norm.results || norm.records || [];
+  return Array.isArray(rows) ? rows[0] || null : null;
+}
+
 /**
  * Build a persona loader for `assembleSystemPrompt`, or `null` when no
  * `agentKey` is configured (nothing to look up — stay zero-config).
@@ -55,20 +88,25 @@ function normalizeMcpResult(result) {
  * backend without the agentPersona schema (older davepi) makes the tool
  * call fail; `assembleSystemPrompt` swallows the throw and falls back to
  * the default prompt.
+ *
+ * Results (including a `null` "no persona" result) are cached per
+ * agentKey for `config.agent.personaCacheTtlSeconds` (default 60s; set 0
+ * to disable and fetch every turn). A thrown fetch is never cached, so a
+ * transient MCP failure retries on the next turn.
  */
 function makePersonaFetcher({ config, mcpClient, channelCtx }) {
   const agentKey = config && config.agent && config.agent.key;
   if (!agentKey) return null;
+  const ttlMs = personaTtlMs(config);
   return async () => {
-    const raw = await mcpClient.callTool(
-      'list_agentPersona',
-      { filter: { agentKey, status: 'active' }, perPage: 1 },
-      channelCtx
-    );
-    const norm = normalizeMcpResult(raw);
-    if (!norm || norm.error) return null;
-    const rows = norm.results || norm.records || [];
-    return Array.isArray(rows) ? rows[0] || null : null;
+    const now = Date.now();
+    if (ttlMs > 0) {
+      const hit = personaCache.get(agentKey);
+      if (hit && now - hit.fetchedAt < ttlMs) return hit.persona;
+    }
+    const persona = await fetchPersonaFromMcp({ mcpClient, channelCtx, agentKey });
+    if (ttlMs > 0) personaCache.set(agentKey, { persona, fetchedAt: now });
+    return persona;
   };
 }
 
@@ -196,4 +234,10 @@ async function safeRunTurn(args) {
   }
 }
 
-module.exports = { runTurn: safeRunTurn, adaptMcpTools, normalizeMcpResult };
+module.exports = {
+  runTurn: safeRunTurn,
+  adaptMcpTools,
+  normalizeMcpResult,
+  makePersonaFetcher,
+  _resetPersonaCache,
+};

@@ -36,6 +36,13 @@ function buildConfig(overrides = {}) {
     // Unset → no persona lookup, default prompt (zero-config).
     agent: {
       key: env.AGENT_KEY || fileConfig.agent?.key || null,
+      // Per-process persona cache TTL. Personas are near-static, so the
+      // lookup is cached per agentKey to avoid an MCP round-trip every
+      // turn. Set 0 to disable and fetch on every turn (strict immediacy).
+      personaCacheTtlSeconds: asInt(
+        env.AGENT_PERSONA_CACHE_TTL_SECONDS,
+        fileConfig.agent?.personaCacheTtlSeconds ?? 60
+      ),
     },
 
     auth: {
