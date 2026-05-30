@@ -180,6 +180,52 @@ const out = await runTurn({
    provide `SLACK_APP_TOKEN`.
 6. Start the agent; `@`-mention it in a channel or DM it.
 
+## Proactive / scheduled agents (cron + attached skills)
+
+Agents don't have to wait to be spoken to. Pair `@davepi/agent` with
+[`davepi-plugin-cron`](../davepi-plugin-cron) to run a **fresh** agent on a
+schedule that follows a named, approved **skill** (a governed runbook) and
+posts its output to Slack — follow-ups, SLA digests, end-of-day summaries.
+
+```js
+const { createAgent } = require('@davepi/agent');
+const cron = require('davepi-plugin-cron');
+
+const agent = await createAgent({ agent: { key: 'support' } });
+
+cron.register('daily-sla-digest', {
+  schedule: '0 9 * * 1-5', // 9am on weekdays
+  handler: agent.scheduledSkill({
+    skill: 'Daily SLA digest',  // name of an *approved* skill for this agentKey
+    slackChannel: 'C0123456789', // channel id to post into
+    // prompt: 'optional override of the default autonomous preamble',
+    // threadTs: 'optional thread to post into',
+  }),
+});
+```
+
+Each tick:
+
+1. Loads the named skill through the agent's own MCP identity, filtered to
+   `status: 'approved'` — a draft/deprecated runbook is never fired.
+2. Runs a fresh `runTurn` (empty history, no end-user) with the persona loaded
+   and the skill's `body` inlined as the task. Live data is fetched with tools,
+   not assumed from the snapshot.
+3. Posts the reply (plus any `render_table` / `render_chart` output) to Slack.
+
+**Tenant scoping** is inherited, not re-implemented: the agent's service auth
+owns exactly one tenant's data, so the skill lookup and the run are
+tenant-scoped server-side like every other read. For a multi-tenant
+deployment, register one job per tenant agent (each built with its own auth)
+or pass an explicit `channelCtx`.
+
+`SLACK_BOT_TOKEN` must be set (the poster reuses the bundled `@slack/web-api`
+client); the full Slack channel doesn't have to be enabled. A run that
+produces no output skips the post, and a lost cron lease mid-run suppresses
+the post so another node's run isn't double-posted. Use
+`createScheduledHandler({ agent, ... })` directly if you'd rather not go
+through `agent.scheduledSkill`.
+
 ## Channels not yet shipped
 
 `lib/channels/templates/telegram.js`, `whatsapp.js`, and `widget.js` are

@@ -45,6 +45,7 @@
     "@ai-sdk/openai": "^1.0.0",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "@slack/bolt": "^4.1.0",
+    "@slack/web-api": "^7.16.0",
     "ai": "^4.0.0",
     "express": "^4.22.2",
     "pino": "^10.3.1",
