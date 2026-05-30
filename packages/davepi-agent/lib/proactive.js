@@ -105,6 +105,12 @@ async function runScheduledSkill({
   channelCtx,
   onEvent = () => {},
   log = logger,
+  // Cooperative-cancellation signal from the cron lease. Checked at each
+  // boundary (before the skill lookup, before and after the turn) and
+  // forwarded to `runTurn` so MCP tool calls and model generation stop
+  // when the lease is lost — the agent must not keep writing after another
+  // node has taken over.
+  signal,
   // Test seam: override the orchestrator entrypoint so the handler can be
   // exercised without a live model / `ai` SDK.
   _runTurn = runTurn,
@@ -113,7 +119,12 @@ async function runScheduledSkill({
   if (!agentKey) {
     throw new Error('runScheduledSkill requires config.agent.key (AGENT_KEY) so the skill and persona can be scoped.');
   }
-  const ctx = channelCtx || { channel: PROACTIVE_CHANNEL, agentKey };
+  const baseCtx = channelCtx || { channel: PROACTIVE_CHANNEL, agentKey };
+  // Carry the signal on the context so the MCP client cancels in-flight
+  // tool calls; merge non-destructively when the caller already set one.
+  const ctx = signal && !baseCtx.signal ? { ...baseCtx, signal } : baseCtx;
+
+  if (signal && signal.aborted) return { aborted: true };
 
   const skill = await loadSkillByName({ mcpClient, channelCtx: ctx, agentKey, name: skillName });
   if (!skill) {
@@ -121,6 +132,8 @@ async function runScheduledSkill({
     err.code = 'SKILL_NOT_FOUND';
     throw err;
   }
+
+  if (signal && signal.aborted) return { aborted: true, skill };
 
   const renderBlocks = [];
   const collect = (evt) => {
@@ -131,15 +144,29 @@ async function runScheduledSkill({
   const userMessage = buildTriggerMessage({ skill, prompt });
   log.info({ agentKey, skill: skill.name }, 'scheduled skill run starting');
 
-  const out = await _runTurn({
-    config,
-    model,
-    mcpClient,
-    channelCtx: ctx,
-    history: [],
-    userMessage,
-    onEvent: collect,
-  });
+  let out;
+  try {
+    out = await _runTurn({
+      config,
+      model,
+      mcpClient,
+      channelCtx: ctx,
+      history: [],
+      userMessage,
+      onEvent: collect,
+      signal,
+    });
+  } catch (err) {
+    // An aborted turn surfaces as an AbortError from the model/fetch layer;
+    // report it as the same aborted outcome rather than a hard failure.
+    if (signal && signal.aborted) {
+      log.warn({ agentKey, skill: skill.name }, 'scheduled skill turn aborted (lease lost)');
+      return { aborted: true, skill, renderBlocks };
+    }
+    throw err;
+  }
+
+  if (signal && signal.aborted) return { aborted: true, skill, renderBlocks };
 
   return { text: out.text, history: out.history, skill, renderBlocks };
 }
@@ -163,6 +190,13 @@ async function runScheduledSkill({
  * The Slack bot token is read from `agent.config.slack.botToken`. The
  * poster is constructed once at build time so a missing token fails fast
  * (mirrors cron's posture of surfacing misconfiguration at registration).
+ *
+ * A scheduled run has no end-user, so the default `cron` context carries
+ * no `channelUserId`. Per-user auth resolves the MCP identity *from* the
+ * end-user and therefore requires one — so a per-user agent is rejected at
+ * registration unless the caller supplies an explicit `channelCtx` with a
+ * `channelUserId` (advanced: a job that acts as a specific linked user).
+ * Proactive agents are a service-auth feature by design.
  */
 function createScheduledHandler({
   agent,
@@ -183,10 +217,28 @@ function createScheduledHandler({
   if (!skill) throw new Error('createScheduledHandler requires a `skill` name to run.');
   if (!slackChannel) throw new Error('createScheduledHandler requires a `slackChannel` to post to.');
 
+  // Per-user auth needs a `channelUserId` to resolve the MCP identity; the
+  // default cron context has none, so fail fast at registration rather than
+  // deterministically throwing inside `auth.headersFor` on the first tick.
+  const isPerUser = agent.auth && agent.auth.mode === 'per-user';
+  if (isPerUser && !(channelCtx && channelCtx.channelUserId)) {
+    throw new Error(
+      'createScheduledHandler requires service auth, or an explicit channelCtx with channelUserId ' +
+        "(per-user auth resolves the agent's identity from the end-user, which a scheduled run has none of)."
+    );
+  }
+
   const botToken = agent.config.slack && agent.config.slack.botToken;
   const poster = injectedPoster || createSlackPoster({ botToken });
 
   return async function scheduledSkillHandler({ log = logger, signal } = {}) {
+    // Early exit: the lease may already be lost before we start. Don't load
+    // the skill or call the LLM if there's no point posting the result.
+    if (signal && signal.aborted) {
+      log.warn({ skill, channel: slackChannel }, 'scheduled skill aborted before start (lease lost)');
+      return { posted: false, aborted: true };
+    }
+
     const out = await runScheduledSkill({
       config: agent.config,
       model: agent.model,
@@ -195,12 +247,13 @@ function createScheduledHandler({
       prompt,
       channelCtx,
       log,
+      signal,
       _runTurn,
     });
 
     // Cooperative abort: if the lease was lost mid-run, don't post a
     // result the cron framework has already handed to another node.
-    if (signal && signal.aborted) {
+    if (out.aborted || (signal && signal.aborted)) {
       log.warn({ skill, channel: slackChannel }, 'scheduled skill aborted before post (lease lost)');
       return { posted: false, aborted: true };
     }

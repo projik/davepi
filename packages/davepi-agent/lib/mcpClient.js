@@ -28,10 +28,18 @@ function buildHeaders(auth, channelCtx) {
   return auth.headersFor(channelCtx);
 }
 
+// An `AbortSignal` carried on the channel context (e.g. a cron lease's
+// signal) is forwarded to the underlying fetch so an in-flight tool call
+// is cancelled when the lease is lost — the agent must not keep issuing
+// writes after another node has taken over.
+function signalOf(channelCtx) {
+  return (channelCtx && channelCtx.signal) || undefined;
+}
+
 async function listTools({ url, auth, channelCtx }) {
   const sdk = await loadSdk();
   const transport = new sdk.StreamableHTTPClientTransport(new URL(url), {
-    requestInit: { headers: await buildHeaders(auth, channelCtx) },
+    requestInit: { headers: await buildHeaders(auth, channelCtx), signal: signalOf(channelCtx) },
   });
   const client = new sdk.Client(
     { name: 'davepi-agent', version: '0.1.0' },
@@ -49,7 +57,7 @@ async function listTools({ url, auth, channelCtx }) {
 async function callTool({ url, auth, channelCtx, name, args }) {
   const sdk = await loadSdk();
   const transport = new sdk.StreamableHTTPClientTransport(new URL(url), {
-    requestInit: { headers: await buildHeaders(auth, channelCtx) },
+    requestInit: { headers: await buildHeaders(auth, channelCtx), signal: signalOf(channelCtx) },
   });
   const client = new sdk.Client(
     { name: 'davepi-agent', version: '0.1.0' },

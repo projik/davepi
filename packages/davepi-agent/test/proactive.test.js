@@ -191,10 +191,12 @@ test('handler skips posting when the run produces no output', async () => {
   assert.equal(poster.posts.length, 0);
 });
 
-test('handler does not post when the cron lease was lost mid-run (signal aborted)', async () => {
+test('handler exits before doing any work when the lease is already lost', async () => {
+  let runTurnCalled = false;
+  const stub = skillMcpStub([APPROVED_SKILL]);
   const agent = {
     config: { agent: { key: 'support' }, slack: { botToken: 'xoxb-test' } },
-    mcpClient: skillMcpStub([APPROVED_SKILL]),
+    mcpClient: stub,
   };
   const poster = fakePoster();
   const handler = createScheduledHandler({
@@ -202,11 +204,112 @@ test('handler does not post when the cron lease was lost mid-run (signal aborted
     skill: 'Daily SLA digest',
     slackChannel: 'C123',
     poster,
-    _runTurn: async () => ({ text: 'Digest ready.', history: [] }),
+    _runTurn: async () => {
+      runTurnCalled = true;
+      return { text: 'Digest ready.', history: [] };
+    },
   });
   const ac = new AbortController();
   ac.abort();
   const res = await handler({ log: { info() {}, warn() {} }, signal: ac.signal });
   assert.deepEqual(res, { posted: false, aborted: true });
   assert.equal(poster.posts.length, 0);
+  // Pre-aborted: neither the skill lookup nor the turn should have run.
+  assert.equal(stub.calls.length, 0);
+  assert.equal(runTurnCalled, false);
+});
+
+test('handler stops mid-run and does not post when the lease is lost during the turn', async () => {
+  const stub = skillMcpStub([APPROVED_SKILL]);
+  const agent = {
+    config: { agent: { key: 'support' }, slack: { botToken: 'xoxb-test' } },
+    mcpClient: stub,
+  };
+  const poster = fakePoster();
+  const ac = new AbortController();
+  let toolCallsAfterAbort = 0;
+  const handler = createScheduledHandler({
+    agent,
+    skill: 'Daily SLA digest',
+    slackChannel: 'C123',
+    poster,
+    // Simulate the lease being lost partway through generation: the signal
+    // flips, then the model attempts another tool call which the cancelled
+    // transport would reject. We assert the run reports aborted and no post.
+    _runTurn: async (args) => {
+      assert.equal(args.signal, ac.signal); // signal threaded into the turn
+      assert.equal(args.channelCtx.signal, ac.signal); // and onto the MCP ctx
+      ac.abort();
+      if (args.signal.aborted) {
+        const err = new Error('The operation was aborted');
+        err.name = 'AbortError';
+        throw err;
+      }
+      toolCallsAfterAbort += 1;
+      return { text: 'should not get here', history: [] };
+    },
+  });
+
+  const res = await handler({ log: { info() {}, warn() {} }, signal: ac.signal });
+  assert.deepEqual(res, { posted: false, aborted: true });
+  assert.equal(poster.posts.length, 0);
+  assert.equal(toolCallsAfterAbort, 0);
+});
+
+test('runScheduledSkill threads the signal onto the MCP ctx and the turn', async () => {
+  const stub = skillMcpStub([APPROVED_SKILL]);
+  const ac = new AbortController();
+  let received = null;
+  await runScheduledSkill({
+    config: { agent: { key: 'support' } },
+    mcpClient: stub,
+    skill: 'Daily SLA digest',
+    signal: ac.signal,
+    _runTurn: async (args) => {
+      received = args;
+      return { text: 'ok', history: [] };
+    },
+  });
+  // The skill lookup ran under a ctx carrying the signal...
+  assert.equal(stub.calls[0].ctx.signal, ac.signal);
+  // ...and the turn got both the signal and a ctx carrying it.
+  assert.equal(received.signal, ac.signal);
+  assert.equal(received.channelCtx.signal, ac.signal);
+});
+
+test('runScheduledSkill returns aborted before the lookup when pre-aborted', async () => {
+  const stub = skillMcpStub([APPROVED_SKILL]);
+  const ac = new AbortController();
+  ac.abort();
+  const out = await runScheduledSkill({
+    config: { agent: { key: 'support' } },
+    mcpClient: stub,
+    skill: 'Daily SLA digest',
+    signal: ac.signal,
+    _runTurn: async () => ({ text: 'x', history: [] }),
+  });
+  assert.deepEqual(out, { aborted: true });
+  assert.equal(stub.calls.length, 0); // no lookup, no turn
+});
+
+test('createScheduledHandler rejects per-user auth without an explicit channelUserId', () => {
+  const agent = {
+    config: { agent: { key: 'support' }, slack: { botToken: 't' } },
+    mcpClient: {},
+    auth: { mode: 'per-user' },
+  };
+  assert.throws(
+    () => createScheduledHandler({ agent, skill: 'Daily SLA digest', slackChannel: 'C1' }),
+    /service auth, or an explicit channelCtx with channelUserId/
+  );
+  // Advanced: an explicit channelCtx with a channelUserId is accepted.
+  assert.doesNotThrow(() =>
+    createScheduledHandler({
+      agent,
+      skill: 'Daily SLA digest',
+      slackChannel: 'C1',
+      poster: fakePoster(),
+      channelCtx: { channel: 'cron', agentKey: 'support', channelUserId: 'U1' },
+    })
+  );
 });

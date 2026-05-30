@@ -219,10 +219,19 @@ tenant-scoped server-side like every other read. For a multi-tenant
 deployment, register one job per tenant agent (each built with its own auth)
 or pass an explicit `channelCtx`.
 
+**Service auth is the default and the expectation.** A scheduled run has no
+end-user, so the default `cron` context has no `channelUserId`. Per-user auth
+resolves the agent's identity *from* the end-user, so a per-user agent is
+rejected at registration unless you pass an explicit `channelCtx` with a
+`channelUserId` (advanced: a job that acts as one specific linked user).
+
 `SLACK_BOT_TOKEN` must be set (the poster reuses the bundled `@slack/web-api`
 client); the full Slack channel doesn't have to be enabled. A run that
-produces no output skips the post, and a lost cron lease mid-run suppresses
-the post so another node's run isn't double-posted. Use
+produces no output skips the post. **Cancellation is cooperative**: the cron
+lease's `AbortSignal` is threaded into the run — forwarded to MCP tool calls
+and the model stream — so if the lease is lost mid-run (another node took
+over), in-flight tool calls and generation stop instead of continuing to
+write, and nothing is posted (no double-post). Use
 `createScheduledHandler({ agent, ... })` directly if you'd rather not go
 through `agent.scheduledSkill`.
 
