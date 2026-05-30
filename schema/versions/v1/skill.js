@@ -22,11 +22,13 @@
  * router already applies to tool schemas, now applied to knowledge.
  *
  * **Governance — a self-authored runbook cannot reach a live customer
- * unreviewed.** Skills carry a `stateMachine` on `status`:
- * `draft → approved → deprecated`. Two layers enforce that an agent can
- * author drafts but only a human operator can promote one, and they hold
- * on every write surface (REST, GraphQL, *and* MCP — the agent writes
- * over MCP, which runs neither hooks nor field validation the same way):
+ * unreviewed.** Skills carry a `stateMachine` on `status` with a one-way
+ * lifecycle: `draft → approved → deprecated`, where `deprecated` is
+ * terminal — a retired runbook is never re-approved in place (which would
+ * silently re-enter the L0 index); authoring a fresh skill is the path
+ * back. Two layers enforce that an agent can author drafts but only a
+ * human operator can promote one, and they hold on every write surface
+ * (REST, GraphQL, *and* MCP — the agent writes over MCP):
  *
  *   1. **The state machine stamps `draft` on every create.**
  *      `stampInitialStates` runs on the REST, GraphQL, and MCP create
@@ -41,7 +43,8 @@
  *      surface. An agent therefore cannot transition `draft → approved`
  *      (or any transition); only a human operator can. The state
  *      machine's transition graph then constrains the operator to the
- *      legal `draft → approved → deprecated` path.
+ *      legal one-way `draft → approved → deprecated` path (and refuses
+ *      reactivating a `deprecated` skill).
  *
  * Because the L0 index only ever lists `approved` skills, a half-baked
  * self-authored runbook stays invisible to customers until a human signs
@@ -125,11 +128,12 @@ module.exports = {
     // candidates; bumped when an approved skill is fetched. Plain counter
     // for now.
     { name: 'useCount', type: Number, default: 0 },
-    // Governed lifecycle. `stampInitialStates` forces `draft` on every
-    // create surface; the field ACL above keeps the agent out of any
-    // transition, so only an operator drives draft → approved →
+    // Governed one-way lifecycle. `stampInitialStates` forces `draft` on
+    // every create surface; the field ACL above keeps the agent out of
+    // any transition, so only an operator drives draft → approved →
     // deprecated. draft → deprecated is allowed so an operator can retire
-    // a bad draft without first approving it.
+    // a bad draft without first approving it, and `deprecated` is
+    // terminal — a retired skill is never reactivated in place.
     {
       name: 'status',
       type: String,
@@ -142,7 +146,10 @@ module.exports = {
         transitions: {
           draft: ['approved', 'deprecated'],
           approved: ['deprecated'],
-          deprecated: ['approved'],
+          // `deprecated` is terminal: a retired runbook is never
+          // re-approved in place (that would silently re-enter the L0
+          // index). Authoring a fresh skill is the supported path back.
+          deprecated: [],
         },
       },
     },
@@ -160,10 +167,11 @@ module.exports = {
     // the governance contract and survives any future refactor of the
     // create pipeline.
     beforeCreate: async ({ input }) => ({ ...input, status: 'draft' }),
-    // Field-level ACL already strips `status` from an agent update, so an
-    // agent can't transition. This gives a clear 403 if an agent token
-    // ever reaches the by-id delete path, keeping it from dropping a
-    // governed runbook out from under the operators who own it.
+    // Delete has no field-level ACL, so this hook is the only gate that
+    // keeps an agent token from dropping a governed runbook out from
+    // under the operators who own it. It runs on every by-id delete
+    // surface — REST, GraphQL, and MCP delete_skill — so an agent can't
+    // route around it by calling the MCP tool directly.
     beforeDelete: async ({ user }) => {
       if (isAgentAuthor(user)) {
         throw new ForbiddenError('agents cannot delete a skill; ask an operator to deprecate it');

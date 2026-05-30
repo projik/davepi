@@ -48,6 +48,7 @@ const { normalizeRelations, parseIncludes, applyIncludes } = require('./relation
 const { matchAccept, decorateFileUrls } = require('./fileFields');
 const { getStorageDriver } = require('./storage');
 const { recordAudit } = require('./audit');
+const { getHook, runBeforeHook, runAfterHook } = require('./hooks');
 const logger = require('./logger');
 const idempotency = require('./idempotency');
 const AuditLog = require('../model/auditLog');
@@ -555,11 +556,21 @@ function registerSchemaTools(server, entry, { schemaLoader, getUser }) {
       const baseQuery = bypassUserScopeForDelete(s, user)
         ? { _id: args.id }
         : { _id: args.id, userId: user.user_id };
+      // Schema delete hooks govern this path too — without them an
+      // `agent`-role caller could delete a record over MCP that
+      // `beforeDelete` refuses over REST/GraphQL (e.g. the skill /
+      // agentPersona guardrails, which rely on the hook because delete
+      // has no field-level ACL). Mirror the REST/GraphQL contract:
+      // beforeDelete gates (a throw rejects), afterDelete is best-effort.
+      const hasBeforeDelete = !!getHook(s, 'beforeDelete');
+      const hasAfterDelete = !!getHook(s, 'afterDelete');
       if (softDelete) {
         const existing = await Model.findOne({ ...baseQuery, deletedAt: null }).lean();
         if (!existing) throw new NotFoundError(path);
+        await runBeforeHook(s, 'beforeDelete', { input: null, current: existing, user });
         const now = new Date();
         await Model.updateOne({ _id: existing._id }, { $set: { deletedAt: now } });
+        const tombstoned = { ...existing, deletedAt: now };
         if (auditEnabled) {
           await recordAudit({
             req: { user },
@@ -567,12 +578,24 @@ function registerSchemaTools(server, entry, { schemaLoader, getUser }) {
             recordId: existing._id,
             action: 'delete',
             before: existing,
-            after: { ...existing, deletedAt: now },
+            after: tombstoned,
           });
+        }
+        if (hasAfterDelete) {
+          await runAfterHook(s, 'afterDelete', { record: tombstoned, user }, logger);
         }
         return { acknowledged: true, softDeleted: true, _id: String(existing._id) };
       }
-      const existing = auditEnabled ? await Model.findOne(baseQuery).lean() : null;
+      // Hard delete: load the record when audit OR either delete hook
+      // needs it. A beforeDelete that gates on the record must see a
+      // NOT_FOUND before any mutation, matching the REST path.
+      const existing = (auditEnabled || hasBeforeDelete || hasAfterDelete)
+        ? await Model.findOne(baseQuery).lean()
+        : null;
+      if (hasBeforeDelete) {
+        if (!existing) throw new NotFoundError(path);
+        await runBeforeHook(s, 'beforeDelete', { input: null, current: existing, user });
+      }
       const result = await Model.deleteOne(baseQuery);
       if (!result.deletedCount) throw new NotFoundError(path);
       if (auditEnabled && existing) {
@@ -584,6 +607,9 @@ function registerSchemaTools(server, entry, { schemaLoader, getUser }) {
           before: existing,
           after: null,
         });
+      }
+      if (hasAfterDelete) {
+        await runAfterHook(s, 'afterDelete', { record: existing, user }, logger);
       }
       return { acknowledged: true, deletedCount: result.deletedCount };
     })

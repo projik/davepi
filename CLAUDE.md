@@ -72,7 +72,7 @@ module.exports = {
 
 - `before*` hooks run synchronously to the request. Returning a value from `beforeCreate` / `beforeUpdate` **replaces** the input that gets persisted; returning `undefined` keeps it. Throw a typed error from `utils/errors.js` to reject the operation — it flows through `errorHandler` like any other thrown error.
 - `after*` hooks run after persistence and are **best-effort**: a thrown error is logged but does not fail the response (same posture as audit and state-machine `onEnter`).
-- Coverage: REST `POST` / `PUT /:id` / `DELETE /:id` and GraphQL `{path}CreateOne` / `{path}UpdateById` / `{path}RemoveById`. **Bulk paths intentionally do NOT invoke hooks** — use a plugin subscribing to the event bus for bulk reactions.
+- Coverage: REST `POST` / `PUT /:id` / `DELETE /:id` and GraphQL `{path}CreateOne` / `{path}UpdateById` / `{path}RemoveById`. On **MCP**, `delete_{path}` also runs `beforeDelete` / `afterDelete` (delete is a governance gate with no field-level ACL fallback, so skipping the hook there would be a silent bypass); MCP `create_{path}` / `update_{path}` deliberately stay hookless (the agent self-authors memory/profiles over MCP and relies on that). **Bulk paths intentionally do NOT invoke hooks** — use a plugin subscribing to the event bus for bulk reactions.
 
 **2. Plugins** (cross-cutting). Plugin module specifiers are listed under `davepi.plugins` in the consumer project's `package.json`:
 

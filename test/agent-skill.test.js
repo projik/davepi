@@ -228,7 +228,21 @@ describe('skill: governance (create lands draft; only operators approve)', () =>
     expect(bad.body.error.code).toBe('INVALID_TRANSITION');
   });
 
-  test('agent cannot delete a skill (beforeDelete refuses; operator can)', async () => {
+  test('deprecated is terminal: a deprecated skill cannot be re-approved (400)', async () => {
+    const owner = await registerUser(ctx.request, ctx.app);
+    const created = await post(PATH, { agentKey: 'support', name: 'Refund', body: 'r' }, owner.token);
+    await put(`${PATH}/${created.body._id}`, { status: 'approved' }, owner.token);
+    const deprecated = await put(`${PATH}/${created.body._id}`, { status: 'deprecated' }, owner.token);
+    expect(deprecated.status).toBe(200);
+
+    const revive = await put(`${PATH}/${created.body._id}`, { status: 'approved' }, owner.token);
+    expect(revive.status).toBe(400);
+    expect(revive.body.error.code).toBe('INVALID_TRANSITION');
+    // The one-way lifecycle leaves no legal next state from deprecated.
+    expect(revive.body.error).toBeDefined();
+  });
+
+  test('agent cannot delete a skill over REST (beforeDelete refuses; operator can)', async () => {
     const owner = await registerUser(ctx.request, ctx.app);
     const created = await post(PATH, { agentKey: 'support', name: 'Refund', body: 'r' }, owner.token);
     const id = created.body._id;
@@ -243,6 +257,46 @@ describe('skill: governance (create lands draft; only operators approve)', () =>
     expect(opDelete.status).toBe(200); // soft-delete tombstone
     expect(opDelete.body.softDeleted).toBe(true);
 
+    const gone = await get(`${PATH}/${id}`, owner.token);
+    expect(gone.status).toBe(404);
+  });
+
+  test('agent cannot delete a skill over MCP either (delete_skill runs beforeDelete)', async () => {
+    const owner = await registerUser(ctx.request, ctx.app);
+    // Seed an operator-owned skill via REST, then attempt the delete as
+    // the agent service role over MCP — the path that does not run REST
+    // middleware, so the schema hook is the only gate.
+    const created = await post(PATH, { agentKey: 'support', name: 'Refund', body: 'r' }, owner.token);
+    const id = created.body._id;
+
+    const agentMcp = await connectMcp(agentUserFor(owner));
+    try {
+      const del = await agentMcp.client.callTool({
+        name: 'delete_skill',
+        arguments: { id },
+      });
+      expect(del.isError).toBe(true);
+      const body = parseStructured(del);
+      expect(body.error.code).toBe('FORBIDDEN');
+    } finally {
+      await agentMcp.close();
+    }
+
+    // The record is untouched and still readable by the operator.
+    const stillThere = await get(`${PATH}/${id}`, owner.token);
+    expect(stillThere.status).toBe(200);
+
+    // And an operator CAN delete it over MCP.
+    const aUser = jwt.decode(owner.accessToken);
+    const opMcp = await connectMcp(aUser);
+    try {
+      const del = parseStructured(
+        await opMcp.client.callTool({ name: 'delete_skill', arguments: { id } })
+      );
+      expect(del.softDeleted).toBe(true);
+    } finally {
+      await opMcp.close();
+    }
     const gone = await get(`${PATH}/${id}`, owner.token);
     expect(gone.status).toBe(404);
   });

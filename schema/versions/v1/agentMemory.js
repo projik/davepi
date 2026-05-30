@@ -26,9 +26,10 @@
  * prompt discipline, and the reason memory is safe to self-author where
  * the persona is not.
  *
- * **Provenance via `updatedBy`.** Schema lifecycle hooks run on the
- * REST and GraphQL write paths but NOT on MCP (a deliberate framework
- * invariant — see CLAUDE.md "Extensibility"). The agent writes over MCP,
+ * **Provenance via `updatedBy`.** Schema `create`/`update` hooks run on
+ * the REST and GraphQL write paths but NOT on MCP (a deliberate framework
+ * invariant — see CLAUDE.md "Extensibility"; only `delete` hooks run on
+ * MCP, as a governance gate). The agent writes over MCP,
  * so a hook alone can't stamp provenance for the common case. We use two
  * layers that together cover every surface: the field `default: 'agent'`
  * fires on the hookless MCP create (the agent's own self-authored path),
