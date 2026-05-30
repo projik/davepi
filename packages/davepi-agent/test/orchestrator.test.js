@@ -182,14 +182,15 @@ test('memory fetcher reads list_agentMemory; null when no agentKey', async () =>
   assert.equal(stub.calls[0].args.filter.agentKey, 'support');
 });
 
-test('profile fetcher keys on channelUserId; null in service mode', async () => {
-  const stub = personaMcpStub([{ endUserKey: 'U1', preferences: 'email' }]);
+test('profile fetcher keys on the channel-prefixed endUserKey; null in service mode', async () => {
+  const stub = personaMcpStub([{ endUserKey: 'slack:U1', preferences: 'email' }]);
   assert.equal(makeProfileFetcher({ mcpClient: stub, channelCtx: { channelUserId: null } }), null);
-  const fetch = makeProfileFetcher({ mcpClient: stub, channelCtx: { channelUserId: 'U1' } });
+  const fetch = makeProfileFetcher({ mcpClient: stub, channelCtx: { channel: 'slack', channelUserId: 'U1' } });
   const row = await fetch();
-  assert.deepEqual(row, { endUserKey: 'U1', preferences: 'email' });
+  assert.deepEqual(row, { endUserKey: 'slack:U1', preferences: 'email' });
   assert.equal(stub.calls[0].name, 'list_customerProfile');
-  assert.equal(stub.calls[0].args.filter.endUserKey, 'U1');
+  // Canonical key matches the schema example / backend tests (`slack:U1`).
+  assert.equal(stub.calls[0].args.filter.endUserKey, 'slack:U1');
 });
 
 test('promptCachingEnabled: on for anthropic by default, off for other providers', () => {

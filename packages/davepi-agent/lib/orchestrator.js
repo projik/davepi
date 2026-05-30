@@ -111,11 +111,20 @@ function makeMemoryFetcher({ config, mcpClient, channelCtx }) {
 /**
  * Build a customer-profile loader (prompt slot #5), or `null` when there
  * is no end-user to key on (service mode has none, so per-user profile
- * simply doesn't apply). `endUserKey` is the channel user id.
+ * simply doesn't apply).
+ *
+ * The canonical `endUserKey` is **channel-prefixed** (`${channel}:${id}`,
+ * e.g. `slack:U123`) — the format the `customerProfile` schema documents
+ * and the backend tests use. Prefixing namespaces the platform id per
+ * channel (a Slack `U1` and a Telegram `U1` are different people) and,
+ * critically, means a profile pre-seeded or edited via REST/GraphQL in
+ * the documented format is read back into the snapshot here.
  */
 function makeProfileFetcher({ mcpClient, channelCtx }) {
-  const endUserKey = channelCtx && channelCtx.channelUserId;
-  if (!endUserKey) return null;
+  const channelUserId = channelCtx && channelCtx.channelUserId;
+  if (!channelUserId) return null;
+  const channel = (channelCtx && channelCtx.channel) || 'unknown';
+  const endUserKey = `${channel}:${channelUserId}`;
   return async () => {
     const raw = await mcpClient.callTool(
       'list_customerProfile',
