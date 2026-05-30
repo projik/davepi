@@ -21,11 +21,11 @@
  * has to hold on every write surface, not just the ones that run hooks.**
  * The agent runtime exposes MCP CRUD tools to the model, so prompt
  * injection could try to drive `update_agentPersona` /
- * `delete_agentPersona`; schema lifecycle hooks do NOT run on MCP tools
- * or bulk paths, so a hook alone is not a safe gate (this is exactly why
- * `apiClient` protects itself with field-level ACL rather than hooks).
- * The persona therefore enforces ownership with the two layers that ARE
- * universal:
+ * `delete_agentPersona`; MCP `create`/`update` do NOT run schema hooks
+ * (nor do bulk paths), so a create/update hook alone is not a safe gate
+ * (this is exactly why `apiClient` protects itself with field-level ACL
+ * rather than hooks). The persona therefore enforces ownership with the
+ * two layers that ARE universal:
  *
  *   1. **Field-level ACL (`OPERATOR_WRITE`) on every live field.**
  *      `filterWritable` runs on REST single + bulk PUT, all GraphQL
@@ -38,8 +38,9 @@
  *      one. The agent's *only* writable field is `proposedPatch`.
  *   2. **`beforeDelete` hook refusing agent-authored deletes.** Delete
  *      has no field-level ACL, and the agent shares the owner's
- *      `userId` in service mode, so the hook is the gate for the
- *      REST/GraphQL by-id delete paths. (Deleting a persona only reverts
+ *      `userId` in service mode, so the hook is the gate for the by-id
+ *      delete paths — REST, GraphQL, *and* MCP `delete_agentPersona`,
+ *      which runs `beforeDelete` too. (Deleting a persona only reverts
  *      the agent to the safe default prompt — persona is never an
  *      access-control mechanism, see docs/agent-learning-layer.md §1 —
  *      so this is governance, not privilege containment.)
@@ -147,7 +148,8 @@ module.exports = {
     },
     // Delete has no field-level ACL and the agent shares the owner's
     // userId, so this is the gate that keeps an agent from dropping its
-    // own guardrails on the by-id delete paths.
+    // own guardrails on the by-id delete paths (REST, GraphQL, and MCP
+    // delete_agentPersona — all three run beforeDelete).
     beforeDelete: async ({ user }) => {
       if (isAgentAuthor(user)) {
         throw new ForbiddenError('agents cannot delete a persona');

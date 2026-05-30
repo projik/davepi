@@ -15,6 +15,7 @@ const {
   adaptMcpTools,
   normalizeMcpResult,
   makePersonaFetcher,
+  makeSkillsFetcher,
   makeMemoryFetcher,
   makeProfileFetcher,
   promptCachingEnabled,
@@ -180,6 +181,45 @@ test('memory fetcher reads list_agentMemory; null when no agentKey', async () =>
   assert.deepEqual(row, { agentKey: 'support', body: 'mem' });
   assert.equal(stub.calls[0].name, 'list_agentMemory');
   assert.equal(stub.calls[0].args.filter.agentKey, 'support');
+});
+
+test('skills fetcher reads list_skill filtered to approved; null when no agentKey', async () => {
+  const rows = [{ _id: 's1', name: 'Refund', status: 'approved' }];
+  const stub = personaMcpStub(rows);
+  assert.equal(makeSkillsFetcher({ config: { agent: {} }, mcpClient: stub }), null);
+  const fetch = makeSkillsFetcher({
+    config: { agent: { key: 'support' } },
+    mcpClient: stub,
+    channelCtx: {},
+  });
+  const out = await fetch();
+  assert.deepEqual(out, rows); // resolves to the full array, not the first row
+  assert.equal(stub.calls[0].name, 'list_skill');
+  assert.equal(stub.calls[0].args.filter.agentKey, 'support');
+  // Approved-only is what keeps draft/deprecated runbooks out of the prompt.
+  assert.equal(stub.calls[0].args.filter.status, 'approved');
+});
+
+test('skills fetcher returns [] on an empty result or an error envelope', async () => {
+  const empty = personaMcpStub([]);
+  const fetchEmpty = makeSkillsFetcher({
+    config: { agent: { key: 'support' } },
+    mcpClient: empty,
+    channelCtx: {},
+  });
+  assert.deepEqual(await fetchEmpty(), []);
+
+  const erroring = {
+    async callTool() {
+      return { isError: true, content: [{ type: 'text', text: 'boom' }] };
+    },
+  };
+  const fetchErr = makeSkillsFetcher({
+    config: { agent: { key: 'support' } },
+    mcpClient: erroring,
+    channelCtx: {},
+  });
+  assert.deepEqual(await fetchErr(), []);
 });
 
 test('profile fetcher keys on the channel-prefixed endUserKey; null in service mode', async () => {

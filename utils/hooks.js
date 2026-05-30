@@ -24,9 +24,16 @@
  *     state-machine `onEnter` posture and the audit posture so a flaky
  *     side effect can't roll back a committed mutation.
  *
- * Surface coverage (first cut):
+ * Surface coverage:
  *   - REST: POST /api/{v}/{path}, PUT /api/{v}/{path}/:id, DELETE /api/{v}/{path}/:id
  *   - GraphQL: {path}CreateOne, {path}UpdateById, {path}RemoveById
+ *   - MCP: delete_{path} runs beforeDelete / afterDelete. create_{path}
+ *     and update_{path} deliberately do NOT run hooks (the agent writes
+ *     its own memory/profiles over MCP and relies on that — see the
+ *     agentMemory schema), but delete is a governance gate: a schema like
+ *     `skill` or `agentPersona` blocks agent-authored deletes through
+ *     beforeDelete, and delete has no field-level ACL to fall back on, so
+ *     skipping the hook on MCP would be a silent bypass.
  *
  * Bulk paths (PUT /api/{v}/{path}, GraphQL createMany / updateMany /
  * removeMany) intentionally do NOT invoke per-record hooks — running
