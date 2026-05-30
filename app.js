@@ -150,20 +150,22 @@ const buildGraphqlContext = async ({ req }) => {
   // API-key path: a `dpk_`-prefixed bearer resolves to the same
   // synthetic user (with `scopes`) the REST middleware produces, so the
   // scopeResolver wrappers enforce coarse read/write scopes on GraphQL
-  // too. A miss yields an unauthenticated context, mirroring the JWT
-  // failure path below.
+  // too. A miss returns null → unauthenticated context. We deliberately
+  // do NOT catch here: resolveApiKeyUser signals "no such key" by
+  // returning null, so a thrown error is an operational failure (e.g.
+  // Mongo down) that should surface to Apollo, not be masked as an auth
+  // failure — mirroring REST, where auth.js propagates via `.catch(next)`.
   if (token.startsWith(API_KEY_PREFIX)) {
-    try {
-      const user = await resolveApiKeyUser(token);
-      return { user: user || null };
-    } catch (err) {
-      return { user: null };
-    }
+    const user = await resolveApiKeyUser(token);
+    return { user: user || null };
   }
   try {
     const decoded = jwt.verify(token, process.env.TOKEN_KEY, { algorithms: ['HS256'] });
     return { user: decoded };
   } catch (err) {
+    // jwt.verify throws on an invalid/expired token — that IS the
+    // expected auth-failure path, so swallow it into an unauthenticated
+    // context (unlike the API-key path above).
     return { user: null };
   }
 };
