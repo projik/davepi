@@ -10,3 +10,9 @@
 # Synced at publish time by `node bin/sync-templates.js` (the scaffolder's
 # prepublishOnly hook). Root-level `templates/` is the source.
 /create-davepi-app/templates
+# Local scaffolds used to verify the tutorials end-to-end. Not framework
+# source: they carry their own node_modules, an .env.agent with a JWT, and
+# a Node-`--test` smoke test that the root Jest run would choke on.
+/demos
+# `npm pack` output (tarballs used to install the local build into a scaffold).
+*.tgz
