@@ -1,0 +1,92 @@
+name: 'Publish @davepi/agent'
+
+# Publishes the @davepi/agent package to npm when a tag matching
+# `@davepi/agent@<version>` is pushed. The tag's <version> must equal
+# the package.json's `version` field — the workflow fails fast on
+# mismatch so a stale tag doesn't publish the wrong bits.
+#
+# Auth: classic NPM_TOKEN via the `npm-publish` GitHub Environment so
+# a reviewer approves each release. Switch to Trusted Publishing
+# (OIDC) once npm supports it for this account.
+#
+# Why this workflow does NOT run the package's `npm test` (unlike the
+# slack/mcp/plugin publish workflows): @davepi/agent's suite is a
+# monorepo *integration* suite — it requires `davepi/app.js`,
+# `mongodb-memory-server`, and `supertest`, none of which are declared
+# as this package's own dependencies, so `npm test` from inside
+# packages/davepi-agent would fail to resolve them. That suite runs in
+# the monorepo context, not here. Instead we mirror @davepi/mcp's
+# packaging-smoke posture: a `--help` check (the bin handles --help
+# and exits 0 *before* requiring any heavy dep) plus a pack-contents
+# allowlist so a `files[]` drift can't ship a broken tarball.
+
+on:
+  push:
+    tags:
+      - '@davepi/agent@*'
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    environment: npm-publish
+    defaults:
+      run:
+        working-directory: packages/davepi-agent
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20.x
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Verify tag matches package.json version
+        env:
+          GITHUB_REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -e
+          # Tag format: @davepi/agent@<version> — strip everything up
+          # to and including the LAST '@' to get the version.
+          tag_version="${GITHUB_REF_NAME##*@}"
+          pkg_version=$(node -p "require('./package.json').version")
+          if [ "$tag_version" != "$pkg_version" ]; then
+            echo "::error::tag version ($tag_version) does not match package.json version ($pkg_version)"
+            exit 1
+          fi
+          echo "Publishing @davepi/agent@$pkg_version"
+
+      - name: Bin boots and prints help
+        run: |
+          set -e
+          # --help is handled before any dependency is required, so
+          # this needs no `npm install`. A non-zero exit or missing
+          # text means the bin entry has silently regressed.
+          out=$(node bin/davepi-agent.js --help 2>&1)
+          echo "$out" | grep -q "Boots the chat agent" || (echo "Missing usage text in --help"; exit 1)
+
+      - name: Verify pack contents
+        run: |
+          set -euo pipefail
+          out=$(npm pack --dry-run --json)
+          echo "$out" | node -e '
+            const data = JSON.parse(require("fs").readFileSync(0, "utf8"));
+            const files = data[0].files.map((f) => f.path);
+            const required = ["index.js", "bin/davepi-agent.js", "README.md", "package.json"];
+            const missing = required.filter((r) => !files.includes(r));
+            if (missing.length) {
+              console.error("missing from tarball:", missing);
+              process.exit(1);
+            }
+            if (!files.some((f) => f.startsWith("lib/"))) {
+              console.error("no lib/* files in tarball");
+              process.exit(1);
+            }
+            console.log("pack ok:", files.length, "files");
+          '
+
+      - name: Publish to npm
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm publish --access public
