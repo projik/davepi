@@ -82,6 +82,7 @@ export default defineConfig({
             { label: 'REST', link: '/surfaces/rest/' },
             { label: 'GraphQL', link: '/surfaces/graphql/' },
             { label: 'MCP server', link: '/surfaces/mcp/' },
+            { label: 'Agent', link: '/surfaces/agent/' },
             { label: '_describe manifest', link: '/surfaces/describe/' },
             { label: 'TypeScript client', link: '/surfaces/client/' },
           ],

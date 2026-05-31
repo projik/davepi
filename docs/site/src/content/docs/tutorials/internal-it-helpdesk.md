@@ -173,177 +173,114 @@ Set up the bot using the
 [checklist](/tutorials/habit-tracker/#900--create-a-slack-bot) if
 you haven't yet.
 
-## 17:00 — Wire a second MCP server (web search)
+## 17:00 — Add web search as a davepi-side tool
 
-The agent's MCP client supports talking to one davepi endpoint
-out of the box. To add a *second* MCP server — a web-search
-provider — drop a config file the agent's `lib/config.js` will
-pick up via `DAVEPI_AGENT_CONFIG`.
+The agent talks to one MCP endpoint today (davepi itself), so
+extending it with web search means **exposing web search through
+davepi** — the auto-MCP layer then picks it up as just another
+tool. This is the cleanest pattern that works with what ships in
+the repo: one tool surface, uniform ACL, audit-log coverage for
+free. (First-class support for multiple MCP endpoints is a
+roadmap item; see [Surfaces → Agent → Extending the agent beyond
+davepi data](/surfaces/agent/#extending-the-agent-beyond-davepi-data).)
 
-Create `davepi-agent.config.js` in the project root:
+Sign up for a [Tavily](https://app.tavily.com/) API key (free
+tier is plenty) and add to your project's `.env`:
 
-```js
-// Programmatic agent config. Picked up by @davepi/agent when
-// DAVEPI_AGENT_CONFIG=./davepi-agent.config.js is set.
-//
-// Extends the standard env-driven config with a second MCP
-// endpoint for web search. Tool names from the secondary endpoint
-// are namespaced with `web_` so they don't collide with davepi's
-// auto-generated tools.
+```bash
+TAVILY_API_KEY=tvly-...
+```
 
-module.exports = {
-  mcpServers: [
-    // Primary endpoint is the davepi backend itself, with whatever
-    // auth strategy AGENT_AUTH_MODE says.
-    { name: 'davepi', url: process.env.DAVEPI_URL + '/mcp', prefix: null },
+In your davepi project, add a custom route after the
+`schemas.forEach` loop in `app.js` (or in a plugin under
+`plugins/`). Ask Claude Code:
 
-    // Secondary: a Tavily search server. Run any web-search MCP
-    // server you like; the official one is at
-    // https://github.com/tavily-ai/tavily-mcp.
-    {
-      name: 'web',
-      url: 'http://localhost:5100/mcp',
-      prefix: 'web_',
-      headers: { 'authorization': `Bearer ${process.env.TAVILY_API_KEY}` },
-    },
-  ],
+> Add a custom REST route `POST /api/web-search` to my davepi
+> project that takes `{ query: string }` in the body, calls
+> Tavily's `/search` API server-side with `TAVILY_API_KEY`, and
+> returns `{ results: [{ title, url, snippet }] }`. Use the
+> framework's asyncHandler + auth(true) + apiLimiter pattern from
+> app.js. The route should be `expose: true` for MCP so the agent
+> sees a `web_search` tool.
 
-  // Prompt routing. Tell the model which tool family to reach for
-  // based on intent. Folded into the system prompt at session
-  // start.
-  llm: {
-    systemPrompt: `You are an internal IT support agent for a tech company.
+Claude wires the route. After hot reload, MCP exposes a
+`web_search` tool to the agent. Verify:
 
-You have three families of tools:
+```bash
+curl -s http://localhost:5050/_describe \
+  -H "Authorization: Bearer $TOKEN" \
+  | jq '.mcp.tools[] | select(.name=="web_search")'
+```
 
-1. **runbook tools** (list_runbook, get_runbook, search_runbook):
+The route runs server-side, so the Tavily key never leaves the
+backend. The agent calls `web_search` over MCP, davepi calls
+Tavily over HTTPS, results come back through the same MCP envelope
+the agent already knows how to parse.
+
+## 22:00 — Add the auto-ticket tool the same way
+
+The "open a ticket and DM the manager" workflow is the same
+pattern: a davepi-side custom route that the agent calls.
+
+Ask Claude:
+
+> Add `POST /api/auto-ticket` to my davepi project. Body:
+> `{ title: string, body: string, tags?: string[] }`. The route
+> looks up the calling user's `employee` record via
+> `req.user.user_id`, creates a `ticket` row with `auto_opened`
+> appended to tags, looks up the manager via `employee.manager_id`
+> and, if `davepi-plugin-slack` is wired, DMs the manager's
+> `slack_user_id` with a one-line summary. Return
+> `{ ticket_id, notified_manager }`. Same asyncHandler + auth(true)
+> pattern; `expose: true` for MCP.
+
+Claude writes the route. Hot reload exposes `auto_ticket` as an
+MCP tool. The agent calls it like any other.
+
+This pattern — custom-route-on-davepi-becomes-MCP-tool — is the
+v1 answer to "I want the agent to do X that davepi doesn't
+already do." It composes with audit, ACL, tenancy, and
+rate-limiting because it's a regular davepi route.
+
+## 28:00 — Set the routing system prompt
+
+Tell the model which tool family to reach for based on intent.
+Add `LLM_SYSTEM_PROMPT` to `.env.agent`:
+
+```bash
+LLM_SYSTEM_PROMPT="You are an internal IT support agent for a tech company.
+
+You have three families of tools, and you should pick them in this order:
+
+1. **Runbook tools** (list_runbook, get_runbook, search_runbook):
    internal company runbooks. Reach for these FIRST when an
    employee asks a how-to question.
 
-2. **employee/asset/ticket tools** (list_employee, list_asset,
-   create_ticket, etc.): internal HR-ish records. Reach for these
-   when the question is about the employee themselves
-   ("my laptop", "my warranty", "open a ticket").
+2. **Employee/asset/ticket tools** (list_employee, list_asset,
+   create_ticket): internal HR-ish records. Reach for these when
+   the question is about the employee themselves ('my laptop',
+   'my warranty', 'open a ticket').
 
-3. **web_* tools**: general web search. Reach for these LAST,
-   only when runbooks don't have an answer.
+3. **web_search**: general web search backed by Tavily. Reach for
+   this LAST, only when runbooks don't answer the question.
 
-If neither runbook nor web search resolves an issue, use the
-\`open_ticket\` tool to create a ticket on the employee's behalf.
+If neither runbook nor web search resolves the issue, use
+auto_ticket to create a ticket on the employee's behalf — it will
+DM their manager automatically.
 
 NEVER quote the contents of another employee's records to the
 caller. The access boundary is the JWT — if a query returns
 empty, it's because the caller doesn't have permission, not
-because the data doesn't exist; report it as "I don't have
-visibility into that".`,
-  },
-};
+because the data doesn't exist; report it as 'I don't have
+visibility into that'."
 ```
 
-Add to `.env.agent`:
-
-```bash
-DAVEPI_AGENT_CONFIG=./davepi-agent.config.js
-TAVILY_API_KEY=tvly-...    # from app.tavily.com
-```
-
-**Note on multi-MCP-endpoint config**: this tutorial assumes
-`@davepi/agent` exposes a `mcpServers` array in config; if your
-installed version only exposes a single `DAVEPI_URL`, run the
-secondary MCP server as a separate process and use the agent's
-`tools` plugin extension point to surface its tools alongside.
-The [`@davepi/agent` README](https://github.com/projik/davepi/blob/main/packages/davepi-agent/README.md)
-has the canonical surface.
-
-## 24:00 — Write a native `open_ticket` tool
-
-The agent supports adding client-side native tools alongside
-`render_chart` and `render_table`. Create `agent-tools/openTicket.js`:
-
-```js
-'use strict';
-
-const { z } = require('zod');
-
-/**
- * Native client-side tool for opening a helpdesk ticket and
- * notifying the employee's manager. Combines a davepi MCP write
- * (create_ticket) with a Slack DM via the bot's channel adapter.
- *
- * Exposed to the model alongside render_chart and render_table.
- */
-module.exports = ({ mcpClient, slackClient }) => ({
-  open_ticket: {
-    description:
-      'Open a helpdesk ticket on the employee\'s behalf. Use this ' +
-      'when neither internal runbooks nor web search have resolved ' +
-      'the issue. The tool will create the ticket, tag it ' +
-      'auto_opened, and DM the employee\'s manager.',
-    parameters: z.object({
-      title: z.string().describe('Short summary of the problem.'),
-      body: z.string().describe('What the employee tried, what failed, expected vs actual.'),
-      tags: z.array(z.string()).optional().describe('e.g. ["vpn","macos"]'),
-    }),
-    async execute({ title, body, tags = [] }, ctx) {
-      // 1. Resolve the calling employee's record. ctx.channelUserId
-      //    is the signed Slack user id from the channel adapter.
-      const employees = await mcpClient.callTool('list_employee', {
-        filter: { slack_user_id: ctx.channelUserId },
-        limit: 1,
-      });
-      const emp = employees?.results?.[0];
-      if (!emp) {
-        return { error: 'No employee record matches your Slack identity. Ask IT to link your account.' };
-      }
-      // 2. Create the ticket via the davepi MCP.
-      const created = await mcpClient.callTool('create_ticket', {
-        input: {
-          employee_id: emp._id,
-          title,
-          body,
-          tags: [...new Set([...tags, 'auto_opened'])],
-          status: 'open',
-        },
-      });
-      // 3. Look up the manager and DM them via Slack.
-      if (emp.manager_id && slackClient) {
-        const mgrs = await mcpClient.callTool('list_employee', {
-          filter: { _id: emp.manager_id },
-          limit: 1,
-        });
-        const mgr = mgrs?.results?.[0];
-        if (mgr?.slack_user_id) {
-          await slackClient.chat.postMessage({
-            channel: mgr.slack_user_id,
-            text:
-              `FYI — your report *${emp.name}* has an open IT issue.\n` +
-              `Ticket #${created._id}: ${title}`,
-          });
-        }
-      }
-      return {
-        ticket_id: created._id,
-        notified_manager: !!emp.manager_id,
-      };
-    },
-  },
-});
-```
-
-Reference it from `davepi-agent.config.js` (extend the file you
-created):
-
-```js
-const openTicket = require('./agent-tools/openTicket');
-
-module.exports = {
-  // ... mcpServers / llm config from above ...
-  nativeTools: [openTicket],
-};
-```
-
-The agent's render-tool registration is the model; native tools
-plug in alongside.
+The `LLM_SYSTEM_PROMPT` env var
+([Surfaces → Agent → LLM providers](/surfaces/agent/#llm-providers))
+overrides the agent's built-in prompt for every turn. Keep it
+under ~1000 tokens — the longer the prompt, the more cache budget
+you eat. See [Persona & memory](/surfaces/agent/#persona--memory-optional)
+for the persisted-prompt-snapshot alternative when this gets long.
 
 ## 32:00 — Start the agent and link
 
@@ -406,12 +343,12 @@ themselves.
 
 > Still broken after that runbook step. Can you log a ticket?
 
-The agent calls your native `open_ticket` tool. The tool:
+The agent calls the `auto_ticket` MCP tool you wired in section
+22:00. The davepi-side route:
 
-1. Resolves your employee record via Slack id.
-2. Creates a `ticket` row via `create_ticket` MCP call, tagged
-   `auto_opened`.
-3. DMs your manager.
+1. Resolves your employee record from `req.user.user_id`.
+2. Creates a `ticket` row with `auto_opened` in tags.
+3. Looks up your manager and DMs them via `davepi-plugin-slack`.
 
 The bot replies: *"Done — ticket #4523 opened, your manager has
 been notified."* Your manager's Slack lights up with the DM.
@@ -453,19 +390,21 @@ What you have:
 
 - A 4-collection backend for IT operations (employees, assets,
   tickets, runbooks).
-- An agent process that talks to **two MCP servers**: davepi for
-  internal data, plus a web-search MCP for general queries.
-- A custom client-side **native tool** (`open_ticket`) that
-  composes a davepi write with a Slack DM action.
+- Two **custom davepi routes** exposed automatically as MCP
+  tools: `web_search` (Tavily-backed) and `auto_ticket` (creates
+  a ticket and DMs the manager via `davepi-plugin-slack`).
 - A **system prompt** that routes intent across the three tool
-  families.
+  families (runbook first, internal records second, web search
+  last).
 - A demonstrated **confused-deputy guard** — the ACL boundary is
   the JWT, not the prompt.
 
 This is the demo that converts "cool framework" into "what else
-can I plug in?" You can swap in any MCP server — code repo
-search, Jira, Confluence, Linear, GitHub. The agent's loop
-doesn't change.
+can I plug in?" The custom-route-becomes-MCP-tool pattern works
+for any external service — Jira, Confluence, Linear, GitHub,
+internal vendor APIs. The agent's loop doesn't change because
+every new capability is just another MCP tool on the existing
+davepi endpoint.
 
 ## What to read next
 
@@ -473,7 +412,11 @@ doesn't change.
   remixing two demos (e.g. real estate + IT helpdesk) into your
   own.
 - [Surfaces → Agent](/surfaces/agent/) — the canonical config
-  reference, including `mcpServers` and native-tool registration.
+  reference, including auth modes, the tool router, and the
+  "extending the agent beyond davepi data" pattern this tutorial
+  used.
+- [Surfaces → REST](/surfaces/rest/) — how custom routes
+  surface to MCP via the `expose: true` flag.
 - [Concepts → Agent-first design](/concepts/agent-first/) — why
   the framework is built to be driven by tools, not just by
   humans.

@@ -239,6 +239,8 @@ npm install @davepi/agent
 DAVEPI_URL=http://localhost:5050
 LLM_PROVIDER=anthropic
 ANTHROPIC_API_KEY=sk-ant-...
+# Service mode uses the access token statically — set ACCESS_TOKEN_TTL=2h
+# in the davepi server's .env to keep it alive for this tutorial.
 DAVEPI_BEARER=eyJ...            # your admin /login token
 AGENT_HTTP_PORT=5060
 SLACK_BOT_TOKEN=xoxb-...

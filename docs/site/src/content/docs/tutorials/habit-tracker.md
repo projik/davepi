@@ -135,8 +135,12 @@ ANTHROPIC_API_KEY=sk-ant-...
 
 # Service auth: agent acts as YOU, the registered user.
 # Grab the access token from the /login response above and paste it here.
-# For production you'd issue a long-lived agent JWT; for a 15-minute
-# demo, your /login token works.
+# Access tokens default to 15 minutes; service mode does NOT auto-refresh.
+# For this demo, bump the TTL by adding `ACCESS_TOKEN_TTL=2h` to the
+# davepi server's .env (NOT this file) and re-running /login to get a
+# 2-hour token. Restart davepi after changing .env.
+# For production: issue a long-lived agent JWT signed with TOKEN_KEY,
+# or switch to AGENT_AUTH_MODE=per-user (see Tutorial 5).
 DAVEPI_BEARER=eyJ...
 ```
 

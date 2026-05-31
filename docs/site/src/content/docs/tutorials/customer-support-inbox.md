@@ -212,6 +212,13 @@ ANTHROPIC_API_KEY=sk-ant-...
 DAVEPI_BEARER=eyJ...    # your /login access token
 ```
 
+Access tokens default to 15 minutes and service mode does NOT
+refresh. For a 25-minute tutorial, set `ACCESS_TOKEN_TTL=2h` in
+the davepi server's `.env` (not the agent's), restart davepi, and
+log in again to get a 2-hour token. For production, switch to
+[per-user auth mode](/surfaces/agent/#per-user-agent_auth_modeper-user)
+(shown in [Tutorial 5](/tutorials/multi-tenant-bookings/)).
+
 ## 19:00 — Wire up Slack
 
 Follow the [Slack-bot setup checklist](/tutorials/habit-tracker/#900--create-a-slack-bot)

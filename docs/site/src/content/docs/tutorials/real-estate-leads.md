@@ -243,7 +243,10 @@ See [Surfaces → Agent → Tool router](/surfaces/agent/#tool-router).
 DAVEPI_URL=http://localhost:5050
 LLM_PROVIDER=anthropic
 ANTHROPIC_API_KEY=sk-ant-...
-DAVEPI_BEARER=eyJ...    # your /login token
+# Service mode uses this bearer statically (no refresh-token rotation).
+# For a 45-minute tutorial, set ACCESS_TOKEN_TTL=2h in the davepi
+# server's .env and restart it before grabbing a fresh /login token.
+DAVEPI_BEARER=eyJ...
 
 SLACK_BOT_TOKEN=xoxb-...        # different from SLACK_WEBHOOK_URL above
 SLACK_SIGNING_SECRET=...
