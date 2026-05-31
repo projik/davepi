@@ -1,6 +1,6 @@
 {
   "name": "@davepi/mcp",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "One-line MCP wiring for dAvePi. Connects Claude Desktop / Cursor / Claude Code to a dAvePi instance — either a remote HTTP /mcp endpoint or a local stdio session.",
   "license": "ISC",
   "homepage": "https://docs.davepi.dev/surfaces/mcp/",
