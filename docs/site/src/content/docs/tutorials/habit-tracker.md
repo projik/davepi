@@ -109,7 +109,7 @@ the change live. Verify:
 ```bash
 curl -s http://localhost:5050/_describe \
   -H "Authorization: Bearer $TOKEN" \
-  | jq '.schemas[] | select(.path=="workout").fields[] | .name'
+  | jq '.schemas[] | select(.path=="/api/v1/workout").fields[] | .name'
 ```
 
 You should see `mood` and `calories_burned` in the list. The admin

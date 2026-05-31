@@ -237,4 +237,71 @@ describe('Schema watcher (gated by HOT_RELOAD_SCHEMAS)', () => {
       process.env.HOT_RELOAD_SCHEMAS = originalFlag;
     }
   });
+
+  // A minimal stand-in for chokidar: records event handlers and lets the
+  // test fire them synchronously. chokidar v4 is ESM and can't be
+  // require()'d under Jest, so the watcher accepts an injectable instance.
+  const makeFakeChokidar = () => {
+    const handlers = {};
+    const fakeWatcher = {
+      on(event, fn) {
+        handlers[event] = fn;
+        return fakeWatcher;
+      },
+      close: async () => {},
+      emit: (event, arg) => handlers[event] && handlers[event](arg),
+    };
+    return { watch: () => fakeWatcher, _watcher: () => fakeWatcher };
+  };
+
+  // Regression: a schema loaded at boot (stamped with `__sourceFile` by
+  // app.js) is never seen by the watcher's `add` handler because
+  // `ignoreInitial: true` suppresses the initial scan. Before the
+  // seed-from-registry fix, deleting that file left `fileToKey` without
+  // an entry, so the `unlink` handler early-returned and the routes /
+  // model / GraphQL fields lingered forever — yet the tutorials tell
+  // users to delete the starter schema once the server is up.
+  test('deleting a boot-loaded schema file unloads it (seeds from registry)', async () => {
+    const originalNodeEnv = process.env.NODE_ENV;
+    const originalFlag = process.env.HOT_RELOAD_SCHEMAS;
+    process.env.NODE_ENV = 'development';
+    process.env.HOT_RELOAD_SCHEMAS = 'true';
+
+    const loader = ctx.app.locals.schemaLoader;
+    const schemasDir = path.resolve(__dirname, '..', 'schema', 'versions');
+    const filePath = path.join(schemasDir, 'v1', '__bootloaded.js');
+    let watcher;
+    try {
+      // Simulate the boot-time load: app.js stamps version + __sourceFile
+      // before handing the schema to the loader. The file need not exist
+      // on disk for this path — the watcher seeds purely from the registry.
+      await loader.loadSchema({
+        path: 'bootloaded',
+        collection: 'bootloaded',
+        version: 'v1',
+        __sourceFile: filePath,
+        fields: [{ name: 'userId', type: String, required: true }],
+      });
+      expect(loader.listSchemas()).toContain('v1/bootloaded');
+
+      const fake = makeFakeChokidar();
+      watcher = startSchemaWatcher({ loader, schemasDir, _chokidar: fake });
+
+      // Fire the unlink chokidar would emit when the developer deletes the
+      // starter schema. Without the registry seed, fileToKey has no entry
+      // and this is a silent no-op.
+      fake._watcher().emit('unlink', filePath);
+
+      // Debounce (100ms) + async unload; poll until it propagates.
+      const deadline = Date.now() + 3000;
+      while (loader.listSchemas().includes('v1/bootloaded') && Date.now() < deadline) {
+        await new Promise((r) => setTimeout(r, 25));
+      }
+      expect(loader.listSchemas()).not.toContain('v1/bootloaded');
+    } finally {
+      if (watcher) await watcher.stop();
+      process.env.NODE_ENV = originalNodeEnv;
+      process.env.HOT_RELOAD_SCHEMAS = originalFlag;
+    }
+  });
 });
