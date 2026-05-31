@@ -41,6 +41,18 @@ export default defineConfig({
           ],
         },
         {
+          label: 'Tutorial series',
+          items: [
+            { label: 'Overview', link: '/tutorials/' },
+            { label: '1. Habit tracker', link: '/tutorials/habit-tracker/' },
+            { label: '2. Customer support inbox', link: '/tutorials/customer-support-inbox/' },
+            { label: '3. E-commerce storefront widget', link: '/tutorials/ecommerce-storefront-widget/' },
+            { label: '4. Real estate leads', link: '/tutorials/real-estate-leads/' },
+            { label: '5. Multi-tenant bookings', link: '/tutorials/multi-tenant-bookings/' },
+            { label: '6. Internal IT helpdesk', link: '/tutorials/internal-it-helpdesk/' },
+          ],
+        },
+        {
           label: 'Concepts',
           items: [
             { label: 'Schema-driven generation', link: '/concepts/schema-driven/' },
