@@ -5,7 +5,9 @@ const timestamps = require('mongoose-timestamp');
 const m2s = require('mongoose-to-swagger');
 const mongoGql = require('graphql-compose-mongoose');
 const mongoSc = require('graphql-compose');
-const apollo = require('apollo-server-express');
+const { ApolloServer } = require('@apollo/server');
+const { expressMiddleware } = require('@as-integrations/express4');
+const { ApolloError } = require('./graphqlErrors');
 const MongoQS = require('mongo-querystring');
 
 const auth = require('../middleware/auth');
@@ -127,9 +129,10 @@ const qs = new MongoQS();
  *
  * GraphQL is rebuilt from scratch on every change: every load/unload
  * constructs a fresh SchemaComposer from the registry, builds a new
- * ApolloServer, applyMiddleware's it onto a brand-new express.Router,
- * and calls the supplied `setApolloRouter` so the indirection middleware
- * mounted in app.js routes new requests through it.
+ * ApolloServer (v5), `await`s its `start()`, mounts `expressMiddleware`
+ * onto a brand-new express.Router, and calls the supplied
+ * `setApolloRouter` so the indirection middleware mounted in app.js
+ * routes new requests through it.
  */
 function createSchemaLoader({ app, apiSpec, setApolloRouter, buildGraphqlContext, isProduction, errorHandler }) {
   // key = `${version}/${path}`
@@ -1800,12 +1803,14 @@ function createSchemaLoader({ app, apiSpec, setApolloRouter, buildGraphqlContext
           runner: async ({ user, before, to }) => {
             const v = validateTransition(f, before[f.name], to);
             if (!v.valid) {
-              // Apollo Server v3 wraps unknown errors as
+              // Apollo Server wraps unknown thrown errors as
               // INTERNAL_SERVER_ERROR. ApolloError(message, code,
-              // properties) puts the literal code on
-              // `extensions.code` (UserInputError hardcodes
-              // BAD_USER_INPUT and would lose our typed code).
-              throw new apollo.ApolloError(v.message, 'INVALID_TRANSITION', {
+              // properties) (our GraphQLError shim in
+              // utils/graphqlErrors.js) puts the literal code on
+              // `extensions.code` and spreads `properties` onto
+              // `extensions`, so the typed code + structured details
+              // survive to the wire exactly as they did under v3.
+              throw new ApolloError(v.message, 'INVALID_TRANSITION', {
                 details: {
                   field: f.name,
                   current: v.current,
@@ -1920,29 +1925,35 @@ function createSchemaLoader({ app, apiSpec, setApolloRouter, buildGraphqlContext
     composer.Query.addFields(queryFields);
     composer.Mutation.addFields(mutationFields);
 
-    const newServer = new apollo.ApolloServer({
+    const newServer = new ApolloServer({
       schema: composer.buildSchema(),
-      cors: true,
-      playground: !isProduction(),
+      // Apollo Server v4 dropped the `playground` / `tracing` / `cors`
+      // / `path` / `context` constructor options and v5 keeps them gone.
+      // `introspection` is still gated the same way (and, with
+      // introspection on, v5 serves the embedded Apollo Sandbox — the
+      // successor to v3's GraphQL Playground — from its default
+      // landing-page plugin). `cors` and body parsing are handled by the
+      // parent Express stack (helmet / buildCorsMiddleware /
+      // express.json) mounted ahead of the indirection middleware in
+      // app.js, so the integration doesn't re-apply them here.
+      // csrfPrevention stays on (it's also the v4+ default) to keep the
+      // GHSA-9q82-xgwf-vj6h XS-Search vector closed.
       introspection: !isProduction(),
-      tracing: true,
-      path: '/',
-      context: buildGraphqlContext,
       csrfPrevention: true,
     });
+    // v4+ requires an explicit start() before the request handler can be
+    // mounted. The loader's single-flight queue already serialises
+    // rebuilds, so awaiting here can't interleave with another rebuild.
     await newServer.start();
 
+    // Context moves from the server constructor (v3) onto the Express
+    // integration (v4+). `buildGraphqlContext` keeps its `({ req }) =>
+    // { user }` shape, so scopeResolver's `ctx.user` reads unchanged.
     const newRouter = express.Router();
-    newServer.applyMiddleware({
-      app: newRouter,
-      path: '/graphql/',
-      cors: true,
-      onHealthCheck: () =>
-        new Promise((resolve, reject) => {
-          if (mongoose.connection.readyState > 0) resolve();
-          else reject();
-        }),
-    });
+    newRouter.use(
+      '/graphql/',
+      expressMiddleware(newServer, { context: buildGraphqlContext })
+    );
 
     // Swap the indirection BEFORE stopping the old server. If we stopped
     // first, in-flight or new requests during the rebuild window would

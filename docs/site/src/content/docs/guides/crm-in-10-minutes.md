@@ -85,7 +85,7 @@ Open these in a browser:
 | | |
 |-|-|
 | Swagger UI | <http://localhost:5050/api-docs> |
-| GraphQL Playground | <http://localhost:5050/graphql/> |
+| Apollo Sandbox | <http://localhost:5050/graphql/> |
 | Capability manifest | <http://localhost:5050/_describe> |
 | Admin SPA | <http://localhost:5050/admin> |
 

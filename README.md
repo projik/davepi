@@ -59,7 +59,7 @@ Once the stack is running:
 
 - API: <http://localhost:4001>
 - Swagger UI: <http://localhost:4001/api-docs>
-- GraphQL Playground: <http://localhost:4001/graphql>
+- Apollo Sandbox: <http://localhost:4001/graphql/> (dev only)
 - MongoDB: `mongodb://localhost:27017/davepi`
 
 To rebuild the image after a `package.json` change:
@@ -169,7 +169,7 @@ The server will start on the configured port (default: 4001).
 Once running, access:
 
 - **REST API**: `http://localhost:4001/api/v1/{resource}`
-- **GraphQL Playground**: `http://localhost:4001/graphql`
+- **Apollo Sandbox**: `http://localhost:4001/graphql/` (dev only)
 - **API Documentation**: `http://localhost:4001/api-docs`
 - **Swagger JSON**: `http://localhost:4001/api-docs/swagger.json`
 
@@ -382,7 +382,7 @@ Authorization: Bearer {token}
 
 ### GraphQL Usage
 
-Access the GraphQL Playground at `http://localhost:4001/graphql`
+Access the Apollo Sandbox at `http://localhost:4001/graphql/` (served outside production, gated on `introspection`)
 
 #### Example Query
 

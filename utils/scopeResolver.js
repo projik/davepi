@@ -1,4 +1,4 @@
-const { AuthenticationError, ForbiddenError } = require('apollo-server-express');
+const { AuthenticationError, ForbiddenError } = require('./graphqlErrors');
 const {
   projectByAcl,
   filterWritable,
