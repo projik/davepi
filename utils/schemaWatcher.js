@@ -14,6 +14,11 @@ const logger = require('./logger');
 function startSchemaWatcher({
   loader,
   schemasDir = path.resolve('./schema/versions'),
+  // Injectable for tests: chokidar v4 is ESM and can't be `require()`d
+  // under Jest's CJS module runtime, so the suite passes a lightweight
+  // fake here. Production leaves it undefined and lazy-requires the real
+  // module below.
+  _chokidar,
 }) {
   const enabled =
     process.env.NODE_ENV !== 'production' &&
@@ -23,7 +28,7 @@ function startSchemaWatcher({
 
   // Required only when enabled so the prod image isn't forced to bundle
   // chokidar (it's a dependency, but lazy-requiring keeps boot light).
-  const chokidar = require('chokidar');
+  const chokidar = _chokidar || require('chokidar');
 
   const fileToKey = new Map(); // absolute path -> registry key (`${version}/${path}`)
   const debounceTimers = new Map();
@@ -40,9 +45,31 @@ function startSchemaWatcher({
     return require(filePath);
   };
 
+  // Seed the file->key map from schemas that were already loaded at boot.
+  // `app.js` stamps each boot-loaded schema with `__sourceFile`, and the
+  // loader stores it in the registry. Without this seed, `ignoreInitial:
+  // true` means the watcher never sees an 'add' for those files, so
+  // `fileToKey` has no entry and a later 'unlink' (the developer deleting
+  // a starter schema like `note.js`, exactly as the tutorials suggest)
+  // would early-return and leave the routes / model / GraphQL fields
+  // registered forever.
+  const seedFromRegistry = () => {
+    if (typeof loader.listSchemas !== 'function' || typeof loader.getEntry !== 'function') {
+      return;
+    }
+    for (const key of loader.listSchemas()) {
+      const entry = loader.getEntry(key);
+      const sourceFile = entry && entry.schema && entry.schema.__sourceFile;
+      if (sourceFile && !fileToKey.has(sourceFile)) {
+        fileToKey.set(sourceFile, key);
+      }
+    }
+  };
+
   const handleAddOrChange = async (filePath) => {
     try {
       const schema = requireFresh(filePath);
+      schema.__sourceFile = filePath;
       schema.version = versionFromFile(filePath);
       const newKey = `${schema.version}/${schema.path}`;
       const previousKey = fileToKey.get(filePath);
@@ -91,6 +118,8 @@ function startSchemaWatcher({
       }, DEBOUNCE_MS)
     );
   };
+
+  seedFromRegistry();
 
   const watcher = chokidar.watch(schemasDir, {
     ignoreInitial: true,
