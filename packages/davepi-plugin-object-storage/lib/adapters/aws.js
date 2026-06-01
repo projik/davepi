@@ -22,7 +22,9 @@
  */
 
 function createAwsAdapter(config, { sdkOverride } = {}) {
-  const sdk = sdkOverride || loadSdk();
+  // See gcs.js: only `undefined` (no override) falls back to loadSdk();
+  // an explicit `null` means "SDK unavailable" and must not re-require.
+  const sdk = sdkOverride === undefined ? loadSdk() : sdkOverride;
   const {
     S3Client,
     PutObjectCommand,

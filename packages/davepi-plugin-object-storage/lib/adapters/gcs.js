@@ -16,7 +16,14 @@
  */
 
 function createGcsAdapter(config, { sdkOverride } = {}) {
-  const sdk = sdkOverride || loadSdk();
+  // Only an absent override (`undefined`) falls back to loadSdk(); an
+  // explicit `null` means "SDK unavailable" (tests inject this to
+  // simulate @google-cloud/storage not being installed, regardless of
+  // whether it actually is on the path). Using `||` here would swallow
+  // that null and re-require the real package when it happens to be
+  // installed — e.g. as an optionalDependency that `npm install` pulls
+  // in on CI, which is exactly what made these tests fail at publish.
+  const sdk = sdkOverride === undefined ? loadSdk() : sdkOverride;
   if (!sdk) {
     throw new Error(
       'davepi-plugin-object-storage (gcs adapter): @google-cloud/storage is not installed. ' +
