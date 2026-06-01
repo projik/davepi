@@ -62,6 +62,52 @@ describe('relations: pure helpers', () => {
       });
       expect(out.acctId.fromShorthand).toBeUndefined();
     });
+
+    test('shorthand skips when an explicit belongsTo already uses the same localKey', () => {
+      // A schema that pairs `field.reference` (for UI consumers like the
+      // RelationPicker) with an explicit `relations.<name>.belongsTo`
+      // targeting the same local key — like the seed CRM `quote.contactId`
+      // — should produce exactly one belongsTo, not two. Without the
+      // dedup, REST `__include` would advertise both names, and the MCP
+      // server would register two relation-navigation tools that join
+      // the same two rows.
+      const out = normalizeRelations({
+        fields: [{ name: 'contactId', type: String, reference: 'contact' }],
+        relations: { contact: { belongsTo: 'contact', localKey: 'contactId' } },
+      });
+      expect(Object.keys(out).sort()).toEqual(['contact']);
+      expect(out.contact).toMatchObject({
+        kind: 'belongsTo',
+        target: 'contact',
+        localKey: 'contactId',
+      });
+      expect(out.contact.fromShorthand).toBeUndefined();
+      expect(out.contactId).toBeUndefined();
+    });
+
+    test('shorthand still fires when explicit belongsTo points at a different localKey', () => {
+      // Defence: dedup must not over-eagerly drop a shorthand whose
+      // localKey is genuinely different from any declared one.
+      const out = normalizeRelations({
+        fields: [
+          { name: 'authorId', type: String, reference: 'user' },
+          { name: 'editorId', type: String, reference: 'user' },
+        ],
+        relations: {
+          primaryAuthor: { belongsTo: 'user', localKey: 'authorId' },
+        },
+      });
+      expect(out.primaryAuthor.localKey).toBe('authorId');
+      // authorId's shorthand suppressed (localKey already covered).
+      expect(out.authorId).toBeUndefined();
+      // editorId's shorthand survives — distinct localKey.
+      expect(out.editorId).toMatchObject({
+        kind: 'belongsTo',
+        target: 'user',
+        localKey: 'editorId',
+        fromShorthand: true,
+      });
+    });
   });
 
   describe('parseIncludes', () => {

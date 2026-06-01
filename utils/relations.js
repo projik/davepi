@@ -79,6 +79,20 @@ function normalizeRelations(schema) {
     }
   }
 
+  // Collect the localKeys already covered by an explicit belongsTo so
+  // the shorthand pass below can skip them. Without this dedup, a
+  // schema that declares both `field.reference: 'X'` and an explicit
+  // `relations.foo.belongsTo: 'X'` pointing at the same local key
+  // would emit two belongsTo entries — one named `foo`, one named
+  // after the field — producing duplicate `__include` names, duplicate
+  // MCP relation tools, and (when the relation name isn't the same as
+  // the field) a confusing two-edges-for-one-join graph.
+  const explicitLocalKeys = new Set(
+    Object.values(out)
+      .filter((def) => def && def.kind === 'belongsTo' && def.localKey)
+      .map((def) => def.localKey)
+  );
+
   // field.reference: 'x' shorthand: synthesise a belongsTo whose
   // local key IS the field. The relation name equals the field name,
   // so `__include=accountId` on a record with `accountId: '...'` swaps
@@ -91,6 +105,10 @@ function normalizeRelations(schema) {
   // string or a populated object at the same key.
   for (const f of (schema && schema.fields) || []) {
     if (!f || !f.reference || out[f.name]) continue;
+    // Already covered by an explicit belongsTo on the same localKey?
+    // Keep `field.reference` on the schema (UI consumers still read it
+    // for RelationPicker) but don't duplicate the runtime relation.
+    if (explicitLocalKeys.has(f.name)) continue;
     out[f.name] = {
       kind: 'belongsTo',
       target: f.reference,

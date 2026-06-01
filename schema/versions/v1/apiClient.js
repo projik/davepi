@@ -40,8 +40,8 @@ module.exports = {
   path: 'apiClient',
   collection: 'api_client',
   fields: [
-    { name: 'userId', type: String, required: true },
-    { name: 'accountId', type: String },
+    { name: 'userId', type: String, required: true, stamped: true },
+    { name: 'accountId', type: String, stamped: true },
     { name: '_id', type: String, required: true, example: 'pk_storefront_live_abc123', acl: ADMIN_ONLY },
     { name: 'name', type: String, required: true, example: 'storefront-prod', acl: ADMIN_ONLY },
     { name: 'role', type: String, required: true, example: 'storefront', acl: ADMIN_ONLY },

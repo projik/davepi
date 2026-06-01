@@ -64,8 +64,8 @@ module.exports = {
   path: 'conversation',
   collection: 'conversation',
   fields: [
-    { name: 'accountId', type: String },
-    { name: 'userId', type: String, required: true },
+    { name: 'accountId', type: String, stamped: true },
+    { name: 'userId', type: String, required: true, stamped: true },
     { name: 'agentKey', type: String, required: true, index: true, example: 'support' },
     { name: 'channel', type: String, required: true, example: 'slack' },
     // The channel's conversation scope — Slack thread key, or the HTTP

@@ -300,7 +300,46 @@ describe('describeManifest: pure helpers', () => {
         target: 'deal',
         foreignKey: 'accountId',
         inverse: true,
+        callable: false,
       });
+    });
+
+    test('synthetic inverses are flagged callable: false but author-declared edges are not', () => {
+      const loader = stubLoader({
+        'v1/account': {
+          schema: {
+            path: 'account',
+            collection: 'account',
+            version: 'v1',
+            fields: [{ name: 'userId', type: String, required: true }],
+          },
+        },
+        'v1/deal': {
+          schema: {
+            path: 'deal',
+            collection: 'deal',
+            version: 'v1',
+            fields: [
+              { name: 'userId', type: String, required: true },
+              { name: 'accountId', type: String, required: true },
+            ],
+            relations: {
+              account: { belongsTo: 'account', localKey: 'accountId' },
+            },
+          },
+        },
+      });
+      const m = buildManifest({ schemaLoader: loader });
+      // Synthetic inverse → callable: false (manifest-only discovery hint;
+      // runtime relation map is per-schema and doesn't see siblings).
+      const inverse = Object.values(m.schemas['v1/account'].relations).find(
+        (r) => r.target === 'deal'
+      );
+      expect(inverse.callable).toBe(false);
+      // Author-declared edge → no callable flag (callable is the default).
+      const declared = m.schemas['v1/deal'].relations.account;
+      expect(declared.callable).toBeUndefined();
+      expect(declared.kind).toBe('belongsTo');
     });
 
     test('inverse population does not override an explicit hasMany', () => {
@@ -388,7 +427,7 @@ describe('describeManifest: pure helpers', () => {
       const v2Inverse = Object.values(v2Parent.relations).find(
         (r) => r.target === 'deal' && r.foreignKey === 'accountId'
       );
-      expect(v2Inverse).toMatchObject({ kind: 'hasMany', target: 'deal', inverse: true });
+      expect(v2Inverse).toMatchObject({ kind: 'hasMany', target: 'deal', inverse: true, callable: false });
 
       // v1/account stays untouched — no child on v1 declares belongsTo it.
       expect(v1Parent.relations).toBeUndefined();
@@ -429,6 +468,7 @@ describe('describeManifest: pure helpers', () => {
         target: 'deal',
         foreignKey: 'accountId',
         inverse: true,
+        callable: false,
       });
     });
 
@@ -590,6 +630,80 @@ describe('GET /_describe endpoint', () => {
     expect(res.body.schemas['v1/quote'].aggregations[0].name).toBe('countByAccount');
     expect(res.body.conventions.include).toMatch(/__include/);
     expect(res.body.auth.login).toBe('POST /login');
+  });
+
+  test('seed schemas expose display + stamped + relation hints', async () => {
+    delete process.env.DESCRIBE_REQUIRES_AUTH;
+    const res = await ctx.request(ctx.app).get('/_describe');
+    expect(res.status).toBe(200);
+    const schemas = res.body.schemas;
+
+    // Schema-level hints land on every seed CRM resource so an admin UI
+    // doesn't have to title-case paths or sniff for a display field.
+    expect(schemas['v1/account']).toMatchObject({
+      label: 'Account',
+      pluralLabel: 'Accounts',
+      displayField: 'accountName',
+    });
+    expect(schemas['v1/contact'].displayField).toBe('first_name');
+    expect(schemas['v1/category'].pluralLabel).toBe('Categories');
+    expect(schemas['v1/product'].displayField).toBe('name');
+    expect(schemas['v1/project'].displayField).toBe('name');
+    expect(schemas['v1/quote'].displayField).toBe('description');
+
+    // Stamped flag travels through on every seed userId / accountId so
+    // consumers can hide tenant markers from create/edit forms.
+    const accountFields = Object.fromEntries(
+      schemas['v1/account'].fields.map((f) => [f.name, f])
+    );
+    expect(accountFields.userId.stamped).toBe(true);
+    expect(accountFields.accountName.stamped).toBeUndefined();
+
+    const contactFields = Object.fromEntries(
+      schemas['v1/contact'].fields.map((f) => [f.name, f])
+    );
+    expect(contactFields.userId.stamped).toBe(true);
+    expect(contactFields.accountId.stamped).toBe(true);
+    expect(contactFields.first_name.stamped).toBeUndefined();
+
+    // Field-level hints on contact + product.
+    expect(contactFields.email.widget).toBe('email');
+    expect(contactFields.first_name.label).toBe('First name');
+    const productFields = Object.fromEntries(
+      schemas['v1/product'].fields.map((f) => [f.name, f])
+    );
+    expect(productFields.price.widget).toBe('currency');
+    expect(productFields.price.format).toBe('currency:USD');
+    expect(productFields.sku.label).toBe('SKU');
+
+    // Quote declares belongsTo: contact → backend auto-populates the
+    // inverse hasMany on contact. The admin UI uses this to render a
+    // "Quotes" tab on each contact's detail page.
+    const contactRelations = schemas['v1/contact'].relations;
+    expect(contactRelations).toBeDefined();
+    const quotesInverse = Object.values(contactRelations).find(
+      (r) => r.target === 'quote' && r.foreignKey === 'contactId'
+    );
+    expect(quotesInverse).toMatchObject({
+      kind: 'hasMany',
+      target: 'quote',
+      foreignKey: 'contactId',
+      inverse: true,
+      callable: false,
+    });
+
+    // Self-references on category + project also surface as belongsTo
+    // edges, plus their inverses.
+    expect(schemas['v1/category'].relations.parentCategory).toMatchObject({
+      kind: 'belongsTo',
+      target: 'category',
+      localKey: 'parent',
+    });
+    expect(schemas['v1/project'].relations.parentProject).toMatchObject({
+      kind: 'belongsTo',
+      target: 'project',
+      localKey: 'parent',
+    });
   });
 
   test('hot-reload: a newly-loaded schema appears on the next request', async () => {
