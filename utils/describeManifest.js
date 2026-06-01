@@ -92,8 +92,11 @@ function describeFields(schema) {
     // (currently `userId` and `accountId` are the seed schemas' tenant
     // markers, but consumers may add others). The UI hides stamped
     // fields from create / edit forms so users never see a doomed
-    // override of a tenant-controlled value.
-    if (f.stamped) entry.stamped = true;
+    // override of a tenant-controlled value. Strict-equality check
+    // matches the validation discipline the other hints in this loop
+    // use — a stray `stamped: 'yes'` or `stamped: {}` shouldn't survive
+    // into the manifest where consumers would silently treat it as true.
+    if (f.stamped === true) entry.stamped = true;
     if (f.acl && (f.acl.read || f.acl.create || f.acl.update)) {
       entry.acl = {};
       if (Array.isArray(f.acl.read)) entry.acl.read = f.acl.read;

@@ -217,6 +217,15 @@ describe('describeManifest: pure helpers', () => {
               { name: 'b', type: String, widget: null, format: 42 },
               { name: 'c', type: String, stamped: false },
               { name: 'd', type: String, enum: [] },
+              // `stamped` must pass through only on `=== true`. Truthy
+              // non-boolean values (strings, numbers, objects) get
+              // dropped — otherwise a typo (`stamped: 'true'`) would
+              // silently coerce to true in the manifest and the UI would
+              // hide the field forever.
+              { name: 'e', type: String, stamped: 'true' },
+              { name: 'f', type: String, stamped: 1 },
+              { name: 'g', type: String, stamped: {} },
+              { name: 'h', type: String, stamped: 'yes' },
             ],
           },
         },
@@ -229,6 +238,23 @@ describe('describeManifest: pure helpers', () => {
         expect(f.stamped).toBeUndefined();
         expect(f.enum).toBeUndefined();
       }
+    });
+
+    test('stamped: true is the only value that passes through', () => {
+      const loader = stubLoader({
+        'v1/widget': {
+          schema: {
+            path: 'widget',
+            collection: 'widget',
+            version: 'v1',
+            fields: [
+              { name: 'userId', type: String, stamped: true },
+            ],
+          },
+        },
+      });
+      const fields = buildManifest({ schemaLoader: loader }).schemas['v1/widget'].fields;
+      expect(fields[0].stamped).toBe(true);
     });
 
     test('auto-populates inverse hasMany from sibling belongsTo', () => {
