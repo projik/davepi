@@ -1988,6 +1988,18 @@ function createSchemaLoader({ app, apiSpec, setApolloRouter, buildGraphqlContext
   }
 
   async function loadSchemaImpl(s, { deferGraphqlRebuild = false } = {}) {
+    // Guard against an empty or half-written schema module (e.g. an
+    // editor that creates `workout.js` empty before you type into it,
+    // which exports `{}`). Without this the artifact builder below
+    // dereferences `s.fields.forEach` and throws a cryptic
+    // "Cannot read properties of undefined (reading 'forEach')";
+    // a typed ValidationError names the actual problem instead.
+    if (!s || typeof s !== 'object' || typeof s.path !== 'string' || !Array.isArray(s.fields)) {
+      throw new ValidationError(
+        'invalid schema: expected a module exporting an object with a string `path` and a `fields` array' +
+          (s && s.path ? ` (path="${s.path}")` : '')
+      );
+    }
     const key = `${s.version}/${s.path}`;
     if (registry.has(key)) {
       // Already loaded — caller probably meant reload.

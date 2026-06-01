@@ -304,4 +304,66 @@ describe('Schema watcher (gated by HOT_RELOAD_SCHEMAS)', () => {
       process.env.HOT_RELOAD_SCHEMAS = originalFlag;
     }
   });
+
+  // Regression: creating a new schema file (`workout.js`) used to log a
+  // scary "schema reload failed" TypeError, because the editor writes
+  // the file empty first — it exports `{}` — and the watcher handed
+  // that to the loader, which crashed on `s.fields.forEach`. The
+  // watcher must now skip a file that doesn't yet export a usable
+  // schema and never call loadSchema for it.
+  test('creating an empty schema file is skipped, not handed to the loader', async () => {
+    const originalNodeEnv = process.env.NODE_ENV;
+    const originalFlag = process.env.HOT_RELOAD_SCHEMAS;
+    process.env.NODE_ENV = 'development';
+    process.env.HOT_RELOAD_SCHEMAS = 'true';
+
+    const loader = ctx.app.locals.schemaLoader;
+    const schemasDir = path.resolve(__dirname, '..', 'schema', 'versions');
+    const emptyFile = path.join(schemasDir, 'v1', '__empty.js');
+    fs.writeFileSync(emptyFile, ''); // an empty .js module exports {}
+
+    // Spy on loadSchema without losing the real behaviour.
+    const origLoad = loader.loadSchema;
+    const seen = [];
+    loader.loadSchema = (s, opts) => {
+      seen.push(s);
+      return origLoad.call(loader, s, opts);
+    };
+
+    let watcher;
+    try {
+      const fake = makeFakeChokidar();
+      watcher = startSchemaWatcher({ loader, schemasDir, _chokidar: fake });
+      fake._watcher().emit('add', emptyFile);
+      // Wait past the 100ms debounce so the handler has run.
+      await new Promise((r) => setTimeout(r, 250));
+      expect(seen).toHaveLength(0);
+    } finally {
+      if (watcher) await watcher.stop();
+      loader.loadSchema = origLoad;
+      if (fs.existsSync(emptyFile)) fs.unlinkSync(emptyFile);
+      process.env.NODE_ENV = originalNodeEnv;
+      process.env.HOT_RELOAD_SCHEMAS = originalFlag;
+    }
+  });
+
+  // The loader itself gives a clear, typed error if it is ever handed a
+  // schema with no `fields` array (boot path, programmatic callers),
+  // rather than the cryptic destructuring TypeError.
+  test('loadSchema rejects a fieldless schema with a clear ValidationError', async () => {
+    const loader = ctx.app.locals.schemaLoader;
+    await expect(
+      loader.loadSchema({ path: 'nofields', collection: 'nofields', version: 'v1' })
+    ).rejects.toThrow(/fields/);
+
+    let caught;
+    try {
+      await loader.loadSchema({ path: 'nofields', collection: 'nofields', version: 'v1' });
+    } catch (e) {
+      caught = e;
+    }
+    expect(caught).toBeDefined();
+    expect(caught.message).not.toMatch(/Cannot read properties/);
+    expect(loader.listSchemas()).not.toContain('v1/nofields');
+  });
 });

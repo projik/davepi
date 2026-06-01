@@ -69,6 +69,26 @@ function startSchemaWatcher({
   const handleAddOrChange = async (filePath) => {
     try {
       const schema = requireFresh(filePath);
+      // Editors create a new file empty and only then do you type into
+      // it, so the first event for `workout.js` fires while the module
+      // still exports `{}` (and a half-finished save may export a
+      // `path` but no `fields` yet). Neither is a loadable schema —
+      // handing it to the loader would crash on `s.fields.forEach` and
+      // surface as a scary "schema reload failed" error on every new
+      // file. Skip quietly and wait for the next save, which fires its
+      // own 'change' event once the file exports `{ path, fields }`.
+      if (
+        !schema ||
+        typeof schema !== 'object' ||
+        typeof schema.path !== 'string' ||
+        !Array.isArray(schema.fields)
+      ) {
+        logger.debug(
+          { filePath },
+          'schema file not loadable yet (missing path/fields); skipping until next save'
+        );
+        return;
+      }
       schema.__sourceFile = filePath;
       schema.version = versionFromFile(filePath);
       const newKey = `${schema.version}/${schema.path}`;
