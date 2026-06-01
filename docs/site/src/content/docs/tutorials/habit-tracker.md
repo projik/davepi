@@ -192,12 +192,18 @@ set -a; source .env; source .env.agent; set +a
 npx davepi-agent
 ```
 
-You should see:
+You should see output similar to:
 
 ```
-{"level":"info","msg":"davepi-agent http channel listening","port":5060,"auth":"service"}
-{"level":"info","msg":"davepi-agent slack channel listening (socket mode)"}
+[HH:MM:ss.sss] INFO (davepi-agent/xxxxx): davepi-agent http channel listening
+    port: 5060
+    auth: "service"
+[HH:MM:ss.sss] INFO (davepi-agent/xxxxx): davepi-agent slack channel listening (socket mode)
 ```
+
+:::note
+Like the davepi server, the agent pretty-prints logs in development and emits plain JSON under `NODE_ENV=production`. The Slack line only appears once `SLACK_BOT_TOKEN` is set (the previous step) — with Slack unconfigured you'll see just the `http channel listening` line.
+:::
 
 Open Slack, find your bot in the sidebar, DM it:
 

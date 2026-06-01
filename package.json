@@ -99,7 +99,8 @@
       "/admin/",
       "/packages/",
       "/templates/",
-      "/eval/"
+      "/eval/",
+      "/demos/"
     ]
   },
   "engines": {
