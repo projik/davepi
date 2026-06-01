@@ -75,6 +75,25 @@ function describeFields(schema) {
       entry.searchable = true;
       if (f.searchWeight) entry.searchWeight = f.searchWeight;
     }
+    if (Array.isArray(f.enum) && f.enum.length) {
+      entry.enum = [...f.enum];
+    }
+    // Frontend hints — pure metadata, ignored by the backend. Travel
+    // through to the manifest so `davepi-ui` (and any other agent
+    // consuming `/_describe`) can pick the right widget without
+    // re-deriving it from naming conventions. `label` overrides the
+    // labelize() output; `widget` names a widget kind (`rich-text`,
+    // `textarea`, `email`, `url`, `currency`, …); `format` carries a
+    // value-formatting hint (`currency:USD`, `date`).
+    if (typeof f.label === 'string' && f.label.length) entry.label = f.label;
+    if (typeof f.widget === 'string' && f.widget.length) entry.widget = f.widget;
+    if (typeof f.format === 'string' && f.format.length) entry.format = f.format;
+    // `stamped: true` marks a field the server fills in from the JWT
+    // (currently `userId` and `accountId` are the seed schemas' tenant
+    // markers, but consumers may add others). The UI hides stamped
+    // fields from create / edit forms so users never see a doomed
+    // override of a tenant-controlled value.
+    if (f.stamped) entry.stamped = true;
     if (f.acl && (f.acl.read || f.acl.create || f.acl.update)) {
       entry.acl = {};
       if (Array.isArray(f.acl.read)) entry.acl.read = f.acl.read;
@@ -300,6 +319,15 @@ function describeSchemaEntry(entry) {
     graphql: describeGraphql(s),
   };
   if (s.description) out.description = s.description;
+  // Frontend display hints — schema-level companions to the field-level
+  // hints above. `label`/`pluralLabel` override the title-cased path the
+  // UI generates by default; `displayField` names the field that should
+  // be shown in relation pickers, breadcrumbs, and `<ResourceTable>`
+  // previews — without this, `davepi-ui`'s `SchemaRegistry` has to sniff
+  // for `name` / `title` / `accountName` heuristically.
+  if (typeof s.label === 'string' && s.label.length) out.label = s.label;
+  if (typeof s.pluralLabel === 'string' && s.pluralLabel.length) out.pluralLabel = s.pluralLabel;
+  if (typeof s.displayField === 'string' && s.displayField.length) out.displayField = s.displayField;
   const relations = describeRelations(s);
   if (relations) out.relations = relations;
   const aggregations = describeAggregations(s);
@@ -328,6 +356,14 @@ function buildManifest({ schemaLoader, appName, version } = {}) {
     if (!entry || !entry.schema) continue;
     schemas[`${entry.schema.version}/${entry.schema.path}`] = describeSchemaEntry(entry);
   }
+  // Auto-populate inverse `hasMany` edges on every parent so frontends
+  // can render a parent's child lists without the parent schema having
+  // to declare the inverse manually. For every `belongsTo` on schema B
+  // pointing at A, register `A.relations.<pluralised B path> = { kind:
+  // 'hasMany', target: B.path, foreignKey: <localKey> }` — but only
+  // when A doesn't already declare a relation against the same target +
+  // foreign key, so consumer-authored explicit relations always win.
+  populateInverseRelations(schemas);
   return {
     service: {
       name: appName || process.env.APP_NAME || 'dAvePi',
@@ -358,7 +394,82 @@ function buildManifest({ schemaLoader, appName, version } = {}) {
   };
 }
 
+/**
+ * Walk every manifest entry's declared `relations` block and, for each
+ * `belongsTo` edge, attach the inverse `hasMany` edge to the parent
+ * resource. Idempotent on re-invocation: a parent already declaring a
+ * relation against the same target + foreign key is left untouched.
+ *
+ * Naming: the inverse edge is keyed by the pluralised child path
+ * (`contact` → `contacts`). The framework's GraphQL builder declines to
+ * register graph edges for schemas it doesn't recognise (mismatched
+ * `target`), so an inverse pointing at a non-existent path is dropped
+ * to avoid populating unreachable manifest entries.
+ *
+ * Mutates the `schemas` map in place.
+ */
+function populateInverseRelations(schemas) {
+  // Build a `pathName -> manifest entry` index so the inverse target
+  // can be looked up by the short path declared on the parent's
+  // `belongsTo`. The manifest uses `${version}/${path}` keys, so derive
+  // the bare path from each entry's stored `path` field.
+  const byPath = new Map();
+  for (const entry of Object.values(schemas)) {
+    const short = entry.path.replace(/^\/api\/[^/]+\//, '');
+    byPath.set(short, entry);
+  }
+  for (const child of Object.values(schemas)) {
+    if (!child.relations) continue;
+    const childPath = child.path.replace(/^\/api\/[^/]+\//, '');
+    for (const def of Object.values(child.relations)) {
+      if (!def || def.kind !== 'belongsTo') continue;
+      const parent = byPath.get(def.target);
+      if (!parent) continue;
+      const inverseName = pluralise(childPath);
+      const fk = def.localKey || `${def.target}Id`;
+      parent.relations = parent.relations || {};
+      // Don't override an explicit declaration. The framework treats
+      // consumer-authored relations as load-bearing — the inverse is a
+      // convenience, not a source of truth.
+      const exists = Object.values(parent.relations).some(
+        (e) => e && e.target === childPath && e.foreignKey === fk
+      );
+      if (exists) continue;
+      // Don't clobber an existing key (e.g. `contacts`) that already
+      // points elsewhere — pick a disambiguated key.
+      let key = inverseName;
+      let suffix = 1;
+      while (parent.relations[key]) {
+        suffix += 1;
+        key = `${inverseName}${suffix}`;
+      }
+      parent.relations[key] = {
+        kind: 'hasMany',
+        target: childPath,
+        foreignKey: fk,
+        inverse: true,
+      };
+    }
+  }
+}
+
+/**
+ * Pluralise an English-ish identifier for use as a relation key. Mirrors
+ * the small ruleset davepi-ui's labelize uses (which itself was lifted
+ * from the same conventions a typical Rails inflector covers), so the
+ * key the backend emits matches the one the frontend would generate
+ * locally and override consumer assertions don't drift.
+ */
+function pluralise(input) {
+  if (!input) return input;
+  if (/(s|x|z|ch|sh)$/i.test(input)) return `${input}es`;
+  if (/[^aeiou]y$/i.test(input)) return `${input.slice(0, -1)}ies`;
+  return `${input}s`;
+}
+
 module.exports = {
   buildManifest,
   describeFieldType,
+  populateInverseRelations,
+  pluralise,
 };
