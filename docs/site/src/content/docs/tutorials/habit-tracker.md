@@ -26,11 +26,20 @@ The `blank` template ships with one example resource (`note`) which
 we won't use — feel free to delete `schema/versions/v1/note.js`
 once the server is running.
 
-You should see:
+You should see output similar to:
 
 ```
-{"level":"info","msg":"listening","port":5050}
+[HH:MM:ss.sss] INFO (xxxxx): schema loaded
+    schema: "v1/note"
+[HH:MM:ss.sss] INFO (xxxxx): schemas loaded
+[HH:MM:ss.sss] INFO (xxxxx): listening
+    port: "5050"
+[HH:MM:ss.sss] INFO (xxxxx): connected to database
 ```
+
+:::note
+In development mode dAvePi uses `pino-pretty` for human-readable logs. In production (`NODE_ENV=production`) you'll see plain JSON: `{"level":"info","msg":"listening","port":5050}`.
+:::
 
 ## 2:00 — Write the workout schema
 
@@ -183,12 +192,18 @@ set -a; source .env; source .env.agent; set +a
 npx davepi-agent
 ```
 
-You should see:
+You should see output similar to:
 
 ```
-{"level":"info","msg":"davepi-agent http channel listening","port":5060,"auth":"service"}
-{"level":"info","msg":"davepi-agent slack channel listening (socket mode)"}
+[HH:MM:ss.sss] INFO (davepi-agent/xxxxx): davepi-agent http channel listening
+    port: 5060
+    auth: "service"
+[HH:MM:ss.sss] INFO (davepi-agent/xxxxx): davepi-agent slack channel listening (socket mode)
 ```
+
+:::note
+Like the davepi server, the agent pretty-prints logs in development and emits plain JSON under `NODE_ENV=production`. The Slack line only appears once `SLACK_BOT_TOKEN` is set (the previous step) — with Slack unconfigured you'll see just the `http channel listening` line.
+:::
 
 Open Slack, find your bot in the sidebar, DM it:
 

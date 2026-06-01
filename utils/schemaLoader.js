@@ -1922,6 +1922,25 @@ function createSchemaLoader({ app, apiSpec, setApolloRouter, buildGraphqlContext
     // implicitly by the `'[AggregationJSON]'` string type used above.
     void jsonScalar;
 
+    // GraphQL requires the Query type to define at least one field.
+    // When the last schema is unloaded — e.g. the developer deletes the
+    // only resource file during hot reload, which the tutorials and the
+    // blank template explicitly invite ("feel free to delete note.js") —
+    // queryFields is empty and `composer.buildSchema()` throws "Type
+    // Query must define one or more fields", aborting the rebuild and
+    // leaving the server wedged. Add a harmless placeholder so an
+    // empty registry still yields a valid schema; it disappears again
+    // the moment any schema is (re)loaded and real query fields exist.
+    if (Object.keys(queryFields).length === 0) {
+      queryFields._empty = {
+        type: 'Boolean',
+        description:
+          'Placeholder present only while no resources are loaded. Add a ' +
+          'schema under schema/versions/* and this field disappears.',
+        resolve: () => true,
+      };
+    }
+
     composer.Query.addFields(queryFields);
     composer.Mutation.addFields(mutationFields);
 

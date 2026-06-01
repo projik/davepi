@@ -367,3 +367,56 @@ describe('Schema watcher (gated by HOT_RELOAD_SCHEMAS)', () => {
     expect(loader.listSchemas()).not.toContain('v1/nofields');
   });
 });
+
+describe('GraphQL rebuild with an empty registry', () => {
+  const express = require('express');
+  const { createSchemaLoader } = require('../utils/schemaLoader');
+
+  // Build a standalone loader (independent of the shared test app) so we
+  // can drive the registry all the way to empty — which the shared app,
+  // with its seed schemas always loaded, can't reach.
+  const makeLoader = () => {
+    const app = express();
+    const apiSpec = { paths: {}, definitions: {} };
+    return createSchemaLoader({
+      app,
+      apiSpec,
+      setApolloRouter: () => {},
+      buildGraphqlContext: async () => ({}),
+      isProduction: () => false,
+      errorHandler: (err, req, res, next) => next(err),
+    });
+  };
+
+  // Regression: unloading the *last* schema left `queryFields` empty, so
+  // `composer.buildSchema()` threw "Type Query must define one or more
+  // fields" and `rebuildGraphQL` rejected — wedging the server exactly
+  // when a developer follows the tutorial's "feel free to delete note.js"
+  // step on a single-resource project. The placeholder `_empty` query
+  // field keeps the schema valid when no resources are loaded.
+  test('unloading the last schema does not throw (empty Query gets a placeholder)', async () => {
+    const loader = makeLoader();
+    const schema = {
+      path: 'emptyrebuild',
+      collection: 'emptyrebuild',
+      version: 'v1',
+      fields: [
+        { name: 'userId', type: String, required: true },
+        { name: 'title', type: String, required: true },
+      ],
+    };
+
+    await loader.loadSchema(schema);
+    expect(loader.listSchemas()).toContain('v1/emptyrebuild');
+
+    // The unload triggers rebuildGraphQL with zero remaining schemas.
+    // Pre-fix this rejected with the empty-Query GraphQLError; now it
+    // resolves to `true` (the unload succeeded) instead of throwing.
+    await expect(loader.unloadSchema('v1/emptyrebuild')).resolves.toBe(true);
+    expect(loader.listSchemas()).toEqual([]);
+
+    // A subsequent rebuild on the still-empty registry must also stay
+    // valid (the placeholder is re-added every rebuild while empty).
+    await expect(loader.rebuildGraphQL()).resolves.toBeUndefined();
+  });
+});
