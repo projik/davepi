@@ -347,6 +347,47 @@ describe('Schema watcher (gated by HOT_RELOAD_SCHEMAS)', () => {
     }
   });
 
+  // A file that's empty for one save is normal (and stays at debug), but
+  // one that's still missing path/fields after several saves is likely a
+  // real mistake the developer can't see at the default `info` level —
+  // so the watcher escalates to exactly one warn.
+  test('a schema file left invalid across saves escalates to a single warn', async () => {
+    const originalNodeEnv = process.env.NODE_ENV;
+    const originalFlag = process.env.HOT_RELOAD_SCHEMAS;
+    process.env.NODE_ENV = 'development';
+    process.env.HOT_RELOAD_SCHEMAS = 'true';
+
+    const loader = ctx.app.locals.schemaLoader;
+    const schemasDir = path.resolve(__dirname, '..', 'schema', 'versions');
+    const badFile = path.join(schemasDir, 'v1', '__invalid.js');
+    // Non-empty, but not a usable schema — no `fields` array.
+    fs.writeFileSync(badFile, "module.exports = { path: 'invalid' };");
+
+    const logger = require('../utils/logger');
+    const warnSpy = jest.spyOn(logger, 'warn').mockImplementation(() => {});
+    let watcher;
+    try {
+      const fake = makeFakeChokidar();
+      watcher = startSchemaWatcher({ loader, schemasDir, _chokidar: fake });
+      // Fire three change events spaced past the 100ms debounce so each
+      // one runs the handler (rather than collapsing into one).
+      for (let i = 0; i < 3; i++) {
+        fake._watcher().emit('change', badFile);
+        await new Promise((r) => setTimeout(r, 150));
+      }
+      const escalations = warnSpy.mock.calls.filter((c) =>
+        /still not loadable/.test(c[1] || '')
+      );
+      expect(escalations).toHaveLength(1);
+    } finally {
+      warnSpy.mockRestore();
+      if (watcher) await watcher.stop();
+      if (fs.existsSync(badFile)) fs.unlinkSync(badFile);
+      process.env.NODE_ENV = originalNodeEnv;
+      process.env.HOT_RELOAD_SCHEMAS = originalFlag;
+    }
+  });
+
   // The loader itself gives a clear, typed error if it is ever handed a
   // schema with no `fields` array (boot path, programmatic callers),
   // rather than the cryptic destructuring TypeError.

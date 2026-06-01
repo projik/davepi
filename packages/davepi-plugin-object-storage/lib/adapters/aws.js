@@ -25,6 +25,17 @@ function createAwsAdapter(config, { sdkOverride } = {}) {
   // See gcs.js: only `undefined` (no override) falls back to loadSdk();
   // an explicit `null` means "SDK unavailable" and must not re-require.
   const sdk = sdkOverride === undefined ? loadSdk() : sdkOverride;
+  // Mirror the gcs adapter's `if (!sdk) throw`: an explicit null
+  // override (or a malformed SDK object) must fail fast with a clear
+  // message rather than crashing on the `sdk.client` destructuring
+  // below with a cryptic "Cannot read properties of null".
+  if (!sdk || !sdk.client || !sdk.presigner) {
+    throw new Error(
+      'davepi-plugin-object-storage (aws adapter): AWS SDK is not available. ' +
+      'Ensure @aws-sdk/client-s3 and @aws-sdk/s3-request-presigner are installed, ' +
+      'or set S3_BACKEND to gcs.'
+    );
+  }
   const {
     S3Client,
     PutObjectCommand,
