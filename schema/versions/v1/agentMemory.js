@@ -59,8 +59,8 @@ module.exports = {
   path: 'agentMemory',
   collection: 'agent_memory',
   fields: [
-    { name: 'accountId', type: String },
-    { name: 'userId', type: String, required: true },
+    { name: 'accountId', type: String, stamped: true },
+    { name: 'userId', type: String, required: true, stamped: true },
     {
       name: 'agentKey',
       type: String,

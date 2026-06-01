@@ -340,11 +340,13 @@ describe('MCP server: restore / history / search / relation / file tools', () =>
 
   test('search_<path>: not registered for a schema with no searchable field', async () => {
     const names = listToolNames(ctx.app.locals.schemaLoader);
-    // Most seed schemas declare no `searchable: true` field, so they get
-    // no search tool. (`skill` is the exception — its name/description
-    // are searchable for the L0 index — and its `search_skill` tool is
-    // exercised by the schema-driven case below.)
-    expect(names).not.toContain('search_product');
+    // Sample three seed schemas that explicitly declare no `searchable: true`
+    // field — `account` (one row per tenant, no full-text use case),
+    // `agentMemory` and `customerProfile` (keyed lookups by `agentKey` /
+    // `endUserKey`, not free-text). `skill` and most CRM resources DO
+    // declare searchable fields and so get a `search_<path>` tool;
+    // `search_skill` is exercised by the schema-driven case below.
+    expect(names).not.toContain('search_account');
     expect(names).not.toContain('search_agentMemory');
     expect(names).not.toContain('search_customerProfile');
   });
