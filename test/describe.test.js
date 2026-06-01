@@ -150,6 +150,313 @@ describe('describeManifest: pure helpers', () => {
       expect(min.features.softDelete).toBe(false);
     });
 
+    test('passes through field-level UI hints', () => {
+      const loader = stubLoader({
+        'v1/widget': {
+          schema: {
+            path: 'widget',
+            collection: 'widget',
+            version: 'v1',
+            fields: [
+              { name: 'userId', type: String, required: true, stamped: true },
+              { name: 'status', type: String, enum: ['lead', 'won', 'lost'] },
+              {
+                name: 'amount',
+                type: Number,
+                widget: 'currency',
+                format: 'currency:USD',
+              },
+              { name: 'notes', type: String, widget: 'rich-text', label: 'Notes (markdown)' },
+            ],
+          },
+        },
+      });
+      const m = buildManifest({ schemaLoader: loader });
+      const byName = Object.fromEntries(m.schemas['v1/widget'].fields.map((f) => [f.name, f]));
+
+      expect(byName.userId.stamped).toBe(true);
+      expect(byName.status.enum).toEqual(['lead', 'won', 'lost']);
+      expect(byName.amount.widget).toBe('currency');
+      expect(byName.amount.format).toBe('currency:USD');
+      expect(byName.notes.widget).toBe('rich-text');
+      expect(byName.notes.label).toBe('Notes (markdown)');
+    });
+
+    test('passes through schema-level display hints', () => {
+      const loader = stubLoader({
+        'v1/widget': {
+          schema: {
+            path: 'widget',
+            collection: 'widget',
+            version: 'v1',
+            label: 'Widget',
+            pluralLabel: 'Widgets',
+            displayField: 'widgetName',
+            fields: [
+              { name: 'userId', type: String, required: true },
+              { name: 'widgetName', type: String, required: true },
+            ],
+          },
+        },
+      });
+      const w = buildManifest({ schemaLoader: loader }).schemas['v1/widget'];
+      expect(w.label).toBe('Widget');
+      expect(w.pluralLabel).toBe('Widgets');
+      expect(w.displayField).toBe('widgetName');
+    });
+
+    test('drops field hints that are empty / missing / wrong type', () => {
+      const loader = stubLoader({
+        'v1/widget': {
+          schema: {
+            path: 'widget',
+            collection: 'widget',
+            version: 'v1',
+            fields: [
+              { name: 'a', type: String, widget: '', format: '', label: '' },
+              { name: 'b', type: String, widget: null, format: 42 },
+              { name: 'c', type: String, stamped: false },
+              { name: 'd', type: String, enum: [] },
+              // `stamped` must pass through only on `=== true`. Truthy
+              // non-boolean values (strings, numbers, objects) get
+              // dropped — otherwise a typo (`stamped: 'true'`) would
+              // silently coerce to true in the manifest and the UI would
+              // hide the field forever.
+              { name: 'e', type: String, stamped: 'true' },
+              { name: 'f', type: String, stamped: 1 },
+              { name: 'g', type: String, stamped: {} },
+              { name: 'h', type: String, stamped: 'yes' },
+            ],
+          },
+        },
+      });
+      const fields = buildManifest({ schemaLoader: loader }).schemas['v1/widget'].fields;
+      for (const f of fields) {
+        expect(f.widget).toBeUndefined();
+        expect(f.format).toBeUndefined();
+        expect(f.label).toBeUndefined();
+        expect(f.stamped).toBeUndefined();
+        expect(f.enum).toBeUndefined();
+      }
+    });
+
+    test('stamped: true is the only value that passes through', () => {
+      const loader = stubLoader({
+        'v1/widget': {
+          schema: {
+            path: 'widget',
+            collection: 'widget',
+            version: 'v1',
+            fields: [
+              { name: 'userId', type: String, stamped: true },
+            ],
+          },
+        },
+      });
+      const fields = buildManifest({ schemaLoader: loader }).schemas['v1/widget'].fields;
+      expect(fields[0].stamped).toBe(true);
+    });
+
+    test('auto-populates inverse hasMany from sibling belongsTo', () => {
+      const loader = stubLoader({
+        'v1/account': {
+          schema: {
+            path: 'account',
+            collection: 'account',
+            version: 'v1',
+            fields: [{ name: 'userId', type: String, required: true }],
+          },
+        },
+        'v1/deal': {
+          schema: {
+            path: 'deal',
+            collection: 'deal',
+            version: 'v1',
+            fields: [
+              { name: 'userId', type: String, required: true },
+              { name: 'accountId', type: String, required: true },
+            ],
+            relations: {
+              account: { belongsTo: 'account', localKey: 'accountId' },
+            },
+          },
+        },
+      });
+      const m = buildManifest({ schemaLoader: loader });
+      // The deal still declares `belongsTo: account` straight from the schema.
+      expect(m.schemas['v1/deal'].relations.account).toMatchObject({
+        kind: 'belongsTo',
+        target: 'account',
+        localKey: 'accountId',
+      });
+      // The parent picks up a synthetic hasMany pointing at the child.
+      const parent = m.schemas['v1/account'];
+      expect(parent.relations).toBeDefined();
+      const inverse = Object.values(parent.relations).find(
+        (r) => r.target === 'deal' && r.foreignKey === 'accountId'
+      );
+      expect(inverse).toMatchObject({
+        kind: 'hasMany',
+        target: 'deal',
+        foreignKey: 'accountId',
+        inverse: true,
+      });
+    });
+
+    test('inverse population does not override an explicit hasMany', () => {
+      const loader = stubLoader({
+        'v1/account': {
+          schema: {
+            path: 'account',
+            collection: 'account',
+            version: 'v1',
+            fields: [{ name: 'userId', type: String, required: true }],
+            // Author already declared the inverse — author wins.
+            relations: {
+              deals: { hasMany: 'deal', foreignKey: 'accountId', where: { stage: 'open' } },
+            },
+          },
+        },
+        'v1/deal': {
+          schema: {
+            path: 'deal',
+            collection: 'deal',
+            version: 'v1',
+            fields: [{ name: 'accountId', type: String, required: true }],
+            relations: {
+              account: { belongsTo: 'account', localKey: 'accountId' },
+            },
+          },
+        },
+      });
+      const parent = buildManifest({ schemaLoader: loader }).schemas['v1/account'];
+      expect(parent.relations.deals.where).toEqual({ stage: 'open' });
+      // Author's `deals` is the only relation pointing at deal/accountId — no
+      // synthetic shadow gets registered.
+      const dealRels = Object.values(parent.relations).filter(
+        (r) => r.target === 'deal' && r.foreignKey === 'accountId'
+      );
+      expect(dealRels).toHaveLength(1);
+      expect(dealRels[0].inverse).toBeUndefined();
+    });
+
+    test('inverse population prefers same-version parent when multiple versions exist', () => {
+      const loader = stubLoader({
+        'v1/account': {
+          schema: {
+            path: 'account',
+            collection: 'account',
+            version: 'v1',
+            fields: [{ name: 'userId', type: String, required: true }],
+          },
+        },
+        'v2/account': {
+          schema: {
+            path: 'account',
+            collection: 'account',
+            version: 'v2',
+            fields: [
+              { name: 'userId', type: String, required: true },
+              { name: 'tier', type: String },
+            ],
+          },
+        },
+        'v2/deal': {
+          schema: {
+            path: 'deal',
+            collection: 'deal',
+            version: 'v2',
+            fields: [
+              { name: 'userId', type: String, required: true },
+              { name: 'accountId', type: String, required: true },
+            ],
+            // un-versioned target — resolver must walk to v2 parent because
+            // child is on v2, not the flat last-write-wins v2 entry by
+            // accident.
+            relations: {
+              account: { belongsTo: 'account', localKey: 'accountId' },
+            },
+          },
+        },
+      });
+      const m = buildManifest({ schemaLoader: loader });
+      const v1Parent = m.schemas['v1/account'];
+      const v2Parent = m.schemas['v2/account'];
+
+      // v2/deal's inverse must land on v2/account, not v1/account.
+      expect(v2Parent.relations).toBeDefined();
+      const v2Inverse = Object.values(v2Parent.relations).find(
+        (r) => r.target === 'deal' && r.foreignKey === 'accountId'
+      );
+      expect(v2Inverse).toMatchObject({ kind: 'hasMany', target: 'deal', inverse: true });
+
+      // v1/account stays untouched — no child on v1 declares belongsTo it.
+      expect(v1Parent.relations).toBeUndefined();
+    });
+
+    test('inverse population falls back to any-version when same-version parent is missing', () => {
+      const loader = stubLoader({
+        'v1/account': {
+          schema: {
+            path: 'account',
+            collection: 'account',
+            version: 'v1',
+            fields: [{ name: 'userId', type: String, required: true }],
+          },
+        },
+        'v2/deal': {
+          schema: {
+            path: 'deal',
+            collection: 'deal',
+            version: 'v2',
+            fields: [{ name: 'accountId', type: String, required: true }],
+            relations: {
+              account: { belongsTo: 'account', localKey: 'accountId' },
+            },
+          },
+        },
+      });
+      const m = buildManifest({ schemaLoader: loader });
+      // No v2/account — resolver falls back to v1/account so the inverse
+      // edge still materialises somewhere useful.
+      const v1Parent = m.schemas['v1/account'];
+      expect(v1Parent.relations).toBeDefined();
+      const inverse = Object.values(v1Parent.relations).find(
+        (r) => r.target === 'deal' && r.foreignKey === 'accountId'
+      );
+      expect(inverse).toMatchObject({
+        kind: 'hasMany',
+        target: 'deal',
+        foreignKey: 'accountId',
+        inverse: true,
+      });
+    });
+
+    test('inverse population skips belongsTo when target is unregistered', () => {
+      const loader = stubLoader({
+        'v1/orphan': {
+          schema: {
+            path: 'orphan',
+            collection: 'orphan',
+            version: 'v1',
+            fields: [{ name: 'ghostId', type: String, required: true }],
+            relations: {
+              ghost: { belongsTo: 'ghost', localKey: 'ghostId' },
+            },
+          },
+        },
+      });
+      // Loader has no 'v1/ghost' — no inverse can be attached. The child
+      // entry should still carry its own belongsTo unchanged.
+      const m = buildManifest({ schemaLoader: loader });
+      expect(m.schemas['v1/orphan'].relations.ghost).toMatchObject({
+        kind: 'belongsTo',
+        target: 'ghost',
+      });
+      // No new schema entry materialises out of thin air.
+      expect(Object.keys(m.schemas)).toEqual(['v1/orphan']);
+    });
+
     test('serialises function defaults as a stable token', () => {
       const loader = stubLoader({
         'v1/widget': {
