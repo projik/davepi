@@ -34,6 +34,15 @@ function startSchemaWatcher({
   const debounceTimers = new Map();
   const DEBOUNCE_MS = 100;
 
+  // Per-file count of consecutive "not loadable yet" skips. Transient
+  // emptiness (editor creates the file before you type) stays at debug,
+  // but a file that's still missing `path`/`fields` after several saves
+  // is probably a real mistake the developer can't see at the default
+  // `info` log level — so we escalate to a single `warn` once. Reset on
+  // a successful load or when the file is removed.
+  const skipCounts = new Map();
+  const SKIP_WARN_THRESHOLD = 3;
+
   const versionFromFile = (filePath) => {
     // schema/versions/v1/account.js -> v1
     const rel = path.relative(schemasDir, filePath);
@@ -69,6 +78,39 @@ function startSchemaWatcher({
   const handleAddOrChange = async (filePath) => {
     try {
       const schema = requireFresh(filePath);
+      // Editors create a new file empty and only then do you type into
+      // it, so the first event for `workout.js` fires while the module
+      // still exports `{}` (and a half-finished save may export a
+      // `path` but no `fields` yet). Neither is a loadable schema —
+      // handing it to the loader would crash on `s.fields.forEach` and
+      // surface as a scary "schema reload failed" error on every new
+      // file. Skip quietly and wait for the next save, which fires its
+      // own 'change' event once the file exports `{ path, fields }`.
+      if (
+        !schema ||
+        typeof schema !== 'object' ||
+        typeof schema.path !== 'string' ||
+        !Array.isArray(schema.fields)
+      ) {
+        const skips = (skipCounts.get(filePath) || 0) + 1;
+        skipCounts.set(filePath, skips);
+        // Quiet for the first couple of skips (the normal create-empty-
+        // then-type flow), then warn exactly once so a file that stays
+        // invalid across saves is discoverable without flooding the log.
+        if (skips === SKIP_WARN_THRESHOLD) {
+          logger.warn(
+            { filePath, skips },
+            'schema file still not loadable after multiple saves (must export an object with a string `path` and a `fields` array); not registered'
+          );
+        } else {
+          logger.debug(
+            { filePath },
+            'schema file not loadable yet (missing path/fields); skipping until next save'
+          );
+        }
+        return;
+      }
+      skipCounts.delete(filePath);
       schema.__sourceFile = filePath;
       schema.version = versionFromFile(filePath);
       const newKey = `${schema.version}/${schema.path}`;
@@ -97,6 +139,7 @@ function startSchemaWatcher({
   };
 
   const handleUnlink = async (filePath) => {
+    skipCounts.delete(filePath);
     const key = fileToKey.get(filePath);
     if (!key) return;
     fileToKey.delete(filePath);

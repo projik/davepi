@@ -68,6 +68,13 @@ test('createAwsAdapter: throws clearly when bucket is missing', () => {
   );
 });
 
+test('createAwsAdapter: throws a clear error on an explicit null SDK override (no cryptic destructuring crash)', () => {
+  assert.throws(
+    () => createAwsAdapter({ backend: 'aws', bucket: 'b' }, { sdkOverride: null }),
+    /AWS SDK is not available/
+  );
+});
+
 test('createAwsAdapter: passes credentials + region to the S3Client', () => {
   const sdk = buildSdkStub();
   createAwsAdapter(
