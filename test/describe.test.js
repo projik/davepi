@@ -300,7 +300,46 @@ describe('describeManifest: pure helpers', () => {
         target: 'deal',
         foreignKey: 'accountId',
         inverse: true,
+        callable: false,
       });
+    });
+
+    test('synthetic inverses are flagged callable: false but author-declared edges are not', () => {
+      const loader = stubLoader({
+        'v1/account': {
+          schema: {
+            path: 'account',
+            collection: 'account',
+            version: 'v1',
+            fields: [{ name: 'userId', type: String, required: true }],
+          },
+        },
+        'v1/deal': {
+          schema: {
+            path: 'deal',
+            collection: 'deal',
+            version: 'v1',
+            fields: [
+              { name: 'userId', type: String, required: true },
+              { name: 'accountId', type: String, required: true },
+            ],
+            relations: {
+              account: { belongsTo: 'account', localKey: 'accountId' },
+            },
+          },
+        },
+      });
+      const m = buildManifest({ schemaLoader: loader });
+      // Synthetic inverse → callable: false (manifest-only discovery hint;
+      // runtime relation map is per-schema and doesn't see siblings).
+      const inverse = Object.values(m.schemas['v1/account'].relations).find(
+        (r) => r.target === 'deal'
+      );
+      expect(inverse.callable).toBe(false);
+      // Author-declared edge → no callable flag (callable is the default).
+      const declared = m.schemas['v1/deal'].relations.account;
+      expect(declared.callable).toBeUndefined();
+      expect(declared.kind).toBe('belongsTo');
     });
 
     test('inverse population does not override an explicit hasMany', () => {
@@ -388,7 +427,7 @@ describe('describeManifest: pure helpers', () => {
       const v2Inverse = Object.values(v2Parent.relations).find(
         (r) => r.target === 'deal' && r.foreignKey === 'accountId'
       );
-      expect(v2Inverse).toMatchObject({ kind: 'hasMany', target: 'deal', inverse: true });
+      expect(v2Inverse).toMatchObject({ kind: 'hasMany', target: 'deal', inverse: true, callable: false });
 
       // v1/account stays untouched — no child on v1 declares belongsTo it.
       expect(v1Parent.relations).toBeUndefined();
@@ -429,6 +468,7 @@ describe('describeManifest: pure helpers', () => {
         target: 'deal',
         foreignKey: 'accountId',
         inverse: true,
+        callable: false,
       });
     });
 
@@ -649,6 +689,7 @@ describe('GET /_describe endpoint', () => {
       target: 'quote',
       foreignKey: 'contactId',
       inverse: true,
+      callable: false,
     });
 
     // Self-references on category + project also surface as belongsTo

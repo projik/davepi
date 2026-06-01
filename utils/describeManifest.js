@@ -475,6 +475,21 @@ function populateInverseRelations(schemas) {
         target: childPath,
         foreignKey: fk,
         inverse: true,
+        // Manifest-only edge. The runtime relation map
+        // (`utils/relations.js#normalizeRelations`) is per-schema and
+        // only sees the parent's own `relations` block, so REST
+        // `__include`, MCP `list_<parent>_<inverse>` tools, and the
+        // GraphQL graph edges all key off the *parent's authored* set
+        // — none of which include the inverse synthesised here.
+        // Consumers (admin UIs, agents) should treat synthetic
+        // inverses as *discovery* hints and fetch the children via a
+        // regular list with a filter on the foreign key
+        // (`GET /api/v1/<child>?<fk>=<parent-id>` or the MCP
+        // equivalent), not via `__include`. Promoting these edges to
+        // callable status would require rebuilding every parent's
+        // REST router whenever a sibling schema declares a new
+        // belongsTo — out of scope for the manifest-level helper.
+        callable: false,
       };
     }
   }
