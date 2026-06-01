@@ -348,12 +348,13 @@ describe('GraphQL rebuild with an empty registry', () => {
     expect(loader.listSchemas()).toContain('v1/emptyrebuild');
 
     // The unload triggers rebuildGraphQL with zero remaining schemas.
-    // Pre-fix this rejected with the empty-Query GraphQLError.
-    await expect(loader.unloadSchema('v1/emptyrebuild')).resolves.not.toThrow();
+    // Pre-fix this rejected with the empty-Query GraphQLError; now it
+    // resolves to `true` (the unload succeeded) instead of throwing.
+    await expect(loader.unloadSchema('v1/emptyrebuild')).resolves.toBe(true);
     expect(loader.listSchemas()).toEqual([]);
 
     // A subsequent rebuild on the still-empty registry must also stay
     // valid (the placeholder is re-added every rebuild while empty).
-    await expect(loader.rebuildGraphQL()).resolves.not.toThrow();
+    await expect(loader.rebuildGraphQL()).resolves.toBeUndefined();
   });
 });
