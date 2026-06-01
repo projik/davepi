@@ -5,7 +5,7 @@ const app = require("./app");
 const logger = require("./utils/logger");
 
 const { API_PORT } = process.env;
-const port = process.env.PORT || API_PORT;
+const port = Number(process.env.PORT || API_PORT);
 
 // Wait for boot to finish before binding the port. The schema loader's
 // initial pass (REST routers, GraphQL schema, Apollo middleware) runs
