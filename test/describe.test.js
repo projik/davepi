@@ -314,6 +314,98 @@ describe('describeManifest: pure helpers', () => {
       expect(dealRels[0].inverse).toBeUndefined();
     });
 
+    test('inverse population prefers same-version parent when multiple versions exist', () => {
+      const loader = stubLoader({
+        'v1/account': {
+          schema: {
+            path: 'account',
+            collection: 'account',
+            version: 'v1',
+            fields: [{ name: 'userId', type: String, required: true }],
+          },
+        },
+        'v2/account': {
+          schema: {
+            path: 'account',
+            collection: 'account',
+            version: 'v2',
+            fields: [
+              { name: 'userId', type: String, required: true },
+              { name: 'tier', type: String },
+            ],
+          },
+        },
+        'v2/deal': {
+          schema: {
+            path: 'deal',
+            collection: 'deal',
+            version: 'v2',
+            fields: [
+              { name: 'userId', type: String, required: true },
+              { name: 'accountId', type: String, required: true },
+            ],
+            // un-versioned target — resolver must walk to v2 parent because
+            // child is on v2, not the flat last-write-wins v2 entry by
+            // accident.
+            relations: {
+              account: { belongsTo: 'account', localKey: 'accountId' },
+            },
+          },
+        },
+      });
+      const m = buildManifest({ schemaLoader: loader });
+      const v1Parent = m.schemas['v1/account'];
+      const v2Parent = m.schemas['v2/account'];
+
+      // v2/deal's inverse must land on v2/account, not v1/account.
+      expect(v2Parent.relations).toBeDefined();
+      const v2Inverse = Object.values(v2Parent.relations).find(
+        (r) => r.target === 'deal' && r.foreignKey === 'accountId'
+      );
+      expect(v2Inverse).toMatchObject({ kind: 'hasMany', target: 'deal', inverse: true });
+
+      // v1/account stays untouched — no child on v1 declares belongsTo it.
+      expect(v1Parent.relations).toBeUndefined();
+    });
+
+    test('inverse population falls back to any-version when same-version parent is missing', () => {
+      const loader = stubLoader({
+        'v1/account': {
+          schema: {
+            path: 'account',
+            collection: 'account',
+            version: 'v1',
+            fields: [{ name: 'userId', type: String, required: true }],
+          },
+        },
+        'v2/deal': {
+          schema: {
+            path: 'deal',
+            collection: 'deal',
+            version: 'v2',
+            fields: [{ name: 'accountId', type: String, required: true }],
+            relations: {
+              account: { belongsTo: 'account', localKey: 'accountId' },
+            },
+          },
+        },
+      });
+      const m = buildManifest({ schemaLoader: loader });
+      // No v2/account — resolver falls back to v1/account so the inverse
+      // edge still materialises somewhere useful.
+      const v1Parent = m.schemas['v1/account'];
+      expect(v1Parent.relations).toBeDefined();
+      const inverse = Object.values(v1Parent.relations).find(
+        (r) => r.target === 'deal' && r.foreignKey === 'accountId'
+      );
+      expect(inverse).toMatchObject({
+        kind: 'hasMany',
+        target: 'deal',
+        foreignKey: 'accountId',
+        inverse: true,
+      });
+    });
+
     test('inverse population skips belongsTo when target is unregistered', () => {
       const loader = stubLoader({
         'v1/orphan': {

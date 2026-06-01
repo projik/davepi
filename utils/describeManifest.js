@@ -406,24 +406,48 @@ function buildManifest({ schemaLoader, appName, version } = {}) {
  * `target`), so an inverse pointing at a non-existent path is dropped
  * to avoid populating unreachable manifest entries.
  *
+ * Multi-version targets: relation `target` values in schema files are
+ * un-versioned (just the short `path`), but the manifest keys schemas
+ * under `${version}/${path}` precisely so two versions of the same
+ * resource don't collide. The resolver mirrors `schemaLoader.getResource`:
+ * same-version exact match first, fall back to any-version. Without this,
+ * a child on v2 declaring `belongsTo: 'account'` could synthesise its
+ * inverse onto the wrong-version parent (last-write-wins on a flat
+ * `byPath` index).
+ *
  * Mutates the `schemas` map in place.
  */
 function populateInverseRelations(schemas) {
-  // Build a `pathName -> manifest entry` index so the inverse target
-  // can be looked up by the short path declared on the parent's
-  // `belongsTo`. The manifest uses `${version}/${path}` keys, so derive
-  // the bare path from each entry's stored `path` field.
+  // Index by short path → version → entry. Iteration order is preserved
+  // so the any-version fallback is deterministic across runs.
   const byPath = new Map();
   for (const entry of Object.values(schemas)) {
     const short = entry.path.replace(/^\/api\/[^/]+\//, '');
-    byPath.set(short, entry);
+    let bucket = byPath.get(short);
+    if (!bucket) {
+      bucket = new Map();
+      byPath.set(short, bucket);
+    }
+    bucket.set(entry.version, entry);
   }
+
+  const resolveParent = (targetPath, sourceVersion) => {
+    const bucket = byPath.get(targetPath);
+    if (!bucket) return null;
+    if (sourceVersion && bucket.has(sourceVersion)) return bucket.get(sourceVersion);
+    // First entry wins for the any-version fallback — same posture as
+    // `schemaLoader.getResource`, which iterates the registry and
+    // returns the first match.
+    const first = bucket.values().next();
+    return first.done ? null : first.value;
+  };
+
   for (const child of Object.values(schemas)) {
     if (!child.relations) continue;
     const childPath = child.path.replace(/^\/api\/[^/]+\//, '');
     for (const def of Object.values(child.relations)) {
       if (!def || def.kind !== 'belongsTo') continue;
-      const parent = byPath.get(def.target);
+      const parent = resolveParent(def.target, child.version);
       if (!parent) continue;
       const inverseName = pluralise(childPath);
       const fk = def.localKey || `${def.target}Id`;
