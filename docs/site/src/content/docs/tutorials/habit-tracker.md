@@ -26,11 +26,20 @@ The `blank` template ships with one example resource (`note`) which
 we won't use — feel free to delete `schema/versions/v1/note.js`
 once the server is running.
 
-You should see:
+You should see output similar to:
 
 ```
-{"level":"info","msg":"listening","port":5050}
+[HH:MM:ss.sss] INFO (xxxxx): schema loaded
+    schema: "v1/note"
+[HH:MM:ss.sss] INFO (xxxxx): schemas loaded
+[HH:MM:ss.sss] INFO (xxxxx): listening
+    port: "5050"
+[HH:MM:ss.sss] INFO (xxxxx): connected to database
 ```
+
+:::note
+In development mode dAvePi uses `pino-pretty` for human-readable logs. In production (`NODE_ENV=production`) you'll see plain JSON: `{"level":"info","msg":"listening","port":5050}`.
+:::
 
 ## 2:00 — Write the workout schema
 

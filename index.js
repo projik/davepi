@@ -22,6 +22,6 @@ const port = process.env.PORT || API_PORT;
     }
   }
   app.listen(port, () => {
-    logger.info({ port }, 'server listening');
+    logger.info({ port }, 'listening');
   });
 })();
