@@ -8,6 +8,10 @@ from v1.0.0 onward (see [Stability commitments](https://docs.davepi.dev/referenc
 
 ## [Unreleased]
 
+## [2.0.0] - 2026-06-02
+
+Major: bundled Refine admin removed. Replaced by [davepi-ui](https://github.com/projik/davepi-ui), shipped as separate npm packages (`@davepi/ui-core`, `@davepi/ui-react`, `@davepi/ui-mcp`, `create-davepi-ui`). `npx create-davepi-app` scaffolds a davepi-ui sibling admin by default — opt out with `--no-admin`.
+
 ### Removed
 
 - **Deleted the bundled Refine admin SPA at `/admin`.** Replaced by [davepi-ui](https://github.com/projik/davepi-ui), a separate schema-driven, agent-first React admin built on shadcn primitives — searchable relation pickers (not raw UUID inputs), auto-discovered child tabs on parent detail pages, per-resource override layer, JSON page descriptors, MCP server. The old Refine admin was bundled inside the davepi npm package and served from `/admin`; the new admin runs as a sibling Vite project pointed at the davepi backend via `VITE_API_URL`. davepi has no users today so no deprecation window — the dir / route / helmet carve-out / nodemon-ignore entries / jest path filter / npm-publish artifact / scaffolder note / docs reference all go in one cut. Files: removed `admin/` directory, the helmet `/admin/*` carve-out and the `/admin` express.static + catch-all in `app.js`, the `install:admin` / `build:admin` / `dev:admin` / `prepublishOnly` npm scripts in `package.json`, the `admin/dist/` entry from `files`, the `admin/*` patterns from `nodemonConfig.ignore` and `jest.testPathIgnorePatterns`, the `test/admin-ui.test.js` integration test, the `/admin/*` CSP carve-out assertion in `test/security.test.js`, the `Admin SPA | admin/` row in `MAINTAINERS.md`, and the `admin/` line in `CONTRIBUTING.md`'s directory map. README's Admin UI section now points directly at davepi-ui's scaffolder (`npx create-davepi-ui` or `npx create-davepi-app --template crm`, which scaffolds the admin by default — opt out with `--no-admin`).
