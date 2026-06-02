@@ -155,8 +155,8 @@ function randomSecret() {
  * davepi-ui repo) and we get whatever the latest published version
  * does — no template duplication here. After the scaffold, the
  * caller's normal install loop covers `<projectRoot>` only; the user
- * runs `cd admin && pnpm install` separately (or `npm install` if
- * the repo standardised on npm). The npx invocation passes
+ * runs `cd admin && npm install` separately (matches the npm posture
+ * the davepi backend already uses). The npx invocation passes
  * `--no-install` so a slow network here doesn't block the rest of
  * the project setup.
  */
@@ -423,7 +423,7 @@ async function scaffold({ name, template, install, davepiVersion, port, admin })
       `- REST: http://localhost:${apiPort}/api/v1/...`,
       `- GraphQL: http://localhost:${apiPort}/graphql/`,
       `- Swagger: http://localhost:${apiPort}/api-docs`,
-      `- Admin: \`cd admin && pnpm dev\` → http://localhost:5173 (davepi-ui shadcn admin)`,
+      `- Admin: \`cd admin && npm run dev\` → http://localhost:5173 (davepi-ui shadcn admin)`,
       `- Capability manifest: http://localhost:${apiPort}/_describe`,
       '',
       '## What\'s in this template',
@@ -489,7 +489,7 @@ async function scaffold({ name, template, install, davepiVersion, port, admin })
   if (adminScaffolded) {
     out('');
     out(`  # In a separate terminal:`);
-    out(`  cd admin && pnpm install && pnpm dev   # http://localhost:5173`);
+    out(`  cd admin && npm install && npm run dev   # http://localhost:5173`);
   }
   out('');
   out(`Try Claude Code: open the project, the MCP server is wired in .mcp.json.`);

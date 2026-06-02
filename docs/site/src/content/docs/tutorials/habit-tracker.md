@@ -82,10 +82,17 @@ TOKEN=$(curl -s -X POST http://localhost:5050/login \
   | jq -r .accessToken)
 ```
 
-Open <http://localhost:5050/admin> in a browser. Sign in with the
-same credentials. You'll see `workout` in the sidebar — click it,
-hit **New**, add 5–10 sample rows. The form is auto-generated from
-the schema; the `type` dropdown comes from the `enum`.
+In a separate terminal, boot the davepi-ui admin (scaffolded into
+`<project>/admin/` by `create-davepi-app`):
+
+```bash
+cd admin && npm install && npm run dev
+```
+
+Open <http://localhost:5173>. Sign in with the same credentials.
+You'll see `Workouts` in the sidebar — click it, hit **New Workout**,
+add 5–10 sample rows. The form is auto-generated from the schema;
+the `type` dropdown comes from the `enum`.
 
 Quick seed via curl if you'd rather not click:
 

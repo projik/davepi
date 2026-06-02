@@ -69,7 +69,7 @@ and POSTs realistic sample records.
 | GraphQL playground | `http://localhost:5050/graphql/` |
 | Swagger UI | `http://localhost:5050/api-docs` |
 | Capability manifest | `http://localhost:5050/_describe` |
-| Admin SPA | `http://localhost:5050/admin` (if built) |
+| Admin SPA | `http://localhost:5173` (sibling Vite app at `<project>/admin/` — run `cd admin && npm install && npm run dev`) |
 
 For example:
 
