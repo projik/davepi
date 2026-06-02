@@ -75,7 +75,6 @@ schema/versions/v1/       Auto-generated resource schemas (read AGENTS.md)
 utils/                    Cross-cutting helpers (errors, logger, scopeResolver,
                           schemaLoader, mcpServer, idempotency, ...)
 test/                     Jest test suite
-admin/                    Refine-based admin SPA (separate workspace)
 client/                   davepi-runtime.ts (hand-written) +
                           generated clients ship here
 docs/site/                Astro Starlight docs site (docs.davepi.dev)

@@ -22,7 +22,6 @@ owner yet — all PRs route through the current maintainer.
 | Schema-driven generation | `utils/schemaLoader.js`, `utils/scopeResolver.js`, `schema/versions/` | @projik |
 | MCP surface | `utils/mcpServer.js`, `packages/mcp/` | @projik |
 | Auth + tenancy | `routes/auth/`, `middleware/auth.js`, `model/user.js` | @projik |
-| Admin SPA | `admin/` | @projik |
 | Scaffolder + templates | `create-davepi-app/`, `templates/` | @projik |
 | Docs site | `docs/site/` | @projik |
 | Agent eval | `eval/` | @projik |
