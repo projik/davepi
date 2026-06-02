@@ -97,6 +97,15 @@ function describeFields(schema) {
     // use — a stray `stamped: 'yes'` or `stamped: {}` shouldn't survive
     // into the manifest where consumers would silently treat it as true.
     if (f.stamped === true) entry.stamped = true;
+    // `computed` marks a derived field — server fills it from other
+    // fields on read; clients should NOT send it in writes. Source
+    // shape is a function `(record) => value` (or `true` for static
+    // metadata-only), but the manifest just emits `computed: true`:
+    // functions don't survive JSON, and consumers only need to know
+    // "hide from forms / treat as read-only".
+    if (typeof f.computed === 'function' || f.computed === true) {
+      entry.computed = true;
+    }
     if (f.acl && (f.acl.read || f.acl.create || f.acl.update)) {
       entry.acl = {};
       if (Array.isArray(f.acl.read)) entry.acl.read = f.acl.read;
