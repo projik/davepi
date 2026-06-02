@@ -1,7 +1,7 @@
 {
   "name": "@davepi/agent",
   "version": "0.1.0",
-  "description": "Chat agent that ships pre-wired against a dAvePi backend. HTTP /chat + Slack channels, OpenAI + Anthropic providers, service-account or per-user OAuth-link auth. Consumes the dAvePi MCP server, so ACL/scope/tenant isolation are enforced server-side and the JWT (or X-Client-Id) is the access boundary.",
+  "description": "Chat agent that ships pre-wired against a dAvePi backend. HTTP /chat + Slack channels, OpenAI / Anthropic / Ollama (local) providers, service-account or per-user OAuth-link auth. Consumes the dAvePi MCP server, so ACL/scope/tenant isolation are enforced server-side and the JWT (or X-Client-Id) is the access boundary.",
   "license": "ISC",
   "homepage": "https://docs.davepi.dev/surfaces/agent/",
   "repository": {
@@ -17,6 +17,7 @@
     "mcp",
     "anthropic",
     "openai",
+    "ollama",
     "slack",
     "chatbot",
     "customer-service"

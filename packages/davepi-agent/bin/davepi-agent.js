@@ -12,6 +12,7 @@
  * Required env at minimum:
  *   DAVEPI_URL                 — base URL of the davepi backend
  *   ANTHROPIC_API_KEY or OPENAI_API_KEY — depending on LLM_PROVIDER
+ *     (not needed for LLM_PROVIDER=ollama, which talks to a local Ollama server)
  *   DAVEPI_BEARER or DAVEPI_CLIENT_ID — for service auth mode
  *     OR
  *   AGENT_AUTH_MODE=per-user + AGENT_LINK_BASE_URL — for per-user mode
@@ -41,6 +42,8 @@ Auth modes (AGENT_AUTH_MODE):
 LLM providers (LLM_PROVIDER):
   anthropic (default) needs ANTHROPIC_API_KEY
   openai              needs OPENAI_API_KEY
+  ollama              local; needs LLM_MODEL (e.g. llama3.1);
+                      OLLAMA_BASE_URL optional (default http://localhost:11434/v1)
 
 Documentation: https://docs.davepi.dev/surfaces/agent/
 `;
