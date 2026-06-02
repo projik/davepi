@@ -8,6 +8,10 @@ from v1.0.0 onward (see [Stability commitments](https://docs.davepi.dev/referenc
 
 ## [Unreleased]
 
+## [2.0.1] - 2026-06-02
+
+Patch: CRM template hints + `computed` field flag in `/_describe` so the davepi-ui scaffolded admin renders relations / labels / widgets without per-resource override config out of the box. Plus a new Ollama LLM provider on `@davepi/agent` and various docs / scaffolder cleanup.
+
 ### Added
 
 - **`computed: true` field flag passes through `/_describe`.** A field with a `computed` function on its schema definition (e.g. `fullName: { computed: (r) => [r.firstName, r.lastName].filter(Boolean).join(' ') }`) now emits `computed: true` in the manifest entry — the function itself isn't JSON-serialisable, but the flag is what consumers need. `davepi-ui` reads it and omits the field from create / edit forms (treats it like `stamped`: server-derived, client value would be ignored). Strict-equality / typeof check on the value so a stray `computed: 'true'` string doesn't slip through; computed function bodies aren't surfaced (privacy + size).

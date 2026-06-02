@@ -1,6 +1,6 @@
 {
   "name": "davepi",
-  "version": "2.0.0",
+  "version": "2.0.1",
   "description": "Schema-driven Node.js backend that auto-generates REST + GraphQL + MCP from one schema file per resource. Built for AI agents.",
   "main": "index.js",
   "bin": {
