@@ -1,5 +1,5 @@
 {
-  "runAt": "2026-06-01T07:37:56.146Z",
+  "runAt": "2026-06-02T07:32:10.845Z",
   "agentMode": "real",
   "model": "claude-sonnet-4-6",
   "total": 10,
@@ -15,7 +15,7 @@
       "name": "02-status-state-machine",
       "passed": false,
       "message": "ANTHROPIC_API_KEY is required for real-agent mode (set EVAL_AGENT=stub to skip).",
-      "durationMs": 2
+      "durationMs": 1
     },
     {
       "name": "03-parent-relation",
