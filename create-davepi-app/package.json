@@ -1,6 +1,6 @@
 {
   "name": "create-davepi-app",
-  "version": "0.1.3",
+  "version": "0.2.0",
   "description": "Scaffolder for new dAvePi projects. Run: npx create-davepi-app <name> [--template <name>]",
   "license": "ISC",
   "author": "David Baxter",
