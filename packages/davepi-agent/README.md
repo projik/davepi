@@ -13,8 +13,9 @@ in the prompt.
   to Block Kit tables and QuickChart images.
 - **Telegram / WhatsApp / Embeddable widget** templates in
   `lib/channels/templates/` — stubs with a one-screen recipe for filling in.
-- **OpenAI + Anthropic** providers via the Vercel AI SDK. Switch via
-  `LLM_PROVIDER`.
+- **OpenAI, Anthropic, and Ollama (local)** providers via the Vercel AI SDK.
+  Switch via `LLM_PROVIDER`. Ollama runs against a local model server with no
+  API key — see *Local models via Ollama* below.
 - **Two auth modes**:
   - `service` — one JWT (or `X-Client-Id`) for the whole bot. Right for an
     anonymous storefront widget where every visitor sees the same role-scoped
@@ -69,8 +70,9 @@ Required:
 | Variable          | Purpose                                           |
 | ----------------- | ------------------------------------------------- |
 | `DAVEPI_URL`      | Base URL of the davepi backend                    |
-| `LLM_PROVIDER`    | `anthropic` (default) or `openai`                 |
-| `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` | Provider key             |
+| `LLM_PROVIDER`    | `anthropic` (default), `openai`, or `ollama`      |
+| `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` | Provider key (anthropic / openai only — not needed for `ollama`) |
+| `LLM_MODEL`       | Model id. Optional for anthropic / openai (sensible defaults); **required** for `ollama` |
 
 Service auth (default) — set one of:
 
@@ -98,6 +100,33 @@ Persona & memory (optional):
 | `AGENT_PERSIST_CONVERSATIONS`       | Persist history + the frozen prompt snapshot to davepi's `conversation` schema (default `true`). `false` keeps the channel-managed in-memory round-trip only |
 | `AGENT_SESSION_IDLE_SECONDS`        | Idle gap after which a returning user is a **new** session and the snapshot is re-frozen, picking up memory/profile writes from the prior session (default `1800`) |
 | `LLM_PROMPT_CACHING`                | Anthropic prompt caching on the frozen snapshot prefix (default `true`, Anthropic provider only). `false` to disable |
+
+### Local models via Ollama
+
+Set `LLM_PROVIDER=ollama` to run the agent against a local [Ollama](https://ollama.com)
+server. The agent reuses the bundled `@ai-sdk/openai` provider pointed at Ollama's
+OpenAI-compatible `/v1` endpoint, so there's no extra dependency and no API key.
+
+| Variable           | Purpose                                                                                  |
+| ------------------ | ---------------------------------------------------------------------------------------- |
+| `LLM_MODEL`        | **Required** — Ollama has no universal default. The exact name you ran `ollama pull` with (e.g. `llama3.1`, `qwen2.5`) |
+| `OLLAMA_BASE_URL`  | Default `http://localhost:11434/v1`. Override for a remote Ollama or a reverse proxy     |
+| `OLLAMA_API_KEY`   | Optional — only set when fronting Ollama with an auth proxy. Ollama itself ignores it    |
+
+```bash
+ollama pull llama3.1
+ollama serve
+
+LLM_PROVIDER=ollama LLM_MODEL=llama3.1 \
+  DAVEPI_URL=http://localhost:5050 \
+  DAVEPI_BEARER=<jwt> \
+  npx davepi-agent
+```
+
+`LLM_PROMPT_CACHING` is a no-op for Ollama — prompt caching is an Anthropic feature
+only. Tool-calling fidelity depends on the model: `llama3.1` and `qwen2.5` work well
+with the MCP tool surface; smaller models may struggle on backends with many schemas
+(the tool router keeps the exposed surface under `AGENT_TOOL_LIMIT`).
 
 ### Memory & the frozen snapshot
 
