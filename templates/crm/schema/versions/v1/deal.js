@@ -1,14 +1,17 @@
 module.exports = {
   path: 'deal',
   collection: 'deal',
+  label: 'Deal',
+  pluralLabel: 'Deals',
+  displayField: 'title',
   fields: [
-    { name: 'userId', type: String, required: true },
-    { name: 'parentAccountId', type: String, required: true },
+    { name: 'userId', type: String, required: true, stamped: true },
+    { name: 'parentAccountId', type: String, required: true, reference: 'account', label: 'Account' },
     { name: 'title', type: String, required: true, searchable: true, searchWeight: 5 },
-    { name: 'amount', type: Number, required: true },
+    { name: 'amount', type: Number, required: true, widget: 'currency', format: 'currency:USD' },
     { name: 'currency', type: String, default: 'USD' },
-    { name: 'expectedCloseAt', type: Date },
-    { name: 'closedAt', type: Date },
+    { name: 'expectedCloseAt', type: Date, label: 'Expected close' },
+    { name: 'closedAt', type: Date, label: 'Closed' },
     {
       // The classic CRM funnel as a state machine. The framework
       // rejects undeclared transitions and surfaces the available
@@ -47,11 +50,6 @@ module.exports = {
     {
       name: 'wonByMonth',
       description: 'Sum of won-deal amounts grouped by close month.',
-      // `closedAt` is optional, so $year/$month would throw on rows
-      // where the field is null or missing. The $type filter keeps
-      // only documents whose closedAt is actually a Date — anything
-      // else (null, missing, accidental string) is excluded before
-      // it reaches the date operators.
       pipeline: [
         { $match: { stage: 'won', closedAt: { $type: 'date' } } },
         {
