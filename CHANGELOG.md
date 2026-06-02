@@ -8,6 +8,10 @@ from v1.0.0 onward (see [Stability commitments](https://docs.davepi.dev/referenc
 
 ## [Unreleased]
 
+### Changed
+
+- **Docs walk users through the new davepi-ui admin flow instead of the removed `/admin` SPA.** `quickstart/`, `guides/crm-in-10-minutes/`, `tutorials/habit-tracker/`, and `tutorials/customer-support-inbox/` all swap their "open `http://localhost:<port>/admin`" steps for "boot the sibling `<project>/admin/` davepi-ui app at `http://localhost:5173` via `cd admin && npm install && npm run dev`". The landing-page feature card flips from "Refine + ant-design" to "davepi-ui: shadcn + Tailwind. Searchable relation pickers, auto-discovered child tabs, scaffolded by default with `create-davepi-app`." `compared-to/refine.md` gets a full rewrite reframing davepi-ui as the Refine alternative dAvePi ships out of the box — the "use both" sketch still applies for teams who want a custom Refine admin pointed at the davepi backend (`create-davepi-app --no-admin` then start a fresh Refine project against `davepi gen-client`'s output). The `create-davepi-app` next-steps print + scaffolded README likewise drop their `pnpm install` / `pnpm dev` lines for `npm install` / `npm run dev` so the user's package-manager surface stays aligned with the davepi backend (the scaffolded admin is a plain Vite app — davepi-ui itself keeps pnpm internally because it's a monorepo, but the consumer-facing template ships without lock files so the scaffolded project picks npm fresh).
+
 ## [2.0.0] - 2026-06-02
 
 Major: bundled Refine admin removed. Replaced by [davepi-ui](https://github.com/projik/davepi-ui), shipped as separate npm packages (`@davepi/ui-core`, `@davepi/ui-react`, `@davepi/ui-mcp`, `create-davepi-ui`). `npx create-davepi-app` scaffolds a davepi-ui sibling admin by default — opt out with `--no-admin`.

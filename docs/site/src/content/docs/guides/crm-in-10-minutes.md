@@ -87,11 +87,19 @@ Open these in a browser:
 | Swagger UI | <http://localhost:5050/api-docs> |
 | Apollo Sandbox | <http://localhost:5050/graphql/> |
 | Capability manifest | <http://localhost:5050/_describe> |
-| Admin SPA | <http://localhost:5050/admin> |
+| Admin SPA | <http://localhost:5173> (sibling Vite app at `<project>/admin/`) |
 
-The admin SPA is built from the `_describe` manifest at startup —
-forms, tables, and detail views are all rendered automatically
-from the schema files.
+The scaffolder dropped a [davepi-ui](https://github.com/projik/davepi-ui)
+admin at `<project>/admin/`, pre-pointed at `VITE_API_URL=http://localhost:5050`.
+Run it in a separate terminal:
+
+```bash
+cd admin && npm install && npm run dev
+```
+
+The admin renders from `/_describe` — forms, tables, detail views, and
+auto-discovered child tabs all come straight from the schema files,
+no per-resource code.
 
 ## 4:00 — Add a custom field
 
@@ -250,13 +258,18 @@ await api.deal.transitionStage(dealId, 'proposal');
 
 ## 9:00 — Open the admin SPA
 
-Open `http://localhost:5050/admin` in a browser.
+In a separate terminal:
 
-The admin SPA ships pre-built inside the `davepi` package, so
-there's nothing to install or build. It reads `_describe` at
+```bash
+cd admin && npm install && npm run dev
+```
+
+Browse to `http://localhost:5173`. The admin reads `/_describe` at
 startup and renders forms / tables / detail views for every loaded
-schema. New schemas appear automatically on refresh — there's
-nothing to wire up per-resource.
+schema. New schemas appear on refresh — no per-resource wiring.
+Field labels are title-cased, relations render as searchable
+combobox pickers, and a contact's detail page auto-discovers a
+Deals tab from `deal.belongsTo: contact`.
 
 ## 10:00 — Done
 

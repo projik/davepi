@@ -67,11 +67,15 @@ module.exports = {
 };
 ```
 
-Save both. Open <http://localhost:5050/admin>. Notice that on
-ticket forms the customer field is now a dropdown — the framework
-read the `relations.customer` declaration and rendered a typeahead
-auto-populated from the `customer` collection. Zero UI code. See
-[Relations](/features/relations/).
+Save both. Open the davepi-ui admin at <http://localhost:5173>
+(start it with `cd admin && npm install && npm run dev` if it's
+not running). Notice that on ticket forms the customer field is
+now a searchable combobox — the framework read the
+`relations.customer` declaration, surfaced it through `/_describe`,
+and the admin rendered a `<RelationPicker>` auto-populated from
+the `customer` collection. Zero UI code. Customer detail pages
+also auto-discover a Tickets tab via the backend-synthesised
+inverse `hasMany`. See [Relations](/features/relations/).
 
 ## 5:00 — Seed three customers
 
