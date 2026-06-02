@@ -53,6 +53,21 @@ export default defineConfig({
           ],
         },
         {
+          label: 'Agents',
+          items: [
+            { label: 'Overview', link: '/agents/' },
+            { label: 'Getting started', link: '/agents/getting-started/' },
+            { label: 'Configuration', link: '/agents/configuration/' },
+            { label: 'Personas, memory, and skills', link: '/agents/personas-memory-skills/' },
+            { label: 'Auth modes', link: '/agents/auth/' },
+            { label: 'Channels', link: '/agents/channels/' },
+            { label: 'Tools and rendering', link: '/agents/tools-and-rendering/' },
+            { label: 'Proactive agents', link: '/agents/proactive-agents/' },
+            { label: 'Programmatic API', link: '/agents/programmatic-api/' },
+            { label: 'Troubleshooting', link: '/agents/troubleshooting/' },
+          ],
+        },
+        {
           label: 'Concepts',
           items: [
             { label: 'Schema-driven generation', link: '/concepts/schema-driven/' },
