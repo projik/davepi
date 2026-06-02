@@ -98,12 +98,21 @@ function describeFields(schema) {
     // into the manifest where consumers would silently treat it as true.
     if (f.stamped === true) entry.stamped = true;
     // `computed` marks a derived field — server fills it from other
-    // fields on read; clients should NOT send it in writes. Source
-    // shape is a function `(record) => value` (or `true` for static
-    // metadata-only), but the manifest just emits `computed: true`:
-    // functions don't survive JSON, and consumers only need to know
-    // "hide from forms / treat as read-only".
-    if (typeof f.computed === 'function' || f.computed === true) {
+    // fields on read; clients should NOT send it in writes. Only the
+    // function form is recognised because that's the form the rest of
+    // the runtime acts on: `utils/computedFields.js` calls the
+    // function on every read to materialise the value,
+    // `utils/schemaLoader.js` excludes it from the mongoose schema
+    // (so Mongo doesn't persist a stale stored value), and
+    // `utils/acl.js#filterWritable` strips it from client writes.
+    // Emitting `computed: true` for any other shape (e.g. literal
+    // `true` with no derivation) would be a lie: the server has no
+    // way to derive the value and would happily persist and update
+    // whatever the client sends, while UI / typed client treated it
+    // as read-only. If we ever introduce a "metadata-only computed"
+    // schema input it has to thread through those three runtime sites
+    // first; until then, function-form only.
+    if (typeof f.computed === 'function') {
       entry.computed = true;
     }
     if (f.acl && (f.acl.read || f.acl.create || f.acl.update)) {
