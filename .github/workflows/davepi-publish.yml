@@ -16,9 +16,12 @@ name: 'Publish davepi'
 #   1. tag-vs-package-version check
 #   2. `npm ci` for deterministic deps
 #   3. `npm test` against mongodb-memory-server (the suite's `--runInBand --forceExit` is enforced by the script)
-#   4. `npm run build:admin` so admin/dist/ is populated for the tarball
-#   5. `npm pack --dry-run --json` with an allowlist check + a forbidden-dirs check (catches `files[]` drift either way)
-#   6. `npm publish` — runs `prepublishOnly` (also `build:admin`) once more as the npm-enforced safety net
+#   4. `npm pack --dry-run --json` with an allowlist check + a forbidden-dirs check (catches `files[]` drift either way)
+#   5. `npm publish`
+#
+# No admin-SPA build stage: davepi-ui ships separately
+# (https://github.com/projik/davepi-ui), so the davepi tarball is
+# backend-only.
 
 on:
   push:
@@ -59,9 +62,6 @@ jobs:
       - name: Run tests
         run: npm test
 
-      - name: Build admin SPA
-        run: npm run build:admin
-
       - name: Verify pack contents
         run: |
           set -euo pipefail
@@ -92,7 +92,6 @@ jobs:
               "model/",
               "routes/",
               "utils/",
-              "admin/dist/",
             ];
             const missingDirs = requiredDirs.filter((d) => !files.some((f) => f.startsWith(d)));
             if (missingDirs.length) {
@@ -111,6 +110,7 @@ jobs:
               "deploy/",
               "schema/",
               ".github/",
+              "admin/",
             ];
             const leaked = forbidden.filter((p) => files.some((f) => f.startsWith(p)));
             if (leaked.length) {
