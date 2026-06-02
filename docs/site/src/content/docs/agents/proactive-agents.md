@@ -146,7 +146,7 @@ Cooperative cancellation, not preemptive:
 The agent should never keep writing after another node has taken
 over.
 
-## Multi-tenant {#multi-tenant}
+## Multi-tenant
 
 Tenant scoping is **inherited, not re-implemented**. The agent's
 service auth owns exactly one tenant's data, so the skill lookup

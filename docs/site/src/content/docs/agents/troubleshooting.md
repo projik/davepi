@@ -64,8 +64,9 @@ curl -s http://localhost:5050/api/user/me -H "authorization: Bearer $DAVEPI_BEAR
 
 `{ error: { code: 'UNAUTHENTICATED' } }` → mint a fresh one. The
 default `ACCESS_TOKEN_TTL` is 15 minutes; for development bump it
-in your davepi server's `.env`. For production prefer per-user mode
-or a long-lived agent JWT signed with `TOKEN_KEY`.
+in your davepi server's `.env` (max 2h — the policy ceiling for
+access tokens). For production prefer per-user mode — the agent
+rotates tokens automatically and access tokens stay short-lived.
 
 ### `401 UNLINKED` with a `linkUrl`
 

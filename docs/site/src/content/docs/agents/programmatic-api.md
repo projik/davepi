@@ -96,7 +96,7 @@ The app declares `/health`, `/chat`, and (in per-user mode)
 [Channels → HTTP](/agents/channels/#http-channel) for the request /
 response shape.
 
-## `runTurn` {#runturn}
+## `runTurn`
 
 ```ts
 runTurn({

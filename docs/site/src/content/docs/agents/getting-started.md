@@ -36,9 +36,10 @@ echo "$TOKEN" | head -c 40 && echo
 
 The access token's TTL defaults to 15 minutes. For a development
 loop set `ACCESS_TOKEN_TTL=2h` in your davepi server's `.env` so
-you're not minting a new token mid-session. Production deployments
-should use [per-user auth](/agents/auth/#per-user-mode) or issue a
-long-lived agent JWT signed with `TOKEN_KEY`.
+you're not minting a new token mid-session (`2h` is the policy
+ceiling for access tokens). Production deployments should use
+[per-user auth](/agents/auth/#per-user-mode) — the agent rotates
+refresh tokens automatically and access tokens stay short-lived.
 
 ## 2. Install and configure
 

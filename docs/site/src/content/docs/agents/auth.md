@@ -35,14 +35,15 @@ DAVEPI_BEARER=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
 The bearer is treated as **static** — the agent doesn't rotate via
 refresh tokens in this mode. davepi's `/login` issues access
 tokens with `ACCESS_TOKEN_TTL` (default `15m`), so for a local
-demo you'll want `ACCESS_TOKEN_TTL=2h` (or longer) in your davepi
-server's `.env`. Production options:
+demo you'll want `ACCESS_TOKEN_TTL=2h` in your davepi server's
+`.env` (`2h` is the policy ceiling for access tokens — don't go
+higher; production deployments rotate via per-user mode below).
+Production options:
 
 1. **Per-user mode** (below) — the agent rotates refresh tokens
-   automatically.
-2. **A long-lived agent JWT** signed with the davepi server's
-   `TOKEN_KEY`. Issue once, set TTL appropriately, rotate manually.
-3. **Client id** (below) for anonymous reads.
+   automatically. **Recommended for production** because access
+   tokens stay short-lived (≤2h) without operator intervention.
+2. **Client id** (below) for anonymous reads.
 
 The user behind the bearer is the **tenant owner** for the agent's
 data. Memory, persona, skills, and conversations all stamp `userId`
@@ -251,7 +252,7 @@ flow restarts. Roadmap: a dedicated POST endpoint.
 
 | Symptom                                                          | Likely cause                                                                       |
 | ---------------------------------------------------------------- | ---------------------------------------------------------------------------------- |
-| `401 UNAUTHENTICATED` on first chat in service mode              | `DAVEPI_BEARER` expired. Either bump `ACCESS_TOKEN_TTL` on the davepi server or issue a longer-lived JWT. |
+| `401 UNAUTHENTICATED` on first chat in service mode              | `DAVEPI_BEARER` expired. Mint a fresh token, raise `ACCESS_TOKEN_TTL` on the davepi server (up to the 2h policy ceiling), or switch to per-user mode for automatic rotation. |
 | `401 UNLINKED` with a link URL on first chat in per-user mode    | Expected — open the URL and sign in. The link is one-shot.                         |
 | `403 FORBIDDEN` writing memory / customer profile                | Token's user lacks role `agent`. Check the user the agent's bearer was issued for. |
 | `404 link` on opening a link URL                                 | Nonce expired (default 15 min) or already consumed. Trigger a new chat to issue a fresh one. |

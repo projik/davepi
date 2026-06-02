@@ -32,7 +32,7 @@ Two endpoints (plus link-flow endpoints in per-user mode):
 | `POST /chat`              | Chat endpoint. SSE-streaming by default; pass `"stream": false` for plain JSON. |
 | `GET /link/:nonce`        | Per-user mode only. Serves the email/password HTML form.             |
 | `POST /link/:nonce`       | Per-user mode only. Form submission; calls davepi `/login` server-side. |
-| `POST /oauth/callback`    | Always 403. Retained as a loud refusal of an earlier insecure shape. |
+| `POST /oauth/callback`    | Per-user mode only. Always 403 — retained as a loud refusal of an earlier insecure shape. |
 
 ### Request shape
 
@@ -131,7 +131,7 @@ for (;;) {
 The bundled demo at `packages/davepi-agent/demo/index.html` is a
 fuller working example.
 
-## Slack {#slack}
+## Slack
 
 The Slack channel turns on when `SLACK_BOT_TOKEN` is set. It uses
 [`@slack/bolt`](https://slack.dev/bolt-js/concepts) under the hood
