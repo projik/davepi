@@ -19,7 +19,7 @@ const DEFAULT_MODELS = {
 
 function resolveModel(config) {
   const provider = (config.llm?.provider || 'anthropic').toLowerCase();
-  if (!(provider in DEFAULT_MODELS)) {
+  if (!Object.hasOwn(DEFAULT_MODELS, provider)) {
     throw new Error(
       `Unknown LLM provider: ${provider}. Supported: ${Object.keys(DEFAULT_MODELS).join(', ')}.`
     );
