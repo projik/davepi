@@ -92,7 +92,7 @@ function isPortFree(port) {
 }
 
 function usage() {
-  out(`Usage: npx create-davepi-app <name> [--template <name>] [--no-install]
+  out(`Usage: npx create-davepi-app <name> [--template <name>] [--no-admin] [--no-install]
 
 Templates:
   blank      Minimal — one resource, full-text search.
@@ -101,10 +101,14 @@ Templates:
   content    Articles (editorial workflow) / categories / file uploads.
   b2b-saas   Orgs / workspaces / invites (state machine) / billingEvent (aggregations).
 
+By default a sibling davepi-ui admin app is scaffolded at <name>/admin/,
+pre-pointed at VITE_API_URL=http://localhost:<port>. Skip with --no-admin
+if you only want the backend.
+
 Examples:
   npx create-davepi-app my-app
   npx create-davepi-app my-crm --template crm
-  npx create-davepi-app my-app --template blank --no-install`);
+  npx create-davepi-app my-app --template blank --no-admin --no-install`);
 }
 
 /**
@@ -144,7 +148,46 @@ function randomSecret() {
   return crypto.randomBytes(32).toString('hex');
 }
 
-async function scaffold({ name, template, install, davepiVersion, port }) {
+/**
+ * Scaffold a sibling davepi-ui admin app at `<projectRoot>/admin/`.
+ * Delegates to `npx create-davepi-ui <name> --api-url <url>
+ * --no-install` so the scaffolder logic lives where it belongs (the
+ * davepi-ui repo) and we get whatever the latest published version
+ * does — no template duplication here. After the scaffold, the
+ * caller's normal install loop covers `<projectRoot>` only; the user
+ * runs `cd admin && pnpm install` separately (or `npm install` if
+ * the repo standardised on npm). The npx invocation passes
+ * `--no-install` so a slow network here doesn't block the rest of
+ * the project setup.
+ */
+function scaffoldDavepiUi({ projectRoot, apiPort }) {
+  const { spawnSync } = require('child_process');
+  // npx ships as a `.cmd` shim on Windows.
+  const npxCmd = process.platform === 'win32' ? 'npx.cmd' : 'npx';
+  out(`\nScaffolding davepi-ui admin at ${path.join(projectRoot, 'admin')}/`);
+  const r = spawnSync(
+    npxCmd,
+    [
+      '-y',
+      'create-davepi-ui',
+      'admin',
+      '--api-url',
+      `http://localhost:${apiPort}`,
+      '--no-install',
+    ],
+    { cwd: projectRoot, stdio: 'inherit' }
+  );
+  if (r.status !== 0) {
+    err(
+      '\ndavepi-ui scaffold failed. Run manually:\n' +
+        `  cd ${projectRoot} && npx create-davepi-ui admin --api-url http://localhost:${apiPort}`
+    );
+    return false;
+  }
+  return true;
+}
+
+async function scaffold({ name, template, install, davepiVersion, port, admin }) {
   const target = path.resolve(name);
   if (fs.existsSync(target)) {
     const empty = fs.readdirSync(target).length === 0;
@@ -380,7 +423,7 @@ async function scaffold({ name, template, install, davepiVersion, port }) {
       `- REST: http://localhost:${apiPort}/api/v1/...`,
       `- GraphQL: http://localhost:${apiPort}/graphql/`,
       `- Swagger: http://localhost:${apiPort}/api-docs`,
-      `- Admin SPA: http://localhost:${apiPort}/admin`,
+      `- Admin: \`cd admin && pnpm dev\` → http://localhost:5173 (davepi-ui shadcn admin)`,
       `- Capability manifest: http://localhost:${apiPort}/_describe`,
       '',
       '## What\'s in this template',
@@ -427,12 +470,27 @@ async function scaffold({ name, template, install, davepiVersion, port }) {
     }
   }
 
+  // 11. Optional sibling davepi-ui admin app. The new shadcn-based
+  // admin (https://github.com/projik/davepi-ui) is the recommended
+  // path for green-field projects; the legacy Refine admin bundled
+  // into davepi at /admin is still available and will keep working
+  // through at least the 1.x line.
+  let adminScaffolded = false;
+  if (admin === 'davepi-ui') {
+    adminScaffolded = scaffoldDavepiUi({ projectRoot: target, apiPort });
+  }
+
   out('');
   out(`Next steps:`);
   out(`  cd ${name}`);
   if (!install) out(`  npm install`);
   out(`  docker compose up -d   # start Mongo`);
   out(`  npm start              # http://localhost:${apiPort}`);
+  if (adminScaffolded) {
+    out('');
+    out(`  # In a separate terminal:`);
+    out(`  cd admin && pnpm install && pnpm dev   # http://localhost:5173`);
+  }
   out('');
   out(`Try Claude Code: open the project, the MCP server is wired in .mcp.json.`);
   out(`Agent guide: agent.md (also mirrored to .cursorrules, AGENTS.md, .claude/skills/davepi/SKILL.md)`);
@@ -467,9 +525,18 @@ async function main(argv) {
     process.exit(1);
   }
   const noInstall = args.includes('--no-install');
+  // davepi-ui scaffold is the default — opt out with --no-admin.
+  const scaffoldAdmin = !args.includes('--no-admin');
 
   try {
-    await scaffold({ name, template, install: !noInstall, davepiVersion, port });
+    await scaffold({
+      name,
+      template,
+      install: !noInstall,
+      davepiVersion,
+      port,
+      admin: scaffoldAdmin ? 'davepi-ui' : 'none',
+    });
   } catch (e) {
     err(`\nError: ${e.message}`);
     process.exit(1);

@@ -131,34 +131,24 @@ npm run dev
 
 ### Admin UI
 
-A schema-driven admin UI is available at `/admin`. It ships pre-built inside
-the `davepi` package — no install or build step required for consumers. It's
-a Vite + Refine SPA that fetches `/api-docs/swagger.json` at boot and renders
-list / show / create / edit / delete views for every schema you've defined —
-no per-resource configuration.
+[davepi-ui](https://github.com/projik/davepi-ui) — a schema-driven, agent-first React admin built on shadcn primitives. Title-cased field labels by default, searchable relation pickers (not raw UUID inputs), auto-discovered child tabs on parent detail pages, per-resource override layer, JSON page descriptors, and an MCP server for AI agents. Runs as a sibling Vite project pointed at the davepi backend.
 
 ```bash
-# Browse to the admin once the API is running
-open http://localhost:4001/admin
+# Scaffold a new davepi project pre-wired with davepi-ui
+npx create-davepi-app my-app --template crm
+
+# Or bolt davepi-ui onto an existing project
+cd my-existing-project
+npx create-davepi-ui admin --api-url http://localhost:4001
 ```
 
-If you're working **on this repo** (developing the SPA itself), the
-framework's own scripts let you rebuild it or run a hot-reload dev server:
+The scaffolded admin sits at `<project>/admin/`. Run it in a separate terminal:
 
 ```bash
-npm run build:admin   # rebuild admin/dist/ from source
-npm run dev:admin     # SPA dev server at http://localhost:5173 with API proxy
+cd admin && pnpm install && pnpm dev   # http://localhost:5173
 ```
 
-The published `davepi` package always ships the most recent `admin/dist/`
-bundle, so consumers never run these.
-
-The admin uses `/login` for authentication; the JWT is stored in
-`localStorage` and attached as `Authorization: Bearer …` on every request.
-Field types are inferred from the Swagger spec — string fields become
-text inputs, numbers become number inputs, dates become date pickers, enums
-become selects, arrays become tag inputs. File-typed fields are shown read-
-only in the form (uploads still go through the dedicated multipart route).
+Auth uses `/login`; the JWT lives in memory + refresh token in `localStorage`, attached as `Authorization: Bearer …` on every request. Field types come from `/_describe` directly — string fields → text inputs, numbers → number inputs, dates → date pickers, enums → selects, references → searchable combobox pickers, files → multipart upload widget.
 
 The server will start on the configured port (default: 4001).
 

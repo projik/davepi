@@ -66,13 +66,11 @@ if (String(process.env.TRUST_PROXY || '').toLowerCase() === 'true') {
   app.set('trust proxy', 1);
 }
 
-// Default helmet (CSP enabled) for all routes. Swagger UI, Apollo's
-// embedded Sandbox (served at /graphql when introspection is on), and
-// the admin SPA need inline scripts / styles
-// that the default CSP would block, so CSP and
-// crossOriginEmbedderPolicy are dropped only for those paths.
-// (ant-design in particular renders inline styles for every dynamic
-// component — the admin UI is unusable behind the default style-src.)
+// Default helmet (CSP enabled) for all routes. Swagger UI and
+// Apollo's embedded Sandbox (served at /graphql when introspection
+// is on) need inline scripts / styles that the default CSP would
+// block, so CSP and crossOriginEmbedderPolicy are dropped only for
+// those paths.
 const helmetDefault = helmet();
 const helmetForBrowserTooling = helmet({
   contentSecurityPolicy: false,
@@ -81,8 +79,7 @@ const helmetForBrowserTooling = helmet({
 app.use((req, res, next) => {
   if (
     req.path.startsWith('/api-docs') ||
-    req.path.startsWith('/graphql') ||
-    req.path.startsWith('/admin')
+    req.path.startsWith('/graphql')
   ) {
     return helmetForBrowserTooling(req, res, next);
   }
@@ -635,36 +632,6 @@ app.get('/_describe', (req, res, next) => {
 // so the endpoint behaves like it doesn't exist for projects that
 // don't opt in. When enabled, optionally token-gated via METRICS_TOKEN.
 app.get('/_metrics', asyncHandler(metricsHandler));
-
-// Admin SPA — built artifacts live under admin/dist/. The catch-all
-// handler is registered unconditionally so /admin/* requests don't
-// fall through to Express's finalhandler (which injects
-// `Content-Security-Policy: default-src 'none'` on 404 — breaking
-// the helmet carve-out the admin SPA relies on). When the build is
-// missing, the handler returns a clear 404 itself.
-//
-// Path is resolved against __dirname (the framework's own directory)
-// rather than process.cwd() — when davepi is installed as a dep, the
-// admin/dist/ bundle ships INSIDE node_modules/davepi/, not in the
-// consumer's project root.
-const adminDist = path.resolve(__dirname, 'admin/dist');
-const hasAdminBuild = require('fs').existsSync(path.join(adminDist, 'index.html'));
-if (hasAdminBuild) {
-  app.use('/admin', express.static(adminDist));
-}
-app.get(/^\/admin(?:\/.*)?$/, (req, res) => {
-  if (hasAdminBuild) {
-    // SPA uses client-side routing under /admin/<resource>/...; the
-    // wildcard falls back to index.html so a deep link survives a refresh.
-    res.sendFile(path.join(adminDist, 'index.html'));
-  } else {
-    res.status(404).type('text/plain').send(
-      'admin SPA bundle missing from this dAvePi install. ' +
-      'Reinstall the `davepi` package, or — if developing on the framework itself — ' +
-      'run `npm run build:admin` from the dAvePi repo root.'
-    );
-  }
-});
 
 // Errors from any route — REST handlers, /auth/*, the indirection
 // middleware that delegates to the current Apollo router — flow through

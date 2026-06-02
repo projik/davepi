@@ -15,7 +15,6 @@
     "model/",
     "routes/",
     "utils/",
-    "admin/dist/",
     "README.md",
     "LICENSE",
     "CHANGELOG.md"
@@ -24,11 +23,7 @@
     "start": "nodemon index.js",
     "dev": "nodemon --ignore 'swagger/*.json' index.js",
     "test": "jest --runInBand --forceExit",
-    "test:coverage": "jest --runInBand --forceExit --coverage",
-    "install:admin": "cd admin && npm install --no-audit --no-fund",
-    "build:admin": "cd admin && npm install --no-audit --no-fund && npm run build",
-    "dev:admin": "cd admin && npm run dev",
-    "prepublishOnly": "npm run build:admin"
+    "test:coverage": "jest --runInBand --forceExit --coverage"
   },
   "keywords": [
     "api",
@@ -89,14 +84,12 @@
   },
   "nodemonConfig": {
     "ignore": [
-      "swagger/*",
-      "admin/*"
+      "swagger/*"
     ]
   },
   "jest": {
     "testPathIgnorePatterns": [
       "/node_modules/",
-      "/admin/",
       "/packages/",
       "/templates/",
       "/eval/",
