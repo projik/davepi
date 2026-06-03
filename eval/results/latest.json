@@ -1,5 +1,5 @@
 {
-  "runAt": "2026-06-02T07:32:10.845Z",
+  "runAt": "2026-06-03T07:35:21.657Z",
   "agentMode": "real",
   "model": "claude-sonnet-4-6",
   "total": 10,
@@ -45,13 +45,13 @@
       "name": "07-file-attachment",
       "passed": false,
       "message": "ANTHROPIC_API_KEY is required for real-agent mode (set EVAL_AGENT=stub to skip).",
-      "durationMs": 3
+      "durationMs": 2
     },
     {
       "name": "08-searchable-fields",
       "passed": false,
       "message": "ANTHROPIC_API_KEY is required for real-agent mode (set EVAL_AGENT=stub to skip).",
-      "durationMs": 3
+      "durationMs": 2
     },
     {
       "name": "09-field-level-acl",
