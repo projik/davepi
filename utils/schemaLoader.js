@@ -154,9 +154,11 @@ function createSchemaLoader({ app, apiSpec, setApolloRouter, buildGraphqlContext
    * pair. Used by the `__include` path in REST handlers and the
    * `addRelation` wiring in the GraphQL layer.
    *
-   * Lookup order: scoped exact match, then unscoped match. Schemas
-   * live under a single prefix, so the first pass resolves everything
-   * in practice; the second pass is a defensive fallback.
+   * Lookup order: a version-scoped exact match on the registry key
+   * `${version}/${path}`, then a fallback that matches by `schema.path`
+   * alone, ignoring version. The scoped pass resolves the common case;
+   * the path-only fallback lets a relation still resolve when its
+   * target's version isn't supplied.
    */
   function getResource(targetPath, sourceVersion) {
     if (sourceVersion) {
