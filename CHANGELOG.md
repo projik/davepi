@@ -8,6 +8,10 @@ from v1.0.0 onward (see [Stability commitments](https://docs.davepi.dev/referenc
 
 ## [Unreleased]
 
+### Changed
+
+- **Dropped the "multiple API versions" / future-`v2` narrative from the agent-facing docs so a fresh build doesn't waffle between "v1 vs v2" approaches.** README's *API Versioning* section and AGENTS.md's *Version Control* bullets advertised a future `v2/` directory at `/api/v2/`, claimed "multiple versions can coexist," and pitched "gradual migrations" — speculative framing that, with no second version actually shipping, read to an agent building on the framework as two competing ways to structure schemas and implementation. Since dAvePi has no users on a `v2` (or any migration story to preserve), that narrative is pure confusion: it has been replaced with a factual statement that schemas live in `./schema/versions/v1/` and the framework derives the `/api/v1` path prefix from the directory name. The `v1` directory and `/api/v1` prefix are unchanged — they remain the live, load-bearing path that route generation, the schema registry, the SDK, and the test suite all key off, so this is a docs/comment-only edit with no behavior change. Two stray `utils/schemaLoader.js` comments that leaned on the same framing ("the contract for v1," "cross-version relations a future caller might declare") were reworded to describe the actual scoped-then-unscoped resource lookup without implying a coming version split.
+
 ## [2.0.1] - 2026-06-02
 
 Patch: CRM template hints + `computed` field flag in `/_describe` so the davepi-ui scaffolded admin renders relations / labels / widgets without per-resource override config out of the box. Plus a new Ollama LLM provider on `@davepi/agent` and various docs / scaffolder cleanup.
