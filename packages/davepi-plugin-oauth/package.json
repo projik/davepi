@@ -1,6 +1,6 @@
 {
   "name": "davepi-plugin-oauth",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Social login for dAvePi (Google, GitHub, Microsoft, Apple, Discord). Mounts /auth/{provider} + /auth/{provider}/callback routes, handles the OAuth2 / OIDC dance with state-HMAC CSRF defence and PKCE where supported, upserts the local User, and issues the framework's standard JWT.",
   "license": "ISC",
   "homepage": "https://docs.davepi.dev/features/plugins/",
