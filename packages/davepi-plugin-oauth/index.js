@@ -90,6 +90,11 @@ function safeReturnTo(value) {
   if (!value.startsWith('/')) return null;
   if (value.startsWith('//')) return null;
   if (value.includes('://')) return null;
+  // Reject ASCII control characters (NUL..US, DEL): a decoded CR/LF
+  // here would otherwise reach a Location header via the link-mode
+  // redirect (header-injection sink).
+  // eslint-disable-next-line no-control-regex
+  if (/[\u0000-\u001f\u007f]/.test(value)) return null;
   return value;
 }
 
@@ -116,16 +121,21 @@ function prefersJson(req) {
 /**
  * Append query params to an already-validated path-only returnTo.
  * The path may legitimately carry its own query (`/dashboard?tab=x`),
- * so pick `?` vs `&` accordingly. Values are URL-encoded.
+ * so pick `?` vs `&` accordingly — and it may carry a `#fragment`
+ * (hash-routed SPAs): params must land in the query string BEFORE
+ * the fragment, or the server/SPA never sees them as query params.
+ * Values are URL-encoded.
  */
 function appendQueryParams(pathOnly, params) {
-  let out = pathOnly;
+  const hashAt = pathOnly.indexOf('#');
+  let base = hashAt === -1 ? pathOnly : pathOnly.slice(0, hashAt);
+  const fragment = hashAt === -1 ? '' : pathOnly.slice(hashAt);
   for (const [k, v] of Object.entries(params)) {
     if (v == null) continue;
-    const sep = out.includes('?') ? '&' : '?';
-    out += `${sep}${encodeURIComponent(k)}=${encodeURIComponent(v)}`;
+    const sep = base.includes('?') ? '&' : '?';
+    base += `${sep}${encodeURIComponent(k)}=${encodeURIComponent(v)}`;
   }
-  return out;
+  return base + fragment;
 }
 
 function appendTokenToRedirect(redirect, accessToken, refreshToken, returnTo) {

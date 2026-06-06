@@ -754,6 +754,70 @@ test('setup: unknown OAUTH_SUCCESS_MODE warns and falls back to redirect behavio
   assert.ok(log.records.warn.some((r) => /OAUTH_SUCCESS_MODE/.test(r.msg)));
 });
 
+test('link callback: returnTo with a #fragment gets the linked= marker in the QUERY, before the fragment', async () => {
+  const app = captureApp();
+  const fetch = async (url) => {
+    if (url === 'https://oauth2.googleapis.com/token') {
+      return { ok: true, json: async () => ({ access_token: 'AT' }) };
+    }
+    if (url === 'https://openidconnect.googleapis.com/v1/userinfo') {
+      return { ok: true, json: async () => ({ sub: 'FRAG-1', email: 'f@x.com' }) };
+    }
+  };
+  const { plugin, Users } = makePluginWithGoogle({ fetch });
+  await plugin.setup({ app, bus: new EventEmitter(), log: silentLog(), appName: 'demo' });
+  const u = await Users.create({ email: 'f@x.com', roles: ['user'] });
+
+  // Hash-routed SPA path, no query of its own.
+  let stateToken = signState(
+    { provider: 'google', linkedUserId: String(u._id), returnTo: '/dashboard#account' },
+    { secret: SECRET }
+  );
+  let res = captureRes();
+  await app.routes['GET /auth/google/link/callback'](
+    { method: 'GET', query: { code: 'C', state: stateToken } },
+    res,
+    (err) => { if (err) throw err; }
+  );
+  assert.equal(res.redirected.loc, '/dashboard?linked=google#account');
+
+  // Path with both a query AND a fragment.
+  stateToken = signState(
+    { provider: 'google', linkedUserId: String(u._id), returnTo: '/dashboard?tab=x#account' },
+    { secret: SECRET }
+  );
+  res = captureRes();
+  await app.routes['GET /auth/google/link/callback'](
+    { method: 'GET', query: { code: 'C', state: stateToken } },
+    res,
+    (err) => { if (err) throw err; }
+  );
+  assert.equal(res.redirected.loc, '/dashboard?tab=x&linked=google#account');
+});
+
+test('safeReturnTo: control characters (CR/LF header-injection) are dropped', async () => {
+  const { plugin } = makePluginWithGoogle({ fetch: async () => ({ ok: true, json: async () => ({}) }) });
+  await plugin.setup({ app: null, bus: new EventEmitter(), log: silentLog(), appName: 'demo' });
+  const { openState } = require('../lib/state');
+  const cases = [
+    '/dashboard\r\nSet-Cookie: pwned=1',
+    '/dash\rboard',
+    '/dash\nboard',
+    '/dash\u0000board',
+    '/dash\u007fboard',
+  ];
+  for (const rt of cases) {
+    const { url } = plugin.buildAuthorizeRedirect('google', { returnTo: rt });
+    const stateToken = new URL(url).searchParams.get('state');
+    const parsed = openState(stateToken, { secret: SECRET });
+    assert.equal(parsed.returnTo, null, `expected ${JSON.stringify(rt)} to be dropped`);
+  }
+  // Sanity: a clean path still survives.
+  const { url } = plugin.buildAuthorizeRedirect('google', { returnTo: '/dashboard' });
+  const parsed = openState(new URL(url).searchParams.get('state'), { secret: SECRET });
+  assert.equal(parsed.returnTo, '/dashboard');
+});
+
 test('registerSuccessHandler rejects non-functions', () => {
   const { plugin } = makePluginWithGoogle({ fetch: async () => ({ ok: true, json: async () => ({}) }) });
   assert.throws(() => plugin.registerSuccessHandler('not-a-function'), /expects a function/);
