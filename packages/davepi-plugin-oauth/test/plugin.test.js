@@ -463,6 +463,302 @@ test('Apple form-post POST callback: urlencoded body parser fills req.body', asy
   assert.deepEqual(req.body, { code: 'AAA', state: 'BBB' });
 });
 
+// ---------------------------------------------------------------------
+// v0.2.0 — XHR-friendly link flow, link-mode returnTo redirect, and
+// the OAUTH_SUCCESS_MODE=handler hook (tokens never in URLs).
+// ---------------------------------------------------------------------
+
+function captureApp() {
+  const routes = {};
+  const middlewares = {};
+  return {
+    routes,
+    middlewares,
+    get: (p, ...h) => { routes[`GET ${p}`] = h[h.length - 1]; middlewares[`GET ${p}`] = h.slice(0, -1); },
+    post: (p, ...h) => { routes[`POST ${p}`] = h[h.length - 1]; middlewares[`POST ${p}`] = h.slice(0, -1); },
+  };
+}
+
+function captureRes() {
+  const r = { redirected: null, jsonBody: null, statusCode: null };
+  r.redirect = (status, loc) => { r.redirected = { status, loc }; };
+  r.status = (code) => { r.statusCode = code; return r; };
+  r.json = (body) => { r.jsonBody = body; return r; };
+  return r;
+}
+
+test('link route: JSON-asking caller gets 200 { url } instead of a 302', async () => {
+  const app = captureApp();
+  const { plugin } = makePluginWithGoogle({ fetch: async () => ({ ok: true, json: async () => ({}) }) });
+  await plugin.setup({ app, bus: new EventEmitter(), log: silentLog(), appName: 'demo' });
+  const handler = app.routes['GET /auth/google/link'];
+
+  const res = captureRes();
+  await handler(
+    {
+      user: { user_id: 'U1' },
+      headers: { accept: 'application/json' },
+      query: { returnTo: '/dashboard#account' },
+    },
+    res,
+    (err) => { if (err) throw err; }
+  );
+  assert.equal(res.redirected, null, 'no 302 for a JSON caller');
+  assert.equal(res.statusCode, 200);
+  assert.ok(res.jsonBody && res.jsonBody.url, 'authorize URL returned as JSON');
+  const u = new URL(res.jsonBody.url);
+  assert.equal(u.host, 'accounts.google.com');
+  assert.ok(u.searchParams.get('state'));
+});
+
+test('link route: XMLHttpRequest header also selects the JSON variant', async () => {
+  const app = captureApp();
+  const { plugin } = makePluginWithGoogle({ fetch: async () => ({ ok: true, json: async () => ({}) }) });
+  await plugin.setup({ app, bus: new EventEmitter(), log: silentLog(), appName: 'demo' });
+  const handler = app.routes['GET /auth/google/link'];
+  const res = captureRes();
+  await handler(
+    { user: { user_id: 'U1' }, headers: { 'x-requested-with': 'XMLHttpRequest' }, query: {} },
+    res,
+    (err) => { if (err) throw err; }
+  );
+  assert.equal(res.redirected, null);
+  assert.ok(res.jsonBody && res.jsonBody.url);
+});
+
+test('link route: plain browser navigation keeps the 302', async () => {
+  const app = captureApp();
+  const { plugin } = makePluginWithGoogle({ fetch: async () => ({ ok: true, json: async () => ({}) }) });
+  await plugin.setup({ app, bus: new EventEmitter(), log: silentLog(), appName: 'demo' });
+  const handler = app.routes['GET /auth/google/link'];
+  const res = captureRes();
+  await handler(
+    { user: { user_id: 'U1' }, headers: { accept: 'text/html,application/xhtml+xml' }, query: {} },
+    res,
+    (err) => { if (err) throw err; }
+  );
+  assert.equal(res.jsonBody, null);
+  assert.equal(res.redirected.status, 302);
+  assert.match(res.redirected.loc, /accounts\.google\.com/);
+});
+
+test('link callback: returnTo in state redirects 302 with linked=<provider>', async () => {
+  const app = captureApp();
+  const fetch = async (url) => {
+    if (url === 'https://oauth2.googleapis.com/token') {
+      return { ok: true, json: async () => ({ access_token: 'AT' }) };
+    }
+    if (url === 'https://openidconnect.googleapis.com/v1/userinfo') {
+      return { ok: true, json: async () => ({ sub: 'L-1', email: 'l@x.com' }) };
+    }
+  };
+  const { plugin, Users } = makePluginWithGoogle({ fetch });
+  await plugin.setup({ app, bus: new EventEmitter(), log: silentLog(), appName: 'demo' });
+  const u = await Users.create({ email: 'l@x.com', roles: ['user'] });
+  const stateToken = signState(
+    { provider: 'google', linkedUserId: String(u._id), returnTo: '/dashboard?tab=account' },
+    { secret: SECRET }
+  );
+  const res = captureRes();
+  await app.routes['GET /auth/google/link/callback'](
+    { method: 'GET', query: { code: 'C', state: stateToken } },
+    res,
+    (err) => { if (err) throw err; }
+  );
+  assert.equal(res.redirected.status, 302);
+  // Path already has a query — the marker must append with `&`.
+  assert.equal(res.redirected.loc, '/dashboard?tab=account&linked=google');
+});
+
+test('link callback: no returnTo falls back to the JSON shape (unchanged)', async () => {
+  const app = captureApp();
+  const fetch = async (url) => {
+    if (url === 'https://oauth2.googleapis.com/token') {
+      return { ok: true, json: async () => ({ access_token: 'AT' }) };
+    }
+    if (url === 'https://openidconnect.googleapis.com/v1/userinfo') {
+      return { ok: true, json: async () => ({ sub: 'L-2', email: 'l2@x.com' }) };
+    }
+  };
+  const { plugin, Users } = makePluginWithGoogle({ fetch });
+  await plugin.setup({ app, bus: new EventEmitter(), log: silentLog(), appName: 'demo' });
+  const u = await Users.create({ email: 'l2@x.com', roles: ['user'] });
+  const stateToken = signState(
+    { provider: 'google', linkedUserId: String(u._id) },
+    { secret: SECRET }
+  );
+  const res = captureRes();
+  await app.routes['GET /auth/google/link/callback'](
+    { method: 'GET', query: { code: 'C', state: stateToken } },
+    res,
+    (err) => { if (err) throw err; }
+  );
+  assert.equal(res.redirected, null);
+  assert.equal(res.statusCode, 200);
+  assert.deepEqual(res.jsonBody, {
+    linked: true, provider: 'google', providerUserId: 'L-2', created: true,
+  });
+});
+
+test('link callback: identity owned by another user + returnTo → readable error redirect', async () => {
+  const app = captureApp();
+  const fetch = async (url) => {
+    if (url === 'https://oauth2.googleapis.com/token') {
+      return { ok: true, json: async () => ({ access_token: 'AT' }) };
+    }
+    if (url === 'https://openidconnect.googleapis.com/v1/userinfo') {
+      return { ok: true, json: async () => ({ sub: 'OWNED', email: 'o@x.com' }) };
+    }
+  };
+  const { plugin, Users, Identities } = makePluginWithGoogle({ fetch });
+  await plugin.setup({ app, bus: new EventEmitter(), log: silentLog(), appName: 'demo' });
+  const owner = await Users.create({ email: 'owner@x.com', roles: ['user'] });
+  const intruder = await Users.create({ email: 'intruder@x.com', roles: ['user'] });
+  await Identities.create({
+    userId: owner._id, provider: 'google', providerUserId: 'OWNED',
+  });
+  const stateToken = signState(
+    { provider: 'google', linkedUserId: String(intruder._id), returnTo: '/dashboard' },
+    { secret: SECRET }
+  );
+  const res = captureRes();
+  let nextErr = null;
+  await app.routes['GET /auth/google/link/callback'](
+    { method: 'GET', query: { code: 'C', state: stateToken } },
+    res,
+    (err) => { nextErr = err; }
+  );
+  assert.equal(nextErr, null, 'no bare error page when returnTo is available');
+  assert.equal(res.redirected.status, 302);
+  assert.equal(
+    res.redirected.loc,
+    '/dashboard?error=oauth_identity_owned_by_other&provider=google'
+  );
+});
+
+test('link callback: identity owned by another user, no returnTo → ConflictError via next(err)', async () => {
+  const app = captureApp();
+  const fetch = async (url) => {
+    if (url === 'https://oauth2.googleapis.com/token') {
+      return { ok: true, json: async () => ({ access_token: 'AT' }) };
+    }
+    if (url === 'https://openidconnect.googleapis.com/v1/userinfo') {
+      return { ok: true, json: async () => ({ sub: 'OWNED-2', email: 'o2@x.com' }) };
+    }
+  };
+  const { plugin, Users, Identities } = makePluginWithGoogle({ fetch });
+  await plugin.setup({ app, bus: new EventEmitter(), log: silentLog(), appName: 'demo' });
+  const owner = await Users.create({ email: 'owner2@x.com', roles: ['user'] });
+  const intruder = await Users.create({ email: 'intruder2@x.com', roles: ['user'] });
+  await Identities.create({
+    userId: owner._id, provider: 'google', providerUserId: 'OWNED-2',
+  });
+  const stateToken = signState(
+    { provider: 'google', linkedUserId: String(intruder._id) },
+    { secret: SECRET }
+  );
+  const res = captureRes();
+  let nextErr = null;
+  await app.routes['GET /auth/google/link/callback'](
+    { method: 'GET', query: { code: 'C', state: stateToken } },
+    res,
+    (err) => { nextErr = err; }
+  );
+  assert.equal(res.redirected, null);
+  assert.ok(nextErr);
+  assert.equal(nextErr.name, 'ConflictError');
+  assert.equal(nextErr.code, 'oauth_identity_owned_by_other');
+});
+
+test('OAUTH_SUCCESS_MODE=handler: registered handler takes over the response; no token in any URL', async () => {
+  const app = captureApp();
+  const fetch = async (url) => {
+    if (url === 'https://oauth2.googleapis.com/token') {
+      return { ok: true, json: async () => ({ access_token: 'AT' }) };
+    }
+    if (url === 'https://openidconnect.googleapis.com/v1/userinfo') {
+      return { ok: true, json: async () => ({ sub: 'H-1', email: 'h@x.com' }) };
+    }
+  };
+  const { plugin } = makePluginWithGoogle({
+    fetch,
+    env: { OAUTH_SUCCESS_MODE: 'handler' },
+  });
+  let handled = null;
+  plugin.registerSuccessHandler(async (req, res, payload) => {
+    handled = payload;
+    res.redirect(302, '/auth/success#code=opaque-handoff');
+  });
+  await plugin.setup({ app, bus: new EventEmitter(), log: silentLog(), appName: 'demo' });
+  const stateToken = signState(
+    { provider: 'google', returnTo: '/dashboard' },
+    { secret: SECRET }
+  );
+  const res = captureRes();
+  await app.routes['GET /auth/google/callback'](
+    { method: 'GET', query: { code: 'C', state: stateToken } },
+    res,
+    (err) => { if (err) throw err; }
+  );
+  assert.ok(handled, 'handler was invoked');
+  assert.equal(handled.provider, 'google');
+  assert.equal(handled.returnTo, '/dashboard');
+  assert.ok(handled.tokens.accessToken);
+  assert.ok(handled.tokens.refreshToken);
+  assert.equal(handled.user.email, 'h@x.com');
+  assert.equal(handled.created, true);
+  // The plugin wrote nothing itself; the handler's redirect carries
+  // no token (opaque handoff code only).
+  assert.equal(res.jsonBody, null);
+  assert.equal(res.redirected.loc, '/auth/success#code=opaque-handoff');
+  assert.ok(!res.redirected.loc.includes('AT-'), 'no access token leaked into the URL');
+});
+
+test('OAUTH_SUCCESS_MODE=handler without a registered handler: JSON fallback, never tokens-in-URL', async () => {
+  const app = captureApp();
+  const fetch = async (url) => {
+    if (url === 'https://oauth2.googleapis.com/token') {
+      return { ok: true, json: async () => ({ access_token: 'AT' }) };
+    }
+    if (url === 'https://openidconnect.googleapis.com/v1/userinfo') {
+      return { ok: true, json: async () => ({ sub: 'H-2', email: 'h2@x.com' }) };
+    }
+  };
+  // Note: OAUTH_SUCCESS_REDIRECT is still set by the helper — handler
+  // mode must NOT fall back to it (that would put tokens in a URL).
+  const { plugin } = makePluginWithGoogle({
+    fetch,
+    env: { OAUTH_SUCCESS_MODE: 'handler' },
+  });
+  await plugin.setup({ app, bus: new EventEmitter(), log: silentLog(), appName: 'demo' });
+  const stateToken = signState({ provider: 'google' }, { secret: SECRET });
+  const res = captureRes();
+  await app.routes['GET /auth/google/callback'](
+    { method: 'GET', query: { code: 'C', state: stateToken } },
+    res,
+    (err) => { if (err) throw err; }
+  );
+  assert.equal(res.redirected, null, 'no redirect — tokens must not reach OAUTH_SUCCESS_REDIRECT');
+  assert.equal(res.statusCode, 200);
+  assert.ok(res.jsonBody.accessToken);
+});
+
+test('setup: unknown OAUTH_SUCCESS_MODE warns and falls back to redirect behaviour', async () => {
+  const log = capturingLog();
+  const { plugin } = makePluginWithGoogle({
+    fetch: async () => ({ ok: true, json: async () => ({}) }),
+    env: { OAUTH_SUCCESS_MODE: 'banana' },
+  });
+  await plugin.setup({ app: null, bus: new EventEmitter(), log, appName: 'demo' });
+  assert.equal(plugin.isEnabled(), true);
+  assert.ok(log.records.warn.some((r) => /OAUTH_SUCCESS_MODE/.test(r.msg)));
+});
+
+test('registerSuccessHandler rejects non-functions', () => {
+  const { plugin } = makePluginWithGoogle({ fetch: async () => ({ ok: true, json: async () => ({}) }) });
+  assert.throws(() => plugin.registerSuccessHandler('not-a-function'), /expects a function/);
+});
+
 test('urlencoded parser: skips when content-type is JSON (host parser handles it)', async () => {
   const routes = {};
   const middlewares = {};

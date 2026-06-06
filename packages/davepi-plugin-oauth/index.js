@@ -19,6 +19,9 @@
  *   - `createPlugin({ env, fetch, providers, mongoose, OAuthIdentity,
  *                     User, issueTokenPair, errors })` for tests /
  *     advanced consumers.
+ *   - `registerSuccessHandler(fn)` (on the instance): host-app hook
+ *     used with OAUTH_SUCCESS_MODE=handler — the handler takes over
+ *     the login-success response so tokens never travel in a URL.
  *
  * State CSRF defence: every authorize URL carries an HMAC-signed
  * `state` that encodes `{ nonce, ts, returnTo?, linkedUserId? }`.
@@ -44,6 +47,7 @@ const ENV_KEYS = {
   baseUrl:        'OAUTH_BASE_URL',
   successRedirect:'OAUTH_SUCCESS_REDIRECT',
   failureRedirect:'OAUTH_FAILURE_REDIRECT',
+  successMode:    'OAUTH_SUCCESS_MODE',
   stateSecret:    'OAUTH_STATE_SECRET',
   defaultRoles:   'OAUTH_DEFAULT_ROLES',
 };
@@ -53,6 +57,7 @@ function readGlobalConfig(env) {
     baseUrl:         env[ENV_KEYS.baseUrl] || null,
     successRedirect: env[ENV_KEYS.successRedirect] || null,
     failureRedirect: env[ENV_KEYS.failureRedirect] || null,
+    successMode:     String(env[ENV_KEYS.successMode] || 'redirect').toLowerCase(),
     stateSecret:     env[ENV_KEYS.stateSecret] || null,
     defaultRoles:    env[ENV_KEYS.defaultRoles]
       ? env[ENV_KEYS.defaultRoles].split(/[\s,]+/).filter(Boolean)
@@ -86,6 +91,41 @@ function safeReturnTo(value) {
   if (value.startsWith('//')) return null;
   if (value.includes('://')) return null;
   return value;
+}
+
+/**
+ * "Does this request prefer JSON over a browser redirect?"
+ *
+ * Used by the /link route: a top-level browser navigation cannot set
+ * an Authorization header, so an SPA holding only a Bearer token
+ * starts the link flow with an authed fetch() — but fetch() cannot
+ * follow a cross-origin 302 to the provider (CORS-opaque). When the
+ * caller signals JSON (explicit `Accept: application/json` or the
+ * XHR convention header), we hand back `200 { url }` and let the SPA
+ * do `location.href = url` itself. Top-level navigations send
+ * `Accept: text/html,...` (no application/json), so they keep the
+ * 302 behaviour.
+ */
+function prefersJson(req) {
+  const headers = req.headers || {};
+  const accept = String(headers.accept || '').toLowerCase();
+  if (accept.includes('application/json')) return true;
+  return String(headers['x-requested-with'] || '').toLowerCase() === 'xmlhttprequest';
+}
+
+/**
+ * Append query params to an already-validated path-only returnTo.
+ * The path may legitimately carry its own query (`/dashboard?tab=x`),
+ * so pick `?` vs `&` accordingly. Values are URL-encoded.
+ */
+function appendQueryParams(pathOnly, params) {
+  let out = pathOnly;
+  for (const [k, v] of Object.entries(params)) {
+    if (v == null) continue;
+    const sep = out.includes('?') ? '&' : '?';
+    out += `${sep}${encodeURIComponent(k)}=${encodeURIComponent(v)}`;
+  }
+  return out;
 }
 
 function appendTokenToRedirect(redirect, accessToken, refreshToken, returnTo) {
@@ -187,7 +227,24 @@ function createPlugin(opts = {}) {
     issueTokenPair: null,
     errors: null,
     verifyAuth: injectedVerifyAuth,
+    successHandler: typeof opts.successHandler === 'function' ? opts.successHandler : null,
   };
+
+  /**
+   * Host-app hook for OAUTH_SUCCESS_MODE=handler: `fn(req, res,
+   * { tokens, user, returnTo, provider, created })` takes over the
+   * login-success response entirely (the plugin writes nothing).
+   * Lets the consumer implement e.g. a single-use token handoff so
+   * tokens never appear in a URL. May be async; a thrown error
+   * delegates to the framework's errorHandler like any other
+   * callback failure.
+   */
+  function registerSuccessHandler(fn) {
+    if (typeof fn !== 'function') {
+      throw new Error('davepi-plugin-oauth: registerSuccessHandler expects a function');
+    }
+    state.successHandler = fn;
+  }
 
   function callbackUrlFor(id) {
     return joinUrl(globalCfg.baseUrl, `/auth/${id}/callback`);
@@ -262,12 +319,28 @@ function createPlugin(opts = {}) {
     const profile = await adapter.fetchProfile({ tokens, fetchImpl, extraParams });
 
     if (isLink) {
-      const { identity, created } = await linkIdentityToUser({
-        provider: providerId,
-        profile,
-        userId: parsed.linkedUserId,
-        OAuthIdentity: state.OAuthIdentity,
-      });
+      let linkOutcome;
+      try {
+        linkOutcome = await linkIdentityToUser({
+          provider: providerId,
+          profile,
+          userId: parsed.linkedUserId,
+          OAuthIdentity: state.OAuthIdentity,
+        });
+      } catch (err) {
+        if (err && err.code === 'oauth_identity_owned_by_other') {
+          // Re-shape as the framework's 409 and carry the validated
+          // returnTo so the route handler can land the user back on
+          // a readable dashboard page instead of a bare error body.
+          const conflict = new state.errors.ConflictError(err.message);
+          conflict.code = err.code;
+          conflict.provider = providerId;
+          conflict.returnTo = parsed.returnTo || null;
+          throw conflict;
+        }
+        throw err;
+      }
+      const { identity, created } = linkOutcome;
       return {
         mode: 'link',
         linked: true,
@@ -330,11 +403,31 @@ function createPlugin(opts = {}) {
           if (result.mode === 'login') {
             const { accessToken, refreshToken } = result.tokens;
             const rt = safeReturnTo(result.returnTo);
-            // The redirect destination is ALWAYS env-configured.
-            // result.returnTo (validated) is appended as a query
-            // param so the SPA at the success-redirect origin can
-            // route the user — but it never overrides the origin.
-            if (globalCfg.successRedirect) {
+            // OAUTH_SUCCESS_MODE=handler: the host app takes over the
+            // response (e.g. to run a single-use token handoff) and
+            // the plugin never serialises tokens into a URL.
+            if (globalCfg.successMode === 'handler') {
+              if (state.successHandler) {
+                return await state.successHandler(req, res, {
+                  tokens: result.tokens,
+                  user: result.user,
+                  returnTo: rt,
+                  provider: id,
+                  created: result.created,
+                });
+              }
+              // Misconfiguration: handler mode without a registered
+              // handler. Never fall back to tokens-in-URL — answer
+              // JSON instead and log loudly.
+              state.log.error(
+                { plugin: 'oauth', provider: id },
+                'OAUTH_SUCCESS_MODE=handler but no success handler is registered (call registerSuccessHandler); responding with JSON'
+              );
+            } else if (globalCfg.successRedirect) {
+              // The redirect destination is ALWAYS env-configured.
+              // result.returnTo (validated) is appended as a query
+              // param so the SPA at the success-redirect origin can
+              // route the user — but it never overrides the origin.
               return res.redirect(302, appendTokenToRedirect(
                 globalCfg.successRedirect, accessToken, refreshToken, rt
               ));
@@ -348,7 +441,14 @@ function createPlugin(opts = {}) {
               returnTo: rt,
             });
           }
-          // link mode
+          // link mode: when the SPA passed a (validated, path-only)
+          // returnTo, land the browser back there with a readable
+          // `linked=<provider>` marker. JSON fallback when no
+          // returnTo was carried in state.
+          const linkRt = safeReturnTo(result.returnTo);
+          if (linkRt) {
+            return res.redirect(302, appendQueryParams(linkRt, { linked: id }));
+          }
           return res.status(200).json({
             linked: true,
             provider: id,
@@ -356,6 +456,19 @@ function createPlugin(opts = {}) {
             created: result.created,
           });
         } catch (err) {
+          // 409 already-linked-to-another-user: when the link flow
+          // carried a returnTo, surface the conflict as a readable
+          // dashboard redirect (`?error=...`) instead of an error
+          // page. Everything else delegates to the errorHandler.
+          if (err && err.code === 'oauth_identity_owned_by_other') {
+            const errRt = safeReturnTo(err.returnTo);
+            if (errRt) {
+              return res.redirect(302, appendQueryParams(errRt, {
+                error: err.code,
+                provider: err.provider || id,
+              }));
+            }
+          }
           next(err);
         }
       };
@@ -377,6 +490,12 @@ function createPlugin(opts = {}) {
               linkedUserId: String(userId),
               returnTo: safeReturnTo(req.query && req.query.returnTo) || null,
             });
+            // SPA-friendly variant: an authed fetch() can't follow
+            // the 302 to the provider (CORS-opaque), so JSON-asking
+            // callers get the authorize URL to navigate themselves.
+            if (prefersJson(req)) {
+              return res.status(200).json({ url });
+            }
             res.redirect(302, url);
           } catch (err) { next(err); }
         });
@@ -435,6 +554,13 @@ function createPlugin(opts = {}) {
         'OAUTH_STATE_SECRET is required (>= 16 chars) when any provider is enabled; davepi-plugin-oauth is dormant'
       );
       return;
+    }
+    if (globalCfg.successMode !== 'redirect' && globalCfg.successMode !== 'handler') {
+      log.warn(
+        { plugin: 'oauth', successMode: globalCfg.successMode },
+        "OAUTH_SUCCESS_MODE must be 'redirect' or 'handler'; falling back to 'redirect'"
+      );
+      globalCfg.successMode = 'redirect';
     }
 
     // Resolve framework integration points lazily so the package's
@@ -504,6 +630,7 @@ function createPlugin(opts = {}) {
     // helpers exposed for advanced consumers / tests
     buildAuthorizeRedirect,
     handleCallback,
+    registerSuccessHandler,
     isEnabled: () => state.enabled,
     enabledProviders: () => Object.keys(state.providers),
   };

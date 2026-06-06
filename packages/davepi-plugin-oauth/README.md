@@ -39,7 +39,8 @@ build callback URLs and register with each provider) and
 |----------|----------|-------------|
 | `OAUTH_BASE_URL`         | yes if any provider enabled | Publicly-reachable origin, e.g. `https://api.example.com`. Used to build callback URLs you register with each provider. |
 | `OAUTH_STATE_SECRET`     | yes if any provider enabled | HMAC key for the signed `state` param (≥ 16 random bytes recommended; 32+ ideal). |
-| `OAUTH_SUCCESS_REDIRECT` | no | Where to send the browser after issuing the JWT, e.g. `https://app.example.com/auth/success?token=` — the plugin appends the access + refresh tokens. If unset, the callback returns the tokens as JSON. |
+| `OAUTH_SUCCESS_REDIRECT` | no | Where to send the browser after issuing the JWT, e.g. `https://app.example.com/auth/success?token=` — the plugin appends the access + refresh tokens. If unset, the callback returns the tokens as JSON. Ignored when `OAUTH_SUCCESS_MODE=handler`. |
+| `OAUTH_SUCCESS_MODE`     | no | `redirect` (default) or `handler`. In `handler` mode the host app registers a success handler (see [Success handler](#success-handler-oauth_success_modehandler)) that takes over the login-success response — the plugin never serialises tokens into a URL. |
 | `OAUTH_FAILURE_REDIRECT` | no | Where to send the browser on dance failure (provider returned error, state mismatch, etc.). If unset, the callback returns 400 JSON. |
 | `OAUTH_DEFAULT_ROLES`    | no | Comma-separated default roles for newly-created users. Default `user`. Set to `admin,user` for bootstrap flows — document but don't enable by default in production. |
 
@@ -109,14 +110,45 @@ sign-in.
    - else → mint a new User with `OAUTH_DEFAULT_ROLES`.
 5. Issues an access + refresh token pair via the framework's
    `utils/tokens.issueTokenPair` — identical shape to `/login`.
-6. Either redirects the browser to `OAUTH_SUCCESS_REDIRECT` with the
-   tokens in the URL, or returns them as JSON if the env var is unset.
+6. Delivers the tokens: in `handler` mode, your registered success
+   handler takes over the response; otherwise the browser is
+   redirected to `OAUTH_SUCCESS_REDIRECT` with the tokens in the URL,
+   or — if that's unset — the callback returns them as JSON.
+
+## Success handler (`OAUTH_SUCCESS_MODE=handler`)
+
+Putting tokens in a redirect URL means they transit server logs,
+proxies, and browser history. If your app implements a safer delivery
+(e.g. a single-use handoff code), set `OAUTH_SUCCESS_MODE=handler`
+and register a handler that takes over the login-success response:
+
+```js
+// in your app's own plugin / bootstrap code
+const oauth = require('davepi-plugin-oauth');
+
+oauth.registerSuccessHandler(async (req, res, { tokens, user, returnTo, provider, created }) => {
+  const code = await mintSingleUseHandoffCode(tokens); // your storage
+  res.redirect(302, `/auth/success#code=${encodeURIComponent(code)}`);
+});
+```
+
+The handler receives `(req, res, { tokens, user, returnTo, provider,
+created })` and must write the response itself; the plugin writes
+nothing. `returnTo` is the validated, path-only value carried through
+the state (or `null`). A thrown/rejected handler delegates to the
+framework's `errorHandler` like any other callback failure.
+
+If `handler` mode is set but no handler is registered when a callback
+lands, the plugin logs an error and answers with the JSON shape —
+it never falls back to a tokens-in-URL redirect.
 
 ## Account linking (already-logged-in user)
 
 ```
 GET  /auth/google/link            -> 302 to Google (requires Bearer)
-GET  /auth/google/link/callback   -> 200 { linked: true, provider, providerUserId, created }
+                                     (Accept: application/json → 200 { url })
+GET  /auth/google/link/callback   -> 302 to returnTo with ?linked=google
+                                     (no returnTo → 200 { linked: true, provider, providerUserId, created })
 ```
 
 The link flow doesn't mint a new JWT — the caller is already
@@ -124,9 +156,30 @@ authenticated. It just persists the `oauth_identity` row so the next
 time that user signs in via that provider, the existing User is
 reused.
 
+**Browser SPAs:** a top-level navigation can't attach the Bearer
+header, and an authed `fetch()` can't follow the cross-origin 302 to
+the provider. So when the link-start request prefers JSON (explicit
+`Accept: application/json` or `X-Requested-With: XMLHttpRequest`),
+the route answers `200 { url }` and the SPA navigates itself:
+
+```js
+const { url } = await api('GET', '/auth/github/link?returnTo=/dashboard');
+location.href = url;
+```
+
+When the link-start carried a `returnTo` (validated path-only, same
+rules as login), the link callback 302s back there with
+`?linked=<provider>` appended — the user lands on a real dashboard
+route, not a JSON page. Without `returnTo`, the JSON response shape
+is unchanged.
+
 If the identity is already linked to a *different* user, the plugin
-throws `409`-style — silently stealing another tenant's identity
-would be a footgun.
+rejects with the framework's `ConflictError` (409,
+`code: 'oauth_identity_owned_by_other'`) — silently stealing another
+tenant's identity would be a footgun. When a `returnTo` is available,
+the callback instead 302s to
+`{returnTo}?error=oauth_identity_owned_by_other&provider=<id>` so the
+user sees a readable dashboard error rather than an error page.
 
 ## `oauth_identity` collection
 
