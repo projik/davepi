@@ -1,5 +1,5 @@
 {
-  "runAt": "2026-06-02T07:32:10.845Z",
+  "runAt": "2026-06-05T07:23:27.542Z",
   "agentMode": "real",
   "model": "claude-sonnet-4-6",
   "total": 10,
@@ -9,13 +9,13 @@
       "name": "01-task-fields",
       "passed": false,
       "message": "ANTHROPIC_API_KEY is required for real-agent mode (set EVAL_AGENT=stub to skip).",
-      "durationMs": 3
+      "durationMs": 2
     },
     {
       "name": "02-status-state-machine",
       "passed": false,
       "message": "ANTHROPIC_API_KEY is required for real-agent mode (set EVAL_AGENT=stub to skip).",
-      "durationMs": 1
+      "durationMs": 2
     },
     {
       "name": "03-parent-relation",
@@ -39,31 +39,31 @@
       "name": "06-acl-admin-delete",
       "passed": false,
       "message": "ANTHROPIC_API_KEY is required for real-agent mode (set EVAL_AGENT=stub to skip).",
-      "durationMs": 2
+      "durationMs": 1
     },
     {
       "name": "07-file-attachment",
       "passed": false,
       "message": "ANTHROPIC_API_KEY is required for real-agent mode (set EVAL_AGENT=stub to skip).",
-      "durationMs": 3
+      "durationMs": 1
     },
     {
       "name": "08-searchable-fields",
       "passed": false,
       "message": "ANTHROPIC_API_KEY is required for real-agent mode (set EVAL_AGENT=stub to skip).",
-      "durationMs": 3
+      "durationMs": 1
     },
     {
       "name": "09-field-level-acl",
       "passed": false,
       "message": "ANTHROPIC_API_KEY is required for real-agent mode (set EVAL_AGENT=stub to skip).",
-      "durationMs": 3
+      "durationMs": 2
     },
     {
       "name": "10-aggregation-tasks-per-project",
       "passed": false,
       "message": "ANTHROPIC_API_KEY is required for real-agent mode (set EVAL_AGENT=stub to skip).",
-      "durationMs": 3
+      "durationMs": 2
     }
   ]
 }

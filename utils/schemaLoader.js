@@ -54,8 +54,8 @@ const { runBeforeHook, runAfterHook } = require('./hooks');
  * Map a schema field's declared `type` onto the GraphQL scalar name
  * graphql-compose understands. Computed-field outputs are scalars by
  * design (composite types would require synthesising new TCs per
- * field, which the contract for v1 doesn't promise). Anything we
- * don't recognise falls back to `String` so the schema still builds.
+ * field, which the computed-field contract doesn't promise). Anything
+ * we don't recognise falls back to `String` so the schema still builds.
  */
 function computedGraphqlType(type) {
   if (Array.isArray(type)) return `[${computedGraphqlType(type[0])}]`;
@@ -154,10 +154,11 @@ function createSchemaLoader({ app, apiSpec, setApolloRouter, buildGraphqlContext
    * pair. Used by the `__include` path in REST handlers and the
    * `addRelation` wiring in the GraphQL layer.
    *
-   * Lookup order: same-version exact match, then any-version match.
-   * Schemas live under one version in practice; the second pass is a
-   * defensive escape hatch for cross-version relations a future
-   * caller might declare.
+   * Lookup order: a version-scoped exact match on the registry key
+   * `${version}/${path}`, then a fallback that matches by `schema.path`
+   * alone, ignoring version. The scoped pass resolves the common case;
+   * the path-only fallback lets a relation still resolve when its
+   * target's version isn't supplied.
    */
   function getResource(targetPath, sourceVersion) {
     if (sourceVersion) {

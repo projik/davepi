@@ -17,6 +17,14 @@ tools like Claude Desktop talk to a davepi instance, `@davepi/agent`
 is a process you run to host an end-user-facing chatbot: an HTTP
 `/chat` endpoint, a Slack bot, an embeddable widget, etc.
 
+:::tip
+**Looking for the guide?** This page is the *reference* — env
+vars, defaults, one-line examples. For task-shaped walkthroughs
+(creating your first agent, authoring a persona, wiring Slack,
+proactive runbooks, troubleshooting), start with the
+[Agents](/agents/) section.
+:::
+
 ## What you get
 
 - **HTTP `/chat`** endpoint with Server-Sent Events streaming.

@@ -35,7 +35,7 @@
 │   └── auth/                # Authentication routes
 ├── schema/
 │   └── versions/
-│       └── v1/              # Version 1 schemas (auto-loaded)
+│       └── v1/              # Schemas (auto-loaded)
 │           ├── account.js
 │           ├── category.js
 │           ├── contact.js
@@ -443,9 +443,8 @@ mutation {
 
 ## Version Control
 
-- Schemas are versioned in `./schema/versions/v1/`, `v2/`, etc.
-- API endpoints include version: `/api/v1/{resource}`
-- Multiple versions can coexist
+- Schemas live in `./schema/versions/v1/`; the framework derives the `/api/v1` path prefix from the directory name.
+- API endpoints are served under that prefix: `/api/v1/{resource}`.
 
 ### Changelog requirement
 

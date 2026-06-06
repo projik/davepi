@@ -550,7 +550,7 @@ davepi/
 │   └── user.js              # User model
 ├── schema/
 │   └── versions/
-│       └── v1/              # API version 1 schemas
+│       └── v1/              # Schemas (auto-loaded)
 │           ├── account.js
 │           ├── category.js
 │           ├── contact.js
@@ -562,14 +562,9 @@ davepi/
 └── utils/                   # Utility functions
 ```
 
-## API Versioning
+## API Layout
 
-Schemas are organized by version in `./schema/versions/`:
-
-- `v1/` - Version 1 endpoints at `/api/v1/{resource}`
-- `v2/` - Version 2 endpoints at `/api/v2/{resource}` (future)
-
-Multiple versions can coexist, allowing gradual migrations.
+Schemas live in `./schema/versions/v1/` and are served under `/api/v1/{resource}`. The framework derives the `/api/v1` path prefix from the directory name, so dropping a schema file into that folder is all it takes to expose its full REST and GraphQL surface.
 
 ## Built With
 
