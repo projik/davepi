@@ -257,8 +257,20 @@ function createSchemaLoader({ app, apiSpec, setApolloRouter, buildGraphqlContext
       // for plain query indexes: before it, every composite index was
       // forcibly unique, so a lookup index on (userId, fkId) silently
       // capped the collection at one row per pair.
+      // Long-form detection is strict — `fields` must be a plain object
+      // and no keys beyond `fields`/`unique` may be present — so a
+      // shorthand spec that happens to index a field literally named
+      // `fields` (`{ userId: 1, fields: 1 }`) is still read as
+      // shorthand, not misparsed into `mongooseSchema.index(1, ...)`.
+      const isLongForm = (entry) =>
+        entry !== null &&
+        typeof entry === 'object' &&
+        typeof entry.fields === 'object' &&
+        entry.fields !== null &&
+        !Array.isArray(entry.fields) &&
+        Object.keys(entry).every((k) => k === 'fields' || k === 'unique');
       s.compositeIndex.forEach((entry) => {
-        if (entry && entry.fields) {
+        if (isLongForm(entry)) {
           mongooseSchema.index(entry.fields, { unique: entry.unique !== false });
         } else {
           mongooseSchema.index(entry, { unique: true });

@@ -113,6 +113,28 @@ describe('compositeIndex entry forms', () => {
     expect(options.unique).toBe(true);
   });
 
+  test('shorthand spec with a field literally named "fields" stays shorthand', async () => {
+    // The long-form detector keys on a `fields` property — a shorthand
+    // index over a field that happens to be named `fields` must not be
+    // misparsed into `index(1, ...)`.
+    await loadSchema({
+      path: 'cifieldskey',
+      collection: 'cifieldskey',
+      version: 'v1',
+      fields: [
+        { name: 'userId', type: String, required: true },
+        { name: 'fields', type: String, required: true },
+      ],
+      compositeIndex: [{ userId: 1, fields: 1 }],
+    });
+
+    const [, options] = findIndex(mongoose.models.cifieldskey, {
+      userId: 1,
+      fields: 1,
+    });
+    expect(options.unique).toBe(true);
+  });
+
   test('forms mix within one schema', async () => {
     await loadSchema({
       path: 'cimixed',
