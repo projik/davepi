@@ -1,6 +1,6 @@
 {
   "name": "davepi",
-  "version": "2.0.1",
+  "version": "2.1.0",
   "description": "Schema-driven Node.js backend that auto-generates REST + GraphQL + MCP from one schema file per resource. Built for AI agents.",
   "main": "index.js",
   "bin": {
@@ -42,10 +42,10 @@
   "author": "David Baxter",
   "license": "ISC",
   "dependencies": {
-    "@aws-sdk/client-s3": "^3.1045.0",
-    "@aws-sdk/s3-request-presigner": "^3.1045.0",
     "@apollo/server": "^5.5.1",
     "@as-integrations/express4": "^1.1.2",
+    "@aws-sdk/client-s3": "^3.1045.0",
+    "@aws-sdk/s3-request-presigner": "^3.1045.0",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "async": "^3.2.3",
     "bcryptjs": "^2.4.3",
