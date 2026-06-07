@@ -56,7 +56,7 @@ The application uses `directory-tree` to automatically discover and load schema 
 - **path**: API endpoint path
 - **collection**: MongoDB collection name
 - **fields**: Array of field definitions with type, validation, and constraints
-- **compositeIndex** (optional): Composite unique indexes
+- **compositeIndex** (optional): Composite indexes — plain key objects are unique; `{ fields: {...}, unique: false }` declares a non-unique query index
 
 ### Schema File Format
 
@@ -76,7 +76,8 @@ module.exports = {
     }
   ],
   compositeIndex: [         // Optional composite indexes
-    { field1: 1, field2: 1 }
+    { field1: 1, field2: 1 },                          // plain key object = UNIQUE index
+    { fields: { field1: 1, field3: 1 }, unique: false } // long form = plain query index
   ]
 };
 ```

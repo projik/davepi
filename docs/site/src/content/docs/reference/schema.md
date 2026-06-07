@@ -35,7 +35,7 @@ Swagger fragments for `account`.
 | `fields` | array | yes | Field definitions — see [Field options](/reference/fields/). |
 | `relations` | object | no | Relation graph (`belongsTo` / `hasOne` / `hasMany`) consumed by `__include` and per-relation MCP tools. See [Relations](/features/relations/). |
 | `aggregations` | array | no | Declarative aggregation pipelines that surface as REST + GraphQL + MCP. See [Aggregations](/features/aggregations/). |
-| `compositeIndex` | array | no | Array of Mongo index specs — applied with `unique: true`. Use for per-tenant uniqueness (e.g. `{ userId: 1, slug: 1 }`). |
+| `compositeIndex` | array | no | Array of Mongo index specs. Plain key objects are unique (per-tenant uniqueness, e.g. `{ userId: 1, slug: 1 }`); use `{ fields: {...}, unique: false }` for a plain query index. |
 | `softDelete` | boolean | no | Defaults to `true`. Set `false` to opt out of tombstones — DELETEs become hard-deletes. See [Soft delete](/features/soft-delete/). |
 | `audit` | boolean | no | Defaults to `true`. Set `false` to skip audit log writes for this schema. See [Audit log](/features/audit/). |
 | `acl` | object | no | Document-level role bypass slots (`list`, `delete`). See [ACL](/features/acl/). |
@@ -115,18 +115,25 @@ See [Aggregations](/features/aggregations/) for the param syntax.
 
 ## `compositeIndex`
 
-Each entry is passed to Mongoose's `index()` with `unique: true`:
+Each entry is passed to Mongoose's `index()`. A plain key object is a
+**unique** index — the common case, per-tenant uniqueness. To declare a
+plain (non-unique) query index, use the long form with `unique: false`:
 
 ```js
 compositeIndex: [
-  { userId: 1, slug: 1 },          // per-tenant slug uniqueness
-  { userId: 1, accountId: 1, year: 1, number: 1 }, // per-tenant invoice numbering
+  { userId: 1, slug: 1 },          // per-tenant slug uniqueness (unique)
+  { userId: 1, accountId: 1, year: 1, number: 1 }, // per-tenant invoice numbering (unique)
+  { fields: { userId: 1, articleId: 1 }, unique: false }, // lookup index — many rows per pair
 ],
 ```
 
+The long form accepts `unique: true` too (equivalent to the shorthand);
+omitting the flag defaults to unique.
+
 Always include `userId` (or `accountId` for the org variant) as the
-first key — without it, you've created a global uniqueness
-constraint that crosses tenants.
+first key — without it, a unique entry creates a global uniqueness
+constraint that crosses tenants, and a query index won't serve the
+tenant-scoped lookups the framework generates.
 
 ## `softDelete`
 

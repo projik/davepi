@@ -249,7 +249,33 @@ function createSchemaLoader({ app, apiSpec, setApolloRouter, buildGraphqlContext
     mongooseSchema.index({ createdAt: 1 });
     mongooseSchema.index({ updatedAt: 1 });
     if (s.compositeIndex) {
-      s.compositeIndex.forEach((i) => mongooseSchema.index(i, { unique: true }));
+      // Two entry shapes are accepted. The legacy shorthand is a plain
+      // key object (`{ userId: 1, slug: 1 }`) and stays unique — that
+      // has been the contract since the field shipped, and per-tenant
+      // uniqueness is its primary use. The long form
+      // (`{ fields: { userId: 1, reviewId: 1 }, unique: false }`) exists
+      // for plain query indexes: before it, every composite index was
+      // forcibly unique, so a lookup index on (userId, fkId) silently
+      // capped the collection at one row per pair.
+      // Long-form detection is strict — `fields` must be a plain object
+      // and no keys beyond `fields`/`unique` may be present — so a
+      // shorthand spec that happens to index a field literally named
+      // `fields` (`{ userId: 1, fields: 1 }`) is still read as
+      // shorthand, not misparsed into `mongooseSchema.index(1, ...)`.
+      const isLongForm = (entry) =>
+        entry !== null &&
+        typeof entry === 'object' &&
+        typeof entry.fields === 'object' &&
+        entry.fields !== null &&
+        !Array.isArray(entry.fields) &&
+        Object.keys(entry).every((k) => k === 'fields' || k === 'unique');
+      s.compositeIndex.forEach((entry) => {
+        if (isLongForm(entry)) {
+          mongooseSchema.index(entry.fields, { unique: entry.unique !== false });
+        } else {
+          mongooseSchema.index(entry, { unique: true });
+        }
+      });
     }
 
     // Mongo only allows one text index per collection, so the

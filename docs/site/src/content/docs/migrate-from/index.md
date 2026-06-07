@@ -38,7 +38,7 @@ These are platform-specific and have no direct equivalent — you'll need an alt
 
 ## Things to plan for
 
-- **Field uniqueness across tenants.** dAvePi's tenant column is `userId`, stamped server-side from the JWT. **Don't use `unique: true` for tenant-scoped uniqueness** — it creates a global index that crosses tenants. Use `compositeIndex: [{ userId: 1, slug: 1 }, { unique: true }]` at the schema level. The per-source guides flag this where it matters.
+- **Field uniqueness across tenants.** dAvePi's tenant column is `userId`, stamped server-side from the JWT. **Don't use `unique: true` for tenant-scoped uniqueness** — it creates a global index that crosses tenants. Use `compositeIndex: [{ userId: 1, slug: 1 }]` at the schema level (plain key objects are unique by default). The per-source guides flag this where it matters.
 - **`accountId` for orgs.** If your source models orgs as a column alongside the owner, declare `accountId` on the schema — dAvePi stamps that server-side too. Don't name custom FKs `accountId`; pick `orgId` / `parentAccountId` / similar.
 - **Soft delete vs. hard delete.** dAvePi soft-deletes by default (`deletedAt` flag + `restore_*` MCP tool). If the source hard-deleted rows, the migrated rows will land soft-deletable; the behaviour change is usually welcome, but flag it for the team.
 - **Audit log retention.** The framework writes an audit row on every mutation and **does not auto-purge** them. Plan a manual `db.audit.deleteMany({ at: { $lt: ... } })` cron if you want bounded growth. The per-source guides reference this where the source did auto-purge.

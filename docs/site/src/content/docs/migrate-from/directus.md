@@ -144,7 +144,7 @@ module.exports = {
     { name: 'articleId', type: String, required: true },
     { name: 'tagId',     type: String, required: true },
   ],
-  compositeIndex: [{ articleId: 1, tagId: 1 }, { unique: true }],
+  compositeIndex: [{ userId: 1, articleId: 1, tagId: 1 }],
 };
 
 // article.js
