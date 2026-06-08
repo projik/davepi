@@ -248,6 +248,76 @@ module.exports = {
 | Allow operators to update records they don't own | `schema.acl.write = ['role']` (e.g. an admin editing a customer record). Ownership is preserved — tenant fields are stripped from the update. |
 | Notify an external system on writes | `webhooks` block. HMAC-SHA256 signed, retries with exponential backoff. |
 
+## First-party plugins — check here before building an integration
+
+Before you write code for email, SMS, payments, social login, background
+jobs, scheduling, an audit trail, large-file uploads, or Slack alerts: **a
+maintained first-party plugin almost certainly already does it.** Re-implementing
+one of these by hand is the integration equivalent of hand-rolling a CRUD route
+— wasted effort against something the ecosystem ships. To use one, `npm install`
+it and add its npm name to `davepi.plugins` in this project's `package.json`
+(see "Plugins" below); each is configured purely through env vars and stays
+**dormant** until its credentials are set, so it's safe to declare before wiring
+the upstream service.
+
+| Need | Plugin (npm) | What it gives you |
+|------|--------------|-------------------|
+| Transactional email (welcome, receipt, password-reset) | `davepi-plugin-postmark` | `sendEmail` / `sendTemplate` for use inside hooks; optional auto-send on a matching `record` event. |
+| SMS / WhatsApp, OTP passwordless login, TOTP 2FA | `davepi-plugin-twilio` | `sendSms` / `sendWhatsApp`, OTP-over-SMS login routes, 2FA enroll/verify/challenge, inbound-SMS webhook. |
+| Payments, subscriptions, billing portal | `davepi-plugin-stripe` | `/api/checkout`, `/api/portal`, signature-verified `/api/webhooks/stripe`; mirrors subscription state into a `stripe_subscription` collection; rebroadcasts events onto the record bus. |
+| Social / SSO login (Google, GitHub, Microsoft, Apple, Discord) | `davepi-plugin-oauth` | `/auth/{provider}` + `/callback` routes, CSRF + PKCE, upserts the User and issues the standard JWT. |
+| Durable background jobs (slow work out of the request path) | `davepi-plugin-queue` | BullMQ-backed `enqueue` / `registerJob` + a `bus.emit('job:enqueue', …)` channel for hooks; retries, survives restarts. Needs Redis. |
+| Scheduled / recurring jobs (nightly export, hourly reap) | `davepi-plugin-cron` | Declarative cron in `package.json`, Mongo-backed distributed lock so only one node fires per tick. No Redis needed. |
+| Immutable audit log of every mutation | `davepi-plugin-audit` | Auto-registers an `audit` collection with before/after + JSON-patch diff + actor; queryable via the standard surface. (Note: the framework's per-schema `audit: true` already covers basic history — reach for this plugin when you need the richer queryable diff log.) |
+| Slack alerts on events | `davepi-plugin-slack` | Posts to an incoming webhook for every `record` event matching a pattern; `postMessage` for ad-hoc use in hooks. |
+| Large / direct-to-bucket file uploads (S3, R2, MinIO, GCS) | `davepi-plugin-object-storage` | Presigned-URL upload/complete/download routes + a first-class `file` collection. Use over `type: 'File'` for multi-GB or serverless uploads. |
+
+`@davepi/agent` deployments also have `davepi-plugin-skill-extractor` (turns
+resolved conversations into governed draft skills) — only relevant if you're
+running the agent's learning loop.
+
+If a genuinely new integration is needed, build it as a plugin too (see
+"Plugins" below) — don't bury cross-cutting code in a schema file or a custom
+route.
+
+## Plugins
+
+Plugins are how cross-cutting code (the integrations above, plus your own)
+attaches to the app without editing framework source. They load **after every
+schema is registered**, in declaration order, so a plugin can introspect
+`schemaLoader.listSchemas()` and wire a route or listener per resource.
+
+Register them by listing their module specifiers under `davepi.plugins` in
+**this project's** `package.json` — npm package names for first-party plugins,
+or `#plugins/<name>` paths for your own:
+
+```json
+{
+  "davepi": {
+    "plugins": ["davepi-plugin-postmark", "#plugins/audit-export"]
+  }
+}
+```
+
+A plugin module exports a `name` and an async `setup`:
+
+```js
+module.exports = {
+  name: 'audit-export',
+  async setup({ app, schemaLoader, bus, log, appName }) {
+    app.get('/api/v1/_audit-export', auth(true), handler);     // mount routes
+    bus.on('record', (e) => { /* e.type === '<path>.created|updated|deleted' */ });
+  },
+};
+```
+
+- `bus` is the same `EventEmitter` that fires a `record` event for every CRUD
+  mutation — the right hook for fan-out that spans resources (the integration
+  plugins above subscribe to it). For a single resource's side effect, prefer a
+  schema `hooks` block over a bus listener.
+- A throw during `setup` **fails boot** — that's deliberate, so a
+  misconfigured plugin is loud rather than silently dropped.
+
 ## Conventions you must follow
 
 - **`userId` is required on every schema.** The framework stamps it from
