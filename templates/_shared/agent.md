@@ -21,6 +21,66 @@ Read it before adding code. The full framework reference lives at
 | How do I expose data to an agent? | Already done — every schema becomes an MCP tool set automatically. Run `npx davepi mcp` (or use this project's `.mcp.json`). |
 | Where's the source of truth for "what this project exposes"? | `GET /_describe` on the running server. Read it before planning anything non-trivial. |
 
+## Build order: constructing a whole app
+
+When the task is "build an app" (not just add one resource), the **order**
+is where time gets wasted — almost always by building things the framework
+already generates, or by sequencing features so they need rework. Follow
+these phases in order. **Each phase leaves the app bootable**; finish one
+before starting the next, and lean on hot reload to verify as you go.
+
+**The framework already gives you these — NEVER build them by hand:** auth
+(`/register`, `/login`, JWT issue/verify, `userId` + `accountId` stamping),
+full CRUD, list pagination / sort / filter (`__page`, `__sort`, `q`,
+mongo-querystring), validation, soft-delete + restore + history, audit
+logging, file uploads, idempotency, and the REST + GraphQL + MCP + Swagger +
+`_describe` surfaces. If you catch yourself writing a login route, a CRUD
+handler, or a pagination loop, stop — it already exists.
+
+0. **Orient.** On an existing server, read `GET /_describe` to see what's
+   already there. Map every requirement to a *field*, *relation*, *state
+   machine*, *aggregation*, *hook*, or *plugin*. Anything that maps to the
+   "never build" list above is already done.
+1. **Model the domain first — no code yet.** List every entity with its
+   fields, its owner (`userId`, always), its foreign keys (`parent<Schema>Id`),
+   its finite-state fields, and its relationships. Decide the **role
+   taxonomy** now (`user`, `admin`, `support`, `storefront`, …) and which
+   resources need cross-tenant or public read. Roles are a *design decision*
+   here — applied as ACL in step 4 — not a build phase of their own.
+2. **Schemas, structural pass — parents before children.** Write each
+   `schema/versions/v1/<resource>.js` with just `path`, `collection`, and
+   `fields` (include `userId`, FKs, validation, `searchable`). Entities with
+   no FK first (`account`), then their children (`contact`, `deal`). **Save
+   one file at a time and confirm it mounts** — hot reload is 50–150ms and
+   `_describe` shows the result. Don't write ten files and boot once into a
+   cascade of errors.
+3. **Wire relationships & behavior.** Now that every entity exists, add
+   `relations` (both sides), `stateMachine` fields (with `initial`!),
+   `compositeIndex` (`userId`-first), and `aggregations`. These reference
+   other schemas *by name*, so all schemas must exist before this pass.
+4. **Authorization.** Apply the step-1 roles as ACL: `field.acl.{read,create,update}`,
+   `schema.acl.{list,write,delete,scope}`, and `apiClient` rows for public
+   `X-Client-Id` reads. Layer this onto a settled data model so you aren't
+   re-editing ACL slots as fields churn.
+5. **Side effects, last.** Per-resource invariants → schema `hooks`.
+   Cross-cutting concerns (integrations, scheduled jobs, exports) → **plugins**,
+   which load *after* all schemas and introspect them via
+   `schemaLoader.listSchemas()` — that's structurally why they come last.
+   Write `#lib/*` helpers **just-in-time**, only when a hook or plugin needs
+   one. Never open with a speculative utilities layer.
+6. **Verify & finish.** Seed data, run `npm test`, regenerate the typed
+   client (`npx davepi gen-client`).
+
+**Wrong starts that cost hours — do NOT do these:**
+
+| Tempting first move | Why it's wrong | Do instead |
+|---------------------|----------------|------------|
+| Build authentication / login / JWT | Framework-provided. | Skip it — `/register`, `/login`, and `userId` stamping already work. |
+| Write CRUD routes / pagination / validation | Auto-generated from each schema. | Just write the schema file. |
+| Start with plugins or `#lib/` utilities | They're leaf dependencies that load after and depend on schemas. | Build them last (step 5), only when something needs them. |
+| Treat "roles" as a build phase | Roles are data attached to schemas via ACL. | Decide them in step 1, apply as ACL in step 4. |
+| Write all schema files, then boot once | Turns one typo into a debugging marathon. | Save and verify one resource at a time via hot reload + `_describe`. |
+
 ## To add a resource
 
 Create `schema/versions/v1/<resource>.js`:
