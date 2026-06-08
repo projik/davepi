@@ -131,8 +131,8 @@ Supabase → dAvePi:
    `userId` becomes the tenant column (dAvePi auto-stamps it from
    the JWT).
 3. **RLS → ACL.** Translate row-level security policies to dAvePi's
-   `acl.list` / `acl.delete` slots (document-level) or per-field
-   `acl.read` / `acl.create` / `acl.update`. RLS that's just
+   `acl.list` / `acl.write` / `acl.delete` slots (document-level) or
+   per-field `acl.read` / `acl.create` / `acl.update`. RLS that's just
    "user owns their rows" is the default in dAvePi — no policy needed.
 4. **Auth.** Re-issue tokens via `/register`. Password hashes
    don't migrate cleanly (bcrypt vs Supabase's scrypt); plan a

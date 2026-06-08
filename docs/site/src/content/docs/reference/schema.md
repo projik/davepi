@@ -165,15 +165,22 @@ See [Audit log](/features/audit/).
 
 ## `acl`
 
-Document-level bypass slots — opt operators in to see / delete
-across tenants. Field-level ACL goes on the field, not here.
+Document-level bypass slots — opt operators in to read / update /
+delete across tenants. Field-level ACL goes on the field, not here.
 
 ```js
 acl: {
-  list: ['admin', 'support'],
-  delete: ['admin'],
+  list: ['admin', 'support'],   // read across tenants
+  write: ['admin'],             // update records they don't own
+  delete: ['admin'],            // delete records they don't own
 },
 ```
+
+`write` lets the listed roles update another user's record without
+changing its owner — tenant fields are stripped from the update, so
+the record stays owned by the original user. There is no `create`
+bypass (create always stamps ownership from the JWT), and the bulk
+`PUT /<path>` upsert stays owner-only.
 
 See [ACL](/features/acl/).
 

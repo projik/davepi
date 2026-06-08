@@ -157,9 +157,10 @@ module.exports = {
   softDelete: true,                               // default true. false = hard-delete on DELETE
   audit:      true,                               // default true. false = skip audit log
 
-  acl: {                                          // optional — opt operators in to cross-tenant reads / deletes
-    list:   ['admin', 'support'],
-    delete: ['admin'],
+  acl: {                                          // optional — opt operators in to cross-tenant reads / updates / deletes
+    list:   ['admin', 'support'],                 // read across tenants
+    write:  ['admin'],                            // update records they don't own (owner preserved)
+    delete: ['admin'],                            // delete records they don't own
   },
 
   webhooks: {                                     // optional — outbound notifications
@@ -184,6 +185,7 @@ module.exports = {
 | Store an upload | `type: 'File'`. Don't base64 into a String field. |
 | Hide a field from non-privileged users | `field.acl.read = ['role']`. Stripped from REST / GraphQL / MCP / audit / webhook payloads. |
 | Allow operators to see across tenants | `schema.acl.list = ['role']`. Owner-only is the baseline. |
+| Allow operators to update records they don't own | `schema.acl.write = ['role']` (e.g. an admin editing a customer record). Ownership is preserved — tenant fields are stripped from the update. |
 | Notify an external system on writes | `webhooks` block. HMAC-SHA256 signed, retries with exponential backoff. |
 
 ## Conventions you must follow

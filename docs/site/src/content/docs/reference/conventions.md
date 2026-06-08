@@ -116,7 +116,10 @@ tc.addResolver({
 
 The wrappers take an options object: `{ schema, kind: 'read'|'delete'|'write', action: 'create'|'update' }`.
 `kind` defaults to `'write'`. Use `'read'` to honour `acl.list` on
-the schema; use `'delete'` for `acl.delete`.
+the schema; `'delete'` honours `acl.delete`; `'write'` (the default,
+used by the update resolvers) honours `acl.write` — roles listed
+there may update records they don't own, while tenant fields stay
+stripped so ownership never moves.
 
 ## Tests
 

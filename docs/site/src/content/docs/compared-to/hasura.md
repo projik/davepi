@@ -126,9 +126,10 @@ Hasura → dAvePi:
    object/array relationships translate to `belongsTo` /
    `hasMany` entries with explicit `fk:` names.
 3. **Permissions → ACL.** Row-level select / insert / update /
-   delete rules map to dAvePi's `acl.list` (cross-tenant reads)
-   and `acl.delete` (cross-tenant deletes). Column permissions
-   become `field.acl.read` / `acl.create` / `acl.update`. Hasura's
+   delete rules map to dAvePi's `acl.list` (cross-tenant reads),
+   `acl.write` (cross-tenant updates), and `acl.delete`
+   (cross-tenant deletes). Column permissions become
+   `field.acl.read` / `acl.create` / `acl.update`. Hasura's
    "owner" pattern (`X-Hasura-User-Id`) is the default in dAvePi
    (the tenant column does it automatically).
 4. **Event triggers → webhooks.** dAvePi's

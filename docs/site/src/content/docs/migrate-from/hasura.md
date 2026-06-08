@@ -25,7 +25,7 @@ the same pattern as [the Supabase guide](/migrate-from/supabase/).
 | Array relationship | `relations: { x: { kind: 'hasMany', resource: ..., fk: '...' } }` | Many side. |
 | Remote relationship | (no direct map) | dAvePi doesn't federate; expose the remote in a custom route. |
 | Permission rule (select) | `acl.list` (cross-tenant) or default tenant scope | Per-row checks → document ACL. |
-| Permission rule (insert/update/delete) | `acl.delete` for cross-tenant; field `acl.create` / `acl.update` for column-level | Column permissions → field ACL. |
+| Permission rule (insert/update/delete) | `acl.write` for cross-tenant update, `acl.delete` for cross-tenant delete; field `acl.create` / `acl.update` for column-level | Column permissions → field ACL. Insert always stamps ownership — no cross-tenant create. |
 | Event trigger | `webhooks: [{ event: 'create' | 'update' | 'delete' | ..., url }]` on the schema | HMAC-signed, declared per-schema. |
 | Action (REST proxy) | Custom Express route in `index.js` | Move handler code out of webhook+Action into a direct route. |
 | Action (no proxy — just a mutation) | Custom GraphQL resolver via `app.locals.schemaLoader` or a schema-level method | Rare. Most Actions hit an external HTTP API; those are simpler as a direct route. |
@@ -52,8 +52,8 @@ The interesting Hasura-specific cases:
 ## Permission rules → ACL
 
 Hasura's permission model is row + column rules per role per
-operation. dAvePi's ACL is document-level (`list` / `delete`) +
-field-level (`read` / `create` / `update`).
+operation. dAvePi's ACL is document-level (`list` / `write` /
+`delete`) + field-level (`read` / `create` / `update`).
 
 ### Row-level: "user owns their rows"
 
@@ -93,6 +93,7 @@ module.exports = {
   fields: [/* ... */],
   acl: {
     list:   ['admin'],     // bypass userId scope on reads
+    write:  ['admin'],     // update records owned by other users
     delete: ['admin'],
   },
 }

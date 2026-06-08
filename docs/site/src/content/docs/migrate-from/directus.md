@@ -22,7 +22,7 @@ them to schema files.
 | Collection | `schema/versions/v1/<resource>.js` | One file per collection. |
 | Field | `{ name, type }` in `fields[]` | See type table below. |
 | M2O / O2M / M2M relation | `relations` map entry on each schema | M2M needs a join collection (`<a>_<b>` with two FK columns). |
-| Role + collection policy | `acl.list` / `acl.delete` on the schema | Per-row → document ACL. |
+| Role + collection policy | `acl.list` / `acl.write` / `acl.delete` on the schema | Per-row → document ACL. `acl.write` = update records owned by others. |
 | Role + field permission | `field.acl.{read,create,update}` | Per-column → field ACL. |
 | Activity log | Audit log (`audit: true`, default) | dAvePi's audit log is automatic; queryable via `history_<path>` MCP tool. |
 | Revisions | Audit log diff entries | Diffs at field level; `/api/v1/<path>/:id/history`. |

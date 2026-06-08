@@ -123,6 +123,8 @@ All auto-generated endpoints enforce user isolation:
 - `POST` requests: Automatically set `userId` and `accountId` to `req.user.user_id`
 - `GET/PUT/DELETE` requests: Filter by `userId` to ensure users only access their own data
 
+A schema can opt specific roles out of the owner filter with document-level ACL slots: `schema.acl.list` (read across tenants), `schema.acl.write` (update records owned by another user — e.g. an admin editing a customer record; ownership is preserved because tenant fields are stripped from the update), and `schema.acl.delete` (delete across tenants). There is no `create` bypass, and the bulk `PUT /<path>` upsert stays owner-only. See [ACL](https://docs.davepi.dev/features/acl/).
+
 ### Public read access via `X-Client-Id`
 
 Unauthenticated frontends (storefronts, marketing sites, embedded widgets) read collections by sending an `X-Client-Id` header. The header value is a public client ID issued through the admin-only `apiClient` resource (e.g. `pk_storefront_live_abc123`); `middleware/clientAuth.js` resolves it into a synthetic `req.user = { user_id: <id>, roles: [<role>], isClient: true }`. The existing role-based ACL surface then governs what the role can read:

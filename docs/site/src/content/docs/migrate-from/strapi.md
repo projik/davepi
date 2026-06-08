@@ -23,7 +23,7 @@ This guide assumes you've decided to move.
 | Dynamic zone | `Mixed` field with a discriminator, or a polymorphic relation | Dynamic zones don't map cleanly; usually rebuilt. |
 | Draft / publish lifecycle | `state` field with a state machine | `draft → published → archived` with transitions. |
 | Localisation (i18n) | `translations: { [locale]: ... }` sub-document, or per-locale resources | No native i18n; pick a pattern. |
-| Permissions (roles + actions) | `acl.list` / `acl.delete` + `field.acl.*` | Per-row → document; per-field → field ACL. |
+| Permissions (roles + actions) | `acl.list` / `acl.write` / `acl.delete` + `field.acl.*` | Per-row → document; per-field → field ACL. `acl.write` covers cross-tenant update. |
 | Users & Permissions plugin users | `User` model | Force password reset on cutover. |
 | Lifecycle hooks (`beforeCreate`, etc.) | Custom routes (for before-events); webhook subscriptions (`POST /api/v1/webhooks`) or state-machine `onEnter` (for after-events) | Strapi's `before*` hooks are inline; dAvePi's equivalent is a custom route that intercepts before calling `Model.create`. Webhooks dispatch async with retry backoff. |
 | Custom controllers / services / policies | Custom Express routes / helpers in `utils/` | Move the code out of Strapi's folder structure into the Node app's structure. |
