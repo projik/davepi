@@ -4,6 +4,7 @@ const {
   filterWritable,
   bypassUserScopeForList,
   bypassUserScopeForDelete,
+  bypassUserScopeForWrite,
   canReadField,
   stampTenantFields,
   stripTenantFields,
@@ -237,8 +238,9 @@ const projectResult = (result, schema, user) => {
  * to the record arg; project ACL'd fields out of the result.
  *
  * `kind` controls the bypass slot: 'read' uses acl.list,
- * 'delete' uses acl.delete, anything else (default, 'write') stays
- * strictly owner-bound.
+ * 'delete' uses acl.delete, 'write' (the default, used by the
+ * update-class resolvers `updateOne` / `updateMany`) uses acl.write.
+ * A schema that declares none of these stays strictly owner-bound.
  */
 const wrapFilter = (resolver, { schema, action, kind = 'write' } = {}) => {
   stripFromInput(resolver, 'record');
@@ -257,7 +259,8 @@ const wrapFilter = (resolver, { schema, action, kind = 'write' } = {}) => {
 
     const bypass =
       (kind === 'read' && bypassUserScopeForList(schema, user)) ||
-      (kind === 'delete' && bypassUserScopeForDelete(schema, user));
+      (kind === 'delete' && bypassUserScopeForDelete(schema, user)) ||
+      (kind === 'write' && bypassUserScopeForWrite(schema, user));
 
     rp.args.filter = {
       ...(rp.args.filter || {}),
@@ -401,8 +404,8 @@ const wrapFindByIds = (resolver, { schema } = {}) =>
 
 /**
  * For *ById mutations (updateById, removeById). Pre-checks ownership
- * unless the schema grants the appropriate bypass: acl.list for
- * updateById (read-class permission), acl.delete for removeById.
+ * unless the schema grants the appropriate bypass: acl.write for
+ * updateById (the default write-class kind), acl.delete for removeById.
  */
 const wrapByIdMutation = (Model) => (resolver, { schema, action, kind = 'write' } = {}) => {
   stripFromInput(resolver, 'record');
@@ -415,7 +418,8 @@ const wrapByIdMutation = (Model) => (resolver, { schema, action, kind = 'write' 
 
     const bypass =
       (kind === 'read' && bypassUserScopeForList(schema, user)) ||
-      (kind === 'delete' && bypassUserScopeForDelete(schema, user));
+      (kind === 'delete' && bypassUserScopeForDelete(schema, user)) ||
+      (kind === 'write' && bypassUserScopeForWrite(schema, user));
 
     const ownershipQuery = bypass
       ? { _id: rp.args._id }

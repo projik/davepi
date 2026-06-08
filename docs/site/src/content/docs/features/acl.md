@@ -9,7 +9,7 @@ write. Once you opt in, two scopes apply:
 
 | Scope | Where declared | What it does |
 |-------|----------------|--------------|
-| Document-level | `schema.acl.{ list, delete }` | Listed roles bypass the `userId` filter for the named operation. |
+| Document-level | `schema.acl.{ list, delete, write }` | Listed roles bypass the `userId` filter for the named operation. |
 | Field-level | `field.acl.{ read, create, update }` | Listed roles see / write the field; everyone else sees responses with the field stripped, and writes that supply the field server-side rejected. |
 
 Roles travel in the JWT's `roles` claim. The default User model
@@ -26,6 +26,7 @@ module.exports = {
   acl: {
     list: ['admin', 'support'],     // see across tenants on list / find / search
     delete: ['admin'],              // delete records they don't own
+    write: ['admin'],               // update records they don't own
   },
 };
 ```
@@ -34,16 +35,28 @@ module.exports = {
 |------|-----------|
 | `list` | List endpoints (`GET /api/v1/<path>`), `findMany` / `findOne` / `count` resolvers, `list_<path>` MCP tool, full-text search, audit-log history, aggregations. |
 | `delete` | DELETE by id, `<path>RemoveById` GraphQL, `delete_<path>` MCP. Restore inherits from `delete`. |
+| `write` | PUT by id (`PUT /api/v1/<path>/:id`), `<path>UpdateById` / `<path>UpdateOne` / `<path>UpdateMany` GraphQL, `update_<path>` MCP. |
 
 Without a slot, that operation stays owner-only. Only callers whose
 JWT carries one of the listed roles bypass the `userId` filter; any
 other role is treated as owner-only.
 
-There's deliberately no `create` or `update` slot at the document
-level — write operations always stamp `userId`/`accountId` from the
-caller's JWT, so cross-tenant writes are structurally impossible.
-Field-level ACL is the right tool when only some roles can set
-certain fields.
+There's deliberately no `create` slot at the document level — create
+always stamps `userId`/`accountId` from the caller's JWT, so a record
+is always born owned by its creator. The `write` slot covers the
+"admin edits a customer-owned record" case **without** transferring
+ownership: tenant fields are stripped from the update payload at every
+persist site, so the bypass widens *which* records a role may update,
+never *who* ends up owning them. Field-level `update` ACL still
+applies on top — a `write`-bypass role that lacks a field's
+`acl.update` role still can't touch that field.
+
+One surface deliberately stays owner-only even for `write` roles: the
+bulk `PUT /api/v1/<path>` upsert. Its query predicate doubles as the
+insert seed, so a `userId` bypass there could mint ownerless
+documents; bulk cross-user edits aren't worth that hazard. Use the
+by-id PUT (or GraphQL `UpdateMany` with an explicit filter, which
+never upserts) instead.
 
 ## Field-level ACL
 

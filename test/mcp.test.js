@@ -180,6 +180,64 @@ describe('MCP server: tool calls', () => {
     }
   });
 
+  test('update_<path>: acl.write role edits a record it does not own; owner preserved', async () => {
+    // Schema that lets `admin` update across tenants (acl.write) but
+    // keeps everyone else owner-bound.
+    await ctx.app.locals.schemaLoader.loadSchema({
+      path: 'mcp_writable',
+      collection: 'mcp_writable',
+      version: 'v1',
+      fields: [
+        { name: 'userId', type: String, required: true },
+        { name: 'name', type: String, required: true },
+      ],
+      acl: { write: ['admin'] },
+    });
+    try {
+      // Owner is a real registered user so the record carries a valid
+      // userId; admin / stranger are synthetic JWT payloads with
+      // distinct ids.
+      const ownerReg = await registerUser(ctx.request, ctx.app);
+      const owner = decodedFromRegister(ownerReg);
+      const admin = { user_id: '000000000000000000000001', roles: ['admin'] };
+      const stranger = { user_id: '000000000000000000000002', roles: ['user'] };
+
+      const ownerMcp = await connectMcp({ schemaLoader: ctx.app.locals.schemaLoader, user: owner });
+      const adminMcp = await connectMcp({ schemaLoader: ctx.app.locals.schemaLoader, user: admin });
+      const strangerMcp = await connectMcp({ schemaLoader: ctx.app.locals.schemaLoader, user: stranger });
+      try {
+        const created = parseStructured(await ownerMcp.client.callTool({
+          name: 'create_mcp_writable',
+          arguments: { record: { name: 'orig' } },
+        }));
+        expect(created.userId).toBe(ownerReg._id);
+
+        // Stranger (no acl.write role) can't reach it.
+        const strangerAttempt = await strangerMcp.client.callTool({
+          name: 'update_mcp_writable',
+          arguments: { id: created._id, record: { name: 'nope' } },
+        });
+        expect(strangerAttempt.isError).toBe(true);
+        expect(parseStructured(strangerAttempt).error.code).toBe('NOT_FOUND');
+
+        // Admin edits the non-owned record.
+        const updated = parseStructured(await adminMcp.client.callTool({
+          name: 'update_mcp_writable',
+          arguments: { id: created._id, record: { name: 'admin-edit' } },
+        }));
+        expect(updated.name).toBe('admin-edit');
+        // Ownership did not move to the admin.
+        expect(updated.userId).toBe(ownerReg._id);
+      } finally {
+        await ownerMcp.close();
+        await adminMcp.close();
+        await strangerMcp.close();
+      }
+    } finally {
+      await ctx.app.locals.schemaLoader.unloadSchema('v1/mcp_writable');
+    }
+  });
+
   test('typed errors come back as isError results, not exceptions', async () => {
     const registered = await registerUser(ctx.request, ctx.app);
     const user = decodedFromRegister(registered);

@@ -88,6 +88,7 @@ const {
   filterWritable,
   bypassUserScopeForList,
   bypassUserScopeForDelete,
+  bypassUserScopeForWrite,
   stampTenantFields,
   stripTenantFields,
   getRoleScopeFilter,
@@ -1309,13 +1310,17 @@ function createSchemaLoader({ app, apiSpec, setApolloRouter, buildGraphqlContext
       `/api/${s.version}/${path}/:id`,
       authWrite,
       asyncHandler(async (req, res) => {
-        // Updates stay strictly owner-bound. acl.list grants read
-        // visibility; the spec doesn't define a write-bypass slot, so
-        // only the record's owner may PUT regardless of role.
-        const query = applySoftDeleteFilter(
-          { userId: req.user.user_id, _id: req.params.id },
-          req
-        );
+        // By default updates are owner-bound. A schema can declare
+        // `acl.write: [roles]` to let a privileged role edit records
+        // owned by another user (e.g. an admin correcting a
+        // customer-owned record). The record's owner is unaffected:
+        // tenant fields are stripped from `$set` below, so the bypass
+        // only widens *which* records the role may touch, never who
+        // owns the result.
+        const ownerQuery = bypassUserScopeForWrite(s, req.user)
+          ? { _id: req.params.id }
+          : { userId: req.user.user_id, _id: req.params.id };
+        const query = applySoftDeleteFilter(ownerQuery, req);
         let writable = filterWritable(req.body, s, req.user, 'update');
         // We need the `before` snapshot whenever audit is on OR
         // there's a state-machine field whose validation needs the

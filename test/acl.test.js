@@ -9,8 +9,8 @@ const ctx = setupTestApp();
  *   admin-only on update.
  * - `salary` is fully ACL'd: admin/hr only on read, admin/hr only on
  *   create, admin only on update.
- * - List + delete bypass user-isolation for admin/hr / admin
- *   respectively.
+ * - List + delete + write bypass user-isolation for admin/hr / admin
+ *   / admin respectively.
  */
 const employeeSchema = {
   path: 'employee',
@@ -37,6 +37,7 @@ const employeeSchema = {
   acl: {
     list: ['admin', 'hr'],
     delete: ['admin'],
+    write: ['admin'],
   },
 };
 
@@ -240,6 +241,56 @@ describe('Roles & field-level ACLs', () => {
     });
   });
 
+  describe('REST: document-level write bypass (acl.write)', () => {
+    test("admin updates a record they don't own; stranger 404s; owner unchanged", async () => {
+      const owner = await registerWithRoles('wb-owner@x.com');
+      const created = await post(
+        '/api/v1/employee',
+        { name: 'orig-name' },
+        owner.token
+      );
+      const id = created.body._id;
+
+      // A non-privileged stranger cannot reach the record at all.
+      const stranger = await registerWithRoles('wb-stranger@x.com');
+      const strangerPut = await put(
+        `/api/v1/employee/${id}`,
+        { name: 'stranger-edit' },
+        stranger.token
+      );
+      expect(strangerPut.status).toBe(404);
+
+      // Admin (acl.write) edits the non-owned record.
+      const admin = await registerWithRoles('wb-admin@x.com', 'admin');
+      const adminPut = await put(
+        `/api/v1/employee/${id}`,
+        { name: 'admin-edit', department: 'Eng' },
+        admin.token
+      );
+      expect(adminPut.status).toBe(200);
+
+      // The edit landed but ownership did NOT move to the admin: the
+      // original owner still sees (and owns) the record.
+      const ownerGet = await get(`/api/v1/employee/${id}`, owner.token);
+      expect(ownerGet.status).toBe(200);
+      expect(ownerGet.body.name).toBe('admin-edit');
+      expect(ownerGet.body.userId).toBe(owner._id);
+    });
+
+    test('field-level update ACL still applies under the write bypass', async () => {
+      // hr can write across users? No — hr is not in acl.write, only
+      // acl.list. So hr editing a non-owned record 404s, proving the
+      // bypass is role-gated and not a blanket open door.
+      const owner = await registerWithRoles('wb-hr-owner@x.com');
+      const created = await post('/api/v1/employee', { name: 'hr-target' }, owner.token);
+      const id = created.body._id;
+
+      const hr = await registerWithRoles('wb-hr@x.com', 'user', 'hr');
+      const hrPut = await put(`/api/v1/employee/${id}`, { name: 'hr-edit' }, hr.token);
+      expect(hrPut.status).toBe(404);
+    });
+  });
+
   describe('REST: bulk PUT upsert cannot bypass create ACL via query', () => {
     test('plain user cannot smuggle ACL-restricted fields through ?salary= on upsert', async () => {
       const user = await registerWithRoles('upsert@x.com');
@@ -366,6 +417,35 @@ describe('Roles & field-level ACLs', () => {
         `query { employeeById(_id: "${recordId}") { name salary } }`
       );
       expect(fetchedAsAdmin.body.data.employeeById.salary).toBe(77000);
+    });
+
+    test('admin (acl.write) updates a non-owned record via UpdateById; owner unchanged', async () => {
+      const owner = await registerWithRoles('gql-wb-owner@x.com');
+      const created = await post('/api/v1/employee', { name: 'gql-orig' }, owner.token);
+      const id = created.body._id;
+
+      // A stranger without acl.write cannot update it: the ownership
+      // pre-check fails closed with a FORBIDDEN "Record not found".
+      const stranger = await registerWithRoles('gql-wb-stranger@x.com');
+      const strangerUpd = await gql(
+        stranger.token,
+        `mutation { employeeUpdateById(_id: "${id}", record: { name: "nope" }) { record { _id name } } }`
+      );
+      expect(strangerUpd.body.data.employeeUpdateById).toBeNull();
+      expect(strangerUpd.body.errors).toBeDefined();
+
+      // Admin succeeds and the record stays owned by the original user.
+      const admin = await registerWithRoles('gql-wb-admin@x.com', 'admin');
+      const adminUpd = await gql(
+        admin.token,
+        `mutation { employeeUpdateById(_id: "${id}", record: { name: "gql-admin-edit" }) { record { _id name } } }`
+      );
+      expect(adminUpd.body.errors).toBeUndefined();
+      expect(adminUpd.body.data.employeeUpdateById.record.name).toBe('gql-admin-edit');
+
+      const ownerGet = await get(`/api/v1/employee/${id}`, owner.token);
+      expect(ownerGet.body.name).toBe('gql-admin-edit');
+      expect(ownerGet.body.userId).toBe(owner._id);
     });
   });
 });
