@@ -35,7 +35,7 @@ module.exports = {
 |------|-----------|
 | `list` | List endpoints (`GET /api/v1/<path>`), `findMany` / `findOne` / `count` resolvers, `list_<path>` MCP tool, full-text search, audit-log history, aggregations. |
 | `delete` | DELETE by id, `<path>RemoveById` GraphQL, `delete_<path>` MCP. Restore inherits from `delete`. |
-| `write` | PUT by id (`PUT /api/v1/<path>/:id`), `<path>UpdateById` / `<path>UpdateOne` / `<path>UpdateMany` GraphQL, `update_<path>` MCP. |
+| `write` | PUT by id (`PUT /api/v1/<path>/:id`), `<path>UpdateById` / `<path>UpdateOne` / `<path>UpdateMany` GraphQL, state-machine transition mutations (`<path>Transition<Field>`), `update_<path>` MCP. |
 
 Without a slot, that operation stays owner-only. Only callers whose
 JWT carries one of the listed roles bypass the `userId` filter; any

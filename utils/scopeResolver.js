@@ -591,18 +591,19 @@ const wrapComputedField = ({ type, description, projection, field, compute, buil
  * (matches the contract every other tenant-scoped wrapper
  * follows).
  *
- * `kind` and `action` are accepted for symmetry with the other
- * scope-resolver wrappers (`{ schema, kind: 'write', action:
- * 'update' }` is the natural default for a transition mutation),
- * even though `wrapStateTransition` enforces ownership directly
- * via the unique `(key, userId)` query rather than delegating to
- * the bypass slots — same posture as `wrapByIdMutation`. Passing
- * the options keeps authorisation auditing consistent across
+ * `kind` defaults to `'write'`, so a transition honours the same
+ * `schema.acl.write` bypass as `wrapByIdMutation`'s update path: a
+ * role granted `acl.write` can transition a record it doesn't own,
+ * keeping the transition surface consistent with `UpdateById`.
+ * Ownership is unaffected — the runner only `$set`s the state
+ * field, never the tenant fields. `action` is carried for
+ * convention / authorisation auditing symmetry with the other
  * wrappers.
  *
- * Tenant isolation lives in the ownership query the wrapper
- * itself runs (`{ _id: args._id, userId }`) — the runner gets a
- * record it's already authorised to mutate.
+ * Tenant isolation lives in the ownership query the wrapper itself
+ * runs (`{ _id: args._id, userId }`, or `{ _id: args._id }` when the
+ * `acl.write` bypass applies) — the runner gets a record it's
+ * already authorised to mutate.
  */
 const wrapStateTransition = ({
   type,
@@ -611,9 +612,8 @@ const wrapStateTransition = ({
   Model,
   runner,
   schema,
-  // kind/action carried for convention only — see comment above.
-  // eslint-disable-next-line no-unused-vars
   kind = 'write',
+  // action carried for convention only — see comment above.
   // eslint-disable-next-line no-unused-vars
   action = 'update',
 } = {}) => ({
@@ -628,7 +628,14 @@ const wrapStateTransition = ({
     // A transition is a write — refuse client-authed (X-Client-Id)
     // callers, same as every other GraphQL write wrapper.
     refuseClientWrite(ctx.user);
-    const ownership = { _id: params._id, userId: ctx.user.user_id };
+    // Honour the acl.write bypass so write-bypass roles can transition
+    // a record they don't own (same slot wrapByIdMutation's update
+    // path consults). Ownership still can't move — the runner only
+    // sets the state field.
+    const bypass = kind === 'write' && bypassUserScopeForWrite(schema, ctx.user);
+    const ownership = bypass
+      ? { _id: params._id }
+      : { _id: params._id, userId: ctx.user.user_id };
     const before = await Model.findOne(ownership).lean();
     if (!before) throw new ForbiddenError('Record not found');
     const result = await runner({ user: ctx.user, before, to: params.to });

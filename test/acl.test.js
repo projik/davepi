@@ -88,9 +88,33 @@ const del = (path, token) => {
   return r;
 };
 
+// A state-machine schema with the document-level write bypass, used to
+// prove transition mutations honour acl.write the same way UpdateById
+// does (a write-bypass role can transition a record it doesn't own).
+const ticketSchema = {
+  path: 'acl_ticket',
+  collection: 'acl_ticket',
+  version: 'v1',
+  fields: [
+    { name: 'userId', type: String, required: true },
+    { name: 'title', type: String, required: true },
+    {
+      name: 'status',
+      type: String,
+      stateMachine: {
+        initial: 'open',
+        states: ['open', 'closed'],
+        transitions: { open: ['closed'], closed: [] },
+      },
+    },
+  ],
+  acl: { write: ['admin'] },
+};
+
 describe('Roles & field-level ACLs', () => {
   beforeAll(async () => {
     await ctx.app.locals.schemaLoader.loadSchema(employeeSchema);
+    await ctx.app.locals.schemaLoader.loadSchema(ticketSchema);
   });
 
   describe('User model + JWT', () => {
@@ -445,6 +469,36 @@ describe('Roles & field-level ACLs', () => {
 
       const ownerGet = await get(`/api/v1/employee/${id}`, owner.token);
       expect(ownerGet.body.name).toBe('gql-admin-edit');
+      expect(ownerGet.body.userId).toBe(owner._id);
+    });
+
+    test('Transition mutation honours acl.write: admin transitions a non-owned record; stranger cannot', async () => {
+      const owner = await registerWithRoles('gql-tr-owner@x.com');
+      const created = await post('/api/v1/acl_ticket', { title: 'T' }, owner.token);
+      expect(created.status).toBe(201);
+      const id = created.body._id;
+
+      // Stranger without acl.write can't transition it.
+      const stranger = await registerWithRoles('gql-tr-stranger@x.com');
+      const strangerTr = await gql(
+        stranger.token,
+        `mutation { acl_ticketTransitionStatus(_id: "${id}", to: closed) { _id status } }`
+      );
+      expect(strangerTr.body.data.acl_ticketTransitionStatus).toBeNull();
+      expect(strangerTr.body.errors).toBeDefined();
+
+      // Admin (acl.write) transitions the non-owned record.
+      const admin = await registerWithRoles('gql-tr-admin@x.com', 'admin');
+      const adminTr = await gql(
+        admin.token,
+        `mutation { acl_ticketTransitionStatus(_id: "${id}", to: closed) { _id status } }`
+      );
+      expect(adminTr.body.errors).toBeUndefined();
+      expect(adminTr.body.data.acl_ticketTransitionStatus.status).toBe('closed');
+
+      // The transition actually persisted and ownership is unchanged.
+      const ownerGet = await get(`/api/v1/acl_ticket/${id}`, owner.token);
+      expect(ownerGet.body.status).toBe('closed');
       expect(ownerGet.body.userId).toBe(owner._id);
     });
   });

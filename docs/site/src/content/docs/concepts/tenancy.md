@@ -59,14 +59,15 @@ module.exports = {
 ```
 
 The `write` slot is how an admin edits a customer-owned record. It
-bypasses the `userId` filter on the by-id update surfaces (REST
-`PUT /:id`, GraphQL `UpdateById` / `UpdateOne` / `UpdateMany`, MCP
-`update_<path>`) — but **ownership never moves**: the framework still
-strips `userId` / `accountId` from the update payload, so the record
-stays owned by its original tenant and field-level `acl.update` still
-applies. There's no `create` bypass (create always stamps ownership
-from the JWT), and the bulk `PUT /<path>` upsert stays owner-only
-because its filter doubles as the insert seed.
+bypasses the `userId` filter on every update surface: REST
+`PUT /:id`, GraphQL `UpdateById` / `UpdateOne` / `UpdateMany` and the
+state-machine transition mutations, and MCP `update_<path>` — but
+**ownership never moves**: the framework still strips `userId` /
+`accountId` from the update payload, so the record stays owned by its
+original tenant and field-level `acl.update` still applies. There's no
+`create` bypass (create always stamps ownership from the JWT), and the
+bulk `PUT /<path>` upsert stays owner-only because its filter doubles
+as the insert seed.
 
 Field-level ACL is also supported:
 
@@ -108,6 +109,19 @@ Every one of these is closed:
 - GET / PUT / DELETE by id: filter includes `userId`, so a borrowed `_id` returns 404.
 - `__include`: the related query re-applies `userId`.
 - GraphQL bulk: `wrapFilter` injects `userId` into the filter.
+
+These closures are the default for **every** caller. The only way to
+reach across tenants is to be explicitly granted a document-level ACL
+bypass — `acl.list` (read), `acl.write` (update), `acl.delete`
+(delete) — on that specific schema. A role granted such a slot *is*
+trusted to operate cross-tenant, so for it the corresponding bulk
+mutation is intentionally open: an `acl.write` role can run
+`accountUpdateMany(filter: {})` to update every record, exactly as an
+`acl.delete` role can run `accountRemoveMany(filter: {})` to delete
+every record. That's the point of the slot, not a leak — grant it only
+to operator roles, and never to the default `user` role. (Ownership
+still never moves: tenant fields stay stamped from the JWT even under
+a write bypass.)
 
 The test suite has cross-tenant isolation tests for every surface
 (REST, GraphQL, MCP, relations, aggregations) — they're a structural

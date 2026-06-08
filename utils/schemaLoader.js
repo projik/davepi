@@ -1853,8 +1853,14 @@ function createSchemaLoader({ app, apiSpec, setApolloRouter, buildGraphqlContext
               });
             }
             if (!v.transition) return before; // no-op: same state
+            // `before` was already authorised by wrapStateTransition's
+            // ownership query (which honours the acl.write bypass), so
+            // target it by _id alone. Re-adding `userId` here would
+            // silently no-op a legitimate cross-tenant transition by a
+            // write-bypass role; the $set only touches the state field,
+            // never tenant ownership.
             await model.updateOne(
-              { _id: before._id, userId: user.user_id },
+              { _id: before._id },
               { $set: { [f.name]: to } }
             );
             const after = await model.findById(before._id).lean();
