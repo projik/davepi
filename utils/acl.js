@@ -20,6 +20,22 @@
  *                      only) still applies for everyone else.
  * `schema.acl.delete` — these roles BYPASS the userId scope on delete
  *                       and may remove records they don't own.
+ * `schema.acl.write`  — these roles BYPASS the userId scope on update
+ *                       and may edit records they don't own (e.g. an
+ *                       admin correcting a customer-owned record). The
+ *                       record's owner is unchanged: tenant fields are
+ *                       still stripped from the update payload, so the
+ *                       bypass widens *which* records a role may write,
+ *                       never *who* ends up owning them. Field-level
+ *                       update ACL still applies on top. The bypass
+ *                       covers the by-id update surfaces (REST
+ *                       `PUT /{path}/:id`, GraphQL `{path}UpdateById`)
+ *                       and the filter-based GraphQL update resolvers
+ *                       (`UpdateOne` / `UpdateMany`); the REST bulk
+ *                       `PUT /{path}` upsert deliberately stays
+ *                       owner-scoped because its filter doubles as the
+ *                       insert seed and a bypass there would mint
+ *                       ownerless documents.
  * `schema.acl.scope`  — per-role MANDATORY filter that's `$and`-ed into
  *                       every read for that role. Use it to expose a
  *                       subset of a collection to a role that bypasses
@@ -176,6 +192,19 @@ function bypassUserScopeForDelete(schema, user) {
 }
 
 /**
+ * Should the caller bypass the userId scope on update? True when the
+ * schema declares acl.write AND the caller has one of those roles.
+ * Lets a privileged role edit records owned by other users; ownership
+ * is unaffected because tenant fields are stripped from the persisted
+ * payload at every update site.
+ */
+function bypassUserScopeForWrite(schema, user) {
+  const allowed = schema && schema.acl && schema.acl.write;
+  if (!allowed || !allowed.length) return false;
+  return hasOverlap(allowed, userRoles(user));
+}
+
+/**
  * Check field-level read ACL on a single field. The standard
  * projection path (`projectByAcl`) is the preferred enforcement
  * site for stored fields, but TC-added GraphQL fields and computed
@@ -238,6 +267,7 @@ module.exports = {
   filterWritable,
   bypassUserScopeForList,
   bypassUserScopeForDelete,
+  bypassUserScopeForWrite,
   userRoles,
   hasOverlap,
   canReadField,

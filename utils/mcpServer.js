@@ -41,6 +41,7 @@ const {
   filterWritable,
   bypassUserScopeForList,
   bypassUserScopeForDelete,
+  bypassUserScopeForWrite,
   getRoleScopeFilter,
   applyRoleScopeFilter,
 } = require('./acl');
@@ -428,7 +429,13 @@ function registerSchemaTools(server, entry, { schemaLoader, getUser }) {
     },
     handlerOf(async (args) => {
       const user = await requireUser(getUser);
-      const filter = { _id: args.id, userId: user.user_id };
+      // `acl.write` roles may update records they don't own (the
+      // record's owner is preserved — tenant fields are stripped from
+      // the $set below). Matches the REST PUT and GraphQL UpdateById
+      // bypass.
+      const filter = bypassUserScopeForWrite(s, user)
+        ? { _id: args.id }
+        : { _id: args.id, userId: user.user_id };
       if (softDelete) filter.deletedAt = null;
       const writable = filterWritable(args.record || {}, s, user, 'update');
       // filterWritable preserves PROTECTED_WRITE_FIELDS (userId,

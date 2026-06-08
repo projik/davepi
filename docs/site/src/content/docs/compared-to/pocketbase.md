@@ -133,8 +133,8 @@ PocketBase → dAvePi:
    - `file` → `type: 'File'` with the `accept` / `maxBytes` from
      the original config.
 3. **API rules → ACL.** PocketBase's per-CRUD-verb expressions
-   roughly map to dAvePi's `acl.list` / `acl.delete` (document
-   level) and field-level `acl.read` / `acl.create` /
+   roughly map to dAvePi's `acl.list` / `acl.write` / `acl.delete`
+   (document level) and field-level `acl.read` / `acl.create` /
    `acl.update`. "@request.auth.id = id" is the default
    owner-only mode — no policy needed in dAvePi.
 4. **Auth.** Re-register users; password hashes don't migrate

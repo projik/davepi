@@ -34,16 +34,16 @@ Every Mongoose query: { ...filter, userId: req.user.user_id }
 |---------|------------------|
 | REST POST | `utils/schemaLoader.js` create handler stamps `userId` from `req.user.user_id` after `filterWritable` runs. |
 | REST GET (list / single) | The Mongo filter has `userId: req.user.user_id` injected before the find. |
-| REST PUT (single / bulk) | Same — the ownership query carries `userId`. Bulk PUT also forces it into the upsert filter. |
+| REST PUT (single / bulk) | Same — the ownership query carries `userId` (unless the schema's `acl.write` grants a cross-tenant update; see below). Bulk PUT always forces `userId` into the upsert filter and is never bypassed. |
 | REST DELETE | Same. |
 | GraphQL | `wrapFilter` / `wrapByIdMutation` / `wrapFindById` in `utils/scopeResolver.js` inject `userId` into `rp.args.filter` before the resolver runs. |
 | MCP | Tool handlers go through the same Mongoose models with the same scoping. |
 | Aggregations | `runAggregation` prepends `$match: { userId }` as the first pipeline stage — even `unsafe: true` aggregations can't return cross-tenant rows. |
 | Relations (`__include`) | Each related query re-applies `userId` against the target collection — see [Relations](/features/relations/). |
 
-## ACL: bypass slots for read-many / delete
+## ACL: bypass slots for read-many / update / delete
 
-Some operators need to see across tenants — admin staff, customer
+Some operators need to reach across tenants — admin staff, customer
 support, etc. A schema can opt in:
 
 ```js
@@ -52,10 +52,22 @@ module.exports = {
   fields: [...],
   acl: {
     list: ['admin'],     // these roles see all rows on list / findMany
+    write: ['admin'],    // these roles can update records they don't own
     delete: ['admin'],   // these roles can delete records they don't own
   },
 };
 ```
+
+The `write` slot is how an admin edits a customer-owned record. It
+bypasses the `userId` filter on every update surface: REST
+`PUT /:id`, GraphQL `UpdateById` / `UpdateOne` / `UpdateMany` and the
+state-machine transition mutations, and MCP `update_<path>` — but
+**ownership never moves**: the framework still strips `userId` /
+`accountId` from the update payload, so the record stays owned by its
+original tenant and field-level `acl.update` still applies. There's no
+`create` bypass (create always stamps ownership from the JWT), and the
+bulk `PUT /<path>` upsert stays owner-only because its filter doubles
+as the insert seed.
 
 Field-level ACL is also supported:
 
@@ -97,6 +109,19 @@ Every one of these is closed:
 - GET / PUT / DELETE by id: filter includes `userId`, so a borrowed `_id` returns 404.
 - `__include`: the related query re-applies `userId`.
 - GraphQL bulk: `wrapFilter` injects `userId` into the filter.
+
+These closures are the default for **every** caller. The only way to
+reach across tenants is to be explicitly granted a document-level ACL
+bypass — `acl.list` (read), `acl.write` (update), `acl.delete`
+(delete) — on that specific schema. A role granted such a slot *is*
+trusted to operate cross-tenant, so for it the corresponding bulk
+mutation is intentionally open: an `acl.write` role can run
+`accountUpdateMany(filter: {})` to update every record, exactly as an
+`acl.delete` role can run `accountRemoveMany(filter: {})` to delete
+every record. That's the point of the slot, not a leak — grant it only
+to operator roles, and never to the default `user` role. (Ownership
+still never moves: tenant fields stay stamped from the JWT even under
+a write bypass.)
 
 The test suite has cross-tenant isolation tests for every surface
 (REST, GraphQL, MCP, relations, aggregations) — they're a structural

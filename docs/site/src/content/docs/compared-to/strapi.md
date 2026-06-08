@@ -136,8 +136,8 @@ Strapi → dAvePi:
    mutation gives you validated state changes the same way
    Strapi's publish action does.
 3. **Permissions → ACL.** Strapi's roles+permissions table
-   maps to dAvePi's `acl.list` / `acl.delete` and field-level
-   `acl.read` / `acl.create` / `acl.update`.
+   maps to dAvePi's `acl.list` / `acl.write` / `acl.delete` and
+   field-level `acl.read` / `acl.create` / `acl.update`.
 4. **Media library.** Move files from Strapi's
    `public/uploads/` to your chosen dAvePi storage backend;
    update the file metadata sub-documents to the new keys.

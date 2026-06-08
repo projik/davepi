@@ -22,7 +22,7 @@ SQLite to Mongo.
 | Collection field | `{ name, type }` in `fields[]` | Direct map, see table below. |
 | `id` (15-char random) | Mongo `_id: ObjectId` | All FKs rewritten in ETL; keep `legacyId` for the cutover window. |
 | `created` / `updated` | `createdAt` / `updatedAt` | Set automatically by Mongoose's `timestamps: true` (default). |
-| API rule (per CRUD verb) | `acl.list` / `acl.delete` + field-level `acl` | Per-row → document ACL; per-column → field ACL. |
+| API rule (per CRUD verb) | `acl.list` / `acl.write` / `acl.delete` + field-level `acl` | Per-row → document ACL (`write` = cross-tenant update); per-column → field ACL. |
 | `users` system collection | `User` model (`model/user.js`) | Force password reset on cutover. |
 | Auth tokens | JWT + refresh (dAvePi-issued) | Tokens don't migrate. Users re-login (or reset password). |
 | OAuth providers | Build your own | dAvePi ships email/password + JWT. |

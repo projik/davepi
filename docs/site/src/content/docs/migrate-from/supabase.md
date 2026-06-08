@@ -22,7 +22,7 @@ storage + RLS picture together.
 | Column → type | `{ name, type }` in `fields[]` | Type mapping below. |
 | `user_id uuid REFERENCES auth.users` | `userId: String` | Framework-stamped tenant column. |
 | RLS policies (`USING (auth.uid() = user_id)`) | (default behaviour) | The owner-only pattern is dAvePi's default — no policy. |
-| RLS with role check | `acl.list` / `acl.delete` / `field.acl.{read,create,update}` | Per-row → document ACL; per-column → field ACL. |
+| RLS with role check | `acl.list` / `acl.write` / `acl.delete` / `field.acl.{read,create,update}` | Per-row → document ACL (`write` = cross-tenant update); per-column → field ACL. |
 | `pg_graphql` GraphQL surface | Auto-generated GraphQL | Both expose the schema; query shape differs. |
 | `auth.users` table | `User` model (`model/user.js`) | Force password reset on cutover. |
 | Storage bucket | File field (`type: 'File'`) + S3 or local driver | One bucket → one schema using file fields, typically. |

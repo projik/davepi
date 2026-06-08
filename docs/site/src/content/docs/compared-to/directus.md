@@ -127,8 +127,8 @@ Directus → dAvePi:
    - `m2o` / `o2m` / `m2m` → plain `String` FK + `relations` entry
    - `file` / `files` → `type: 'File'`
 2. **Permissions → ACL.** Directus's role-based collection
-   permissions map to `acl.list` / `acl.delete` (document level)
-   and `field.acl.{read,create,update}` (field level).
+   permissions map to `acl.list` / `acl.write` / `acl.delete`
+   (document level) and `field.acl.{read,create,update}` (field level).
 3. **Activity log → audit.** dAvePi's audit log writes
    automatically once `audit: true` (the default) is set on the
    schema.
