@@ -36,6 +36,24 @@ describe('relations: pure helpers', () => {
       });
     });
 
+    test('fk shorthand resolves as foreignKey for hasMany/hasOne', () => {
+      const out = normalizeRelations({
+        relations: {
+          tasks: { hasMany: 'task', fk: 'acctId' },
+          primary: { hasOne: 'contact', fk: 'acctId' },
+        },
+      });
+      expect(out.tasks.foreignKey).toBe('acctId');
+      expect(out.primary.foreignKey).toBe('acctId');
+    });
+
+    test('fk shorthand resolves as localKey for belongsTo', () => {
+      const out = normalizeRelations({
+        relations: { owner: { belongsTo: 'user', fk: 'ownerId' } },
+      });
+      expect(out.owner.localKey).toBe('ownerId');
+    });
+
     test('belongsTo localKey defaults to `${name}Id`', () => {
       const out = normalizeRelations({
         relations: { author: { belongsTo: 'user' } },
