@@ -31,7 +31,7 @@ before starting the next, and lean on hot reload to verify as you go.
 
 **The framework already gives you these — NEVER build them by hand:** auth
 (`/register`, `/login`, JWT issue/verify, `userId` + `accountId` stamping),
-full CRUD, list pagination / sort / filter (`__page`, `__sort`, `q`,
+full CRUD, list pagination / sort / filter (`__page`, `__sort`, `__q`,
 mongo-querystring), validation, soft-delete + restore + history, audit
 logging, file uploads, idempotency, and the REST + GraphQL + MCP + Swagger +
 `_describe` surfaces. If you catch yourself writing a login route, a CRUD
@@ -121,7 +121,7 @@ Save the file. The framework now serves:
   match:       /^[A-Z]/,                         // string regex
   trim:        true,                             // string normalizers
   lowercase:   true,
-  searchable:  true,                             // joins the schema's full-text index; enables ?q= and search_<path>
+  searchable:  true,                             // joins the schema's full-text index; enables ?__q= (REST) and search_<path> (MCP)
   index:       true,                             // single-field index. For per-tenant uniqueness, use compositeIndex (see below)
   acl:         { read: ['admin', 'hr'] },        // field-level ACL — see "ACL" below
   description: 'Deal value in cents.',           // surfaces in Swagger / _describe / TS client doc comment
@@ -502,7 +502,7 @@ Agents should branch on `code`, not the human-readable `message`.
 - **State machine without `initial`.** POST will fail because the framework
   can't decide a starting state.
 - **Hand-rolling pagination on a list endpoint.** The auto-generated route
-  already supports `__page`, `__sort`, `__perPage`, `__include`, `q`,
+  already supports `__page`, `__sort`, `__perPage`, `__include`, `__q`,
   `__includeDeleted`, plus mongo-querystring filters.
 - **A `unique: true` index without `userId` in the key.** Creates a
   global constraint that crosses tenants. Use a `compositeIndex: [{ userId: 1, ... }]`.
