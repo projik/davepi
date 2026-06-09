@@ -348,6 +348,60 @@ guide) shape the **backend** and its `/_describe` contract; davepi-ui consumes
 that contract to render the **frontend**. Get the backend's `_describe` right
 first — the UI is downstream of it.
 
+## Conversational agents & chatbots — use @davepi/agent
+
+When the task is a **chatbot, support agent, Slack bot, or AI assistant** over
+this backend, use [**`@davepi/agent`**](https://docs.davepi.dev/surfaces/agent/) —
+don't hand-wire an LLM, a tool loop, and auth against the REST API. It ships
+pre-wired against davepi's built-in **MCP server**, so every schema's CRUD +
+relations + aggregations + audit + file ops are available as tools out of the
+box, with **tenant isolation and ACL enforced server-side** — never in the
+prompt.
+
+```bash
+npm install @davepi/agent
+export DAVEPI_URL=http://localhost:{{PORT}}
+export ANTHROPIC_API_KEY=sk-ant-...          # or OPENAI_API_KEY; or LLM_PROVIDER=ollama for local
+export DAVEPI_BEARER=<jwt-from-/login>       # or DAVEPI_CLIENT_ID=<id> for anonymous reads
+npx davepi-agent                             # HTTP /chat (SSE) on :5060
+```
+
+What it gives you:
+
+- **Channels** — HTTP `/chat` (Server-Sent Events), a Slack bot (`@slack/bolt`,
+  Block Kit tables + QuickChart images), and Telegram / WhatsApp / embeddable-widget stubs.
+- **LLM providers** — Anthropic (default), OpenAI, or local Ollama, switched via `LLM_PROVIDER`.
+- **Two auth modes** — `service` (one JWT or `X-Client-Id` for the whole bot;
+  right for an anonymous storefront widget) or `per-user` (each channel user
+  links to a real davepi user via an OAuth-style flow, so reads are scoped to
+  *that* user). Set with `AGENT_AUTH_MODE`.
+- **Persona & memory** — set `AGENT_KEY` and the agent folds a per-tenant
+  `agentMemory` row, a per-end-user `customerProfile` row, and an `agentPersona`
+  into the system prompt. These slots are **snapshotted and frozen at session
+  start** (so the prefix stays cache-stable); the agent self-authors them via
+  the schema-generated MCP tools (`update_agentMemory`, …), and a write takes
+  effect on the **next** session. Treat memory/persona as slow-changing
+  background — for anything live (status, balances, inventory) the agent calls a
+  tool to read it fresh.
+- **Tool router** — backends past `AGENT_TOOL_LIMIT` (default 40) schemas switch
+  to pick-resource-then-load-tools so the surface stays manageable.
+- **Proactive / scheduled agents** — pair with `davepi-plugin-cron` and
+  `agent.scheduledSkill({ skill, slackChannel })` to run a fresh agent on a
+  schedule that follows a named, **approved** skill (SLA digests, follow-ups,
+  end-of-day summaries).
+
+**The ACL boundary is the JWT / client id — never the prompt.** This is the one
+rule that matters most: the agent never re-implements ACL checks and never
+constrains results with prompt text like "only show user X's data" (a
+confused-deputy bug). To scope a service-account bot to a slice, declare a
+`schema.acl.scope[role]` filter on the **backend** (see ACL above) — the MCP
+server applies it on every read and the agent never even sees it. Same lesson
+as everywhere else in davepi: enforce in the schema, not in the caller.
+
+Programmatic use (`startAgent()`, `createAgent()`, `runTurn()`) and the full env
+reference are in the package README and at
+<https://docs.davepi.dev/surfaces/agent/>.
+
 ## Conventions you must follow
 
 - **`userId` is required on every schema.** The framework stamps it from
@@ -666,4 +720,5 @@ makes the same decisions you would.
 - Idempotency contract: <https://docs.davepi.dev/features/idempotency/>
 - MCP server reference: <https://docs.davepi.dev/surfaces/mcp/>
 - TypeScript client: <https://docs.davepi.dev/surfaces/client/>
+- Conversational agent / chatbot (@davepi/agent): <https://docs.davepi.dev/surfaces/agent/>
 - Frontend / admin UI (davepi-ui): <https://github.com/projik/davepi-ui>
