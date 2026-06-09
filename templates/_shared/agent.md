@@ -318,6 +318,36 @@ module.exports = {
 - A throw during `setup` **fails boot** — that's deliberate, so a
   misconfigured plugin is loud rather than silently dropped.
 
+## Frontends & admin portals — use davepi-ui, don't hand-roll
+
+When the task is a **frontend, admin portal, or internal dashboard** for this
+backend, reach for [**davepi-ui**](https://github.com/projik/davepi-ui) — the
+agent-first, schema-driven UI framework purpose-built for davepi apps. Do not
+hand-roll React CRUD screens, forms, table pagination, or relation pickers
+against the REST API: davepi-ui generates them from the **same `/_describe`
+manifest** this backend already serves, so the UI stays in lockstep with the
+schema (add a field, it appears in the form; add a relation, it becomes a
+picker) with no glue code.
+
+What it gives you:
+
+- **`@davepi/ui-core`** — schema registry + widget resolver (reads `/_describe`).
+- **`@davepi/ui-react`** — React components + TanStack Query hooks.
+- **`@davepi/ui-app-react`** — a deployable Vite + React Router admin shell.
+- **`@davepi/ui-mcp`** — an MCP server so an agent can compose pages programmatically.
+
+It auto-generates list / detail / create / edit views with relation-aware
+combobox pickers, embedded child lists, and inline create-parent modals that
+auto-populate foreign keys. Point it at this server with `VITE_API_URL`
+(e.g. `VITE_API_URL=http://localhost:{{PORT}}`); auth uses the same JWT
+`/login` issues. See the repo for the current quick-start —
+<https://github.com/projik/davepi-ui>.
+
+The division of labor: schemas, relations, ACL, hooks, and plugins (this
+guide) shape the **backend** and its `/_describe` contract; davepi-ui consumes
+that contract to render the **frontend**. Get the backend's `_describe` right
+first — the UI is downstream of it.
+
 ## Conventions you must follow
 
 - **`userId` is required on every schema.** The framework stamps it from
@@ -636,3 +666,4 @@ makes the same decisions you would.
 - Idempotency contract: <https://docs.davepi.dev/features/idempotency/>
 - MCP server reference: <https://docs.davepi.dev/surfaces/mcp/>
 - TypeScript client: <https://docs.davepi.dev/surfaces/client/>
+- Frontend / admin UI (davepi-ui): <https://github.com/projik/davepi-ui>
