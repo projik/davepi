@@ -21,6 +21,66 @@ Read it before adding code. The full framework reference lives at
 | How do I expose data to an agent? | Already done — every schema becomes an MCP tool set automatically. Run `npx davepi mcp` (or use this project's `.mcp.json`). |
 | Where's the source of truth for "what this project exposes"? | `GET /_describe` on the running server. Read it before planning anything non-trivial. |
 
+## Build order: constructing a whole app
+
+When the task is "build an app" (not just add one resource), the **order**
+is where time gets wasted — almost always by building things the framework
+already generates, or by sequencing features so they need rework. Follow
+these phases in order. **Each phase leaves the app bootable**; finish one
+before starting the next, and lean on hot reload to verify as you go.
+
+**The framework already gives you these — NEVER build them by hand:** auth
+(`/register`, `/login`, JWT issue/verify, `userId` + `accountId` stamping),
+full CRUD, list pagination / sort / filter (`__page`, `__sort`, `__q`,
+mongo-querystring), validation, soft-delete + restore + history, audit
+logging, file uploads, idempotency, and the REST + GraphQL + MCP + Swagger +
+`_describe` surfaces. If you catch yourself writing a login route, a CRUD
+handler, or a pagination loop, stop — it already exists.
+
+0. **Orient.** On an existing server, read `GET /_describe` to see what's
+   already there. Map every requirement to a *field*, *relation*, *state
+   machine*, *aggregation*, *hook*, or *plugin*. Anything that maps to the
+   "never build" list above is already done.
+1. **Model the domain first — no code yet.** List every entity with its
+   fields, its owner (`userId`, always), its foreign keys (`parent<Schema>Id`),
+   its finite-state fields, and its relationships. Decide the **role
+   taxonomy** now (`user`, `admin`, `support`, `storefront`, …) and which
+   resources need cross-tenant or public read. Roles are a *design decision*
+   here — applied as ACL in step 4 — not a build phase of their own.
+2. **Schemas, structural pass — parents before children.** Write each
+   `schema/versions/v1/<resource>.js` with just `path`, `collection`, and
+   `fields` (include `userId`, FKs, validation, `searchable`). Entities with
+   no FK first (`account`), then their children (`contact`, `deal`). **Save
+   one file at a time and confirm it mounts** — hot reload is 50–150ms and
+   `_describe` shows the result. Don't write ten files and boot once into a
+   cascade of errors.
+3. **Wire relationships & behavior.** Now that every entity exists, add
+   `relations` (both sides), `stateMachine` fields (with `initial`!),
+   `compositeIndex` (`userId`-first), and `aggregations`. These reference
+   other schemas *by name*, so all schemas must exist before this pass.
+4. **Authorization.** Apply the step-1 roles as ACL: `field.acl.{read,create,update}`,
+   `schema.acl.{list,write,delete,scope}`, and `apiClient` rows for public
+   `X-Client-Id` reads. Layer this onto a settled data model so you aren't
+   re-editing ACL slots as fields churn.
+5. **Side effects, last.** Per-resource invariants → schema `hooks`.
+   Cross-cutting concerns (integrations, scheduled jobs, exports) → **plugins**,
+   which load *after* all schemas and introspect them via
+   `schemaLoader.listSchemas()` — that's structurally why they come last.
+   Write `#lib/*` helpers **just-in-time**, only when a hook or plugin needs
+   one. Never open with a speculative utilities layer.
+6. **Verify & finish.** Seed data, run `npm test`, regenerate the typed
+   client (`npx davepi gen-client`).
+
+**Wrong starts that cost hours — do NOT do these:**
+
+| Tempting first move | Why it's wrong | Do instead |
+|---------------------|----------------|------------|
+| Build authentication / login / JWT | Framework-provided. | Skip it — `/register`, `/login`, and `userId` stamping already work. |
+| Write CRUD routes / pagination / validation | Auto-generated from each schema. | Just write the schema file. |
+| Start with plugins or `#lib/` utilities | They're leaf dependencies that load after and depend on schemas. | Build them last (step 5), only when something needs them. |
+| Treat "roles" as a build phase | Roles are data attached to schemas via ACL. | Decide them in step 1, apply as ACL in step 4. |
+| Write all schema files, then boot once | Turns one typo into a debugging marathon. | Save and verify one resource at a time via hot reload + `_describe`. |
+
 ## To add a resource
 
 Create `schema/versions/v1/<resource>.js`:
@@ -61,7 +121,7 @@ Save the file. The framework now serves:
   match:       /^[A-Z]/,                         // string regex
   trim:        true,                             // string normalizers
   lowercase:   true,
-  searchable:  true,                             // joins the schema's full-text index; enables ?q= and search_<path>
+  searchable:  true,                             // joins the schema's full-text index; enables ?__q= (REST) and search_<path> (MCP)
   index:       true,                             // single-field index. For per-tenant uniqueness, use compositeIndex (see below)
   acl:         { read: ['admin', 'hr'] },        // field-level ACL — see "ACL" below
   description: 'Deal value in cents.',           // surfaces in Swagger / _describe / TS client doc comment
@@ -187,6 +247,106 @@ module.exports = {
 | Allow operators to see across tenants | `schema.acl.list = ['role']`. Owner-only is the baseline. |
 | Allow operators to update records they don't own | `schema.acl.write = ['role']` (e.g. an admin editing a customer record). Ownership is preserved — tenant fields are stripped from the update. |
 | Notify an external system on writes | `webhooks` block. HMAC-SHA256 signed, retries with exponential backoff. |
+
+## First-party plugins — check here before building an integration
+
+Before you write code for email, SMS, payments, social login, background
+jobs, scheduling, an audit trail, large-file uploads, or Slack alerts: **a
+maintained first-party plugin almost certainly already does it.** Re-implementing
+one of these by hand is the integration equivalent of hand-rolling a CRUD route
+— wasted effort against something the ecosystem ships. To use one, `npm install`
+it and add its npm name to `davepi.plugins` in this project's `package.json`
+(see "Plugins" below); each is configured purely through env vars and stays
+**dormant** until its credentials are set, so it's safe to declare before wiring
+the upstream service.
+
+| Need | Plugin (npm) | What it gives you |
+|------|--------------|-------------------|
+| Transactional email (welcome, receipt, password-reset) | `davepi-plugin-postmark` | `sendEmail` / `sendTemplate` for use inside hooks; optional auto-send on a matching `record` event. |
+| SMS / WhatsApp, OTP passwordless login, TOTP 2FA | `davepi-plugin-twilio` | `sendSms` / `sendWhatsApp`, OTP-over-SMS login routes, 2FA enroll/verify/challenge, inbound-SMS webhook. |
+| Payments, subscriptions, billing portal | `davepi-plugin-stripe` | `/api/checkout`, `/api/portal`, signature-verified `/api/webhooks/stripe`; mirrors subscription state into a `stripe_subscription` collection; rebroadcasts events onto the record bus. |
+| Social / SSO login (Google, GitHub, Microsoft, Apple, Discord) | `davepi-plugin-oauth` | `/auth/{provider}` + `/callback` routes, CSRF + PKCE, upserts the User and issues the standard JWT. |
+| Durable background jobs (slow work out of the request path) | `davepi-plugin-queue` | BullMQ-backed `enqueue` / `registerJob` + a `bus.emit('job:enqueue', …)` channel for hooks; retries, survives restarts. Needs Redis. |
+| Scheduled / recurring jobs (nightly export, hourly reap) | `davepi-plugin-cron` | Declarative cron in `package.json`, Mongo-backed distributed lock so only one node fires per tick. No Redis needed. |
+| Immutable audit log of every mutation | `davepi-plugin-audit` | Auto-registers an `audit` collection with before/after + JSON-patch diff + actor; queryable via the standard surface. (Note: the framework's per-schema `audit: true` already covers basic history — reach for this plugin when you need the richer queryable diff log.) |
+| Slack alerts on events | `davepi-plugin-slack` | Posts to an incoming webhook for every `record` event matching a pattern; `postMessage` for ad-hoc use in hooks. |
+| Large / direct-to-bucket file uploads (S3, R2, MinIO, GCS) | `davepi-plugin-object-storage` | Presigned-URL upload/complete/download routes + a first-class `file` collection. Use over `type: 'File'` for multi-GB or serverless uploads. |
+
+`@davepi/agent` deployments also have `davepi-plugin-skill-extractor` (turns
+resolved conversations into governed draft skills) — only relevant if you're
+running the agent's learning loop.
+
+If a genuinely new integration is needed, build it as a plugin too (see
+"Plugins" below) — don't bury cross-cutting code in a schema file or a custom
+route.
+
+## Plugins
+
+Plugins are how cross-cutting code (the integrations above, plus your own)
+attaches to the app without editing framework source. They load **after every
+schema is registered**, in declaration order, so a plugin can introspect
+`schemaLoader.listSchemas()` and wire a route or listener per resource.
+
+Register them by listing their module specifiers under `davepi.plugins` in
+**this project's** `package.json` — npm package names for first-party plugins,
+or `#plugins/<name>` paths for your own:
+
+```json
+{
+  "davepi": {
+    "plugins": ["davepi-plugin-postmark", "#plugins/audit-export"]
+  }
+}
+```
+
+A plugin module exports a `name` and an async `setup`:
+
+```js
+module.exports = {
+  name: 'audit-export',
+  async setup({ app, schemaLoader, bus, log, appName }) {
+    app.get('/api/v1/_audit-export', auth(true), handler);     // mount routes
+    bus.on('record', (e) => { /* e.type === '<path>.created|updated|deleted' */ });
+  },
+};
+```
+
+- `bus` is the same `EventEmitter` that fires a `record` event for every CRUD
+  mutation — the right hook for fan-out that spans resources (the integration
+  plugins above subscribe to it). For a single resource's side effect, prefer a
+  schema `hooks` block over a bus listener.
+- A throw during `setup` **fails boot** — that's deliberate, so a
+  misconfigured plugin is loud rather than silently dropped.
+
+## Frontends & admin portals — use davepi-ui, don't hand-roll
+
+When the task is a **frontend, admin portal, or internal dashboard** for this
+backend, reach for [**davepi-ui**](https://github.com/projik/davepi-ui) — the
+agent-first, schema-driven UI framework purpose-built for davepi apps. Do not
+hand-roll React CRUD screens, forms, table pagination, or relation pickers
+against the REST API: davepi-ui generates them from the **same `/_describe`
+manifest** this backend already serves, so the UI stays in lockstep with the
+schema (add a field, it appears in the form; add a relation, it becomes a
+picker) with no glue code.
+
+What it gives you:
+
+- **`@davepi/ui-core`** — schema registry + widget resolver (reads `/_describe`).
+- **`@davepi/ui-react`** — React components + TanStack Query hooks.
+- **`@davepi/ui-app-react`** — a deployable Vite + React Router admin shell.
+- **`@davepi/ui-mcp`** — an MCP server so an agent can compose pages programmatically.
+
+It auto-generates list / detail / create / edit views with relation-aware
+combobox pickers, embedded child lists, and inline create-parent modals that
+auto-populate foreign keys. Point it at this server with `VITE_API_URL`
+(e.g. `VITE_API_URL=http://localhost:{{PORT}}`); auth uses the same JWT
+`/login` issues. See the repo for the current quick-start —
+<https://github.com/projik/davepi-ui>.
+
+The division of labor: schemas, relations, ACL, hooks, and plugins (this
+guide) shape the **backend** and its `/_describe` contract; davepi-ui consumes
+that contract to render the **frontend**. Get the backend's `_describe` right
+first — the UI is downstream of it.
 
 ## Conventions you must follow
 
@@ -342,7 +502,7 @@ Agents should branch on `code`, not the human-readable `message`.
 - **State machine without `initial`.** POST will fail because the framework
   can't decide a starting state.
 - **Hand-rolling pagination on a list endpoint.** The auto-generated route
-  already supports `__page`, `__sort`, `__perPage`, `__include`, `q`,
+  already supports `__page`, `__sort`, `__perPage`, `__include`, `__q`,
   `__includeDeleted`, plus mongo-querystring filters.
 - **A `unique: true` index without `userId` in the key.** Creates a
   global constraint that crosses tenants. Use a `compositeIndex: [{ userId: 1, ... }]`.
@@ -506,3 +666,4 @@ makes the same decisions you would.
 - Idempotency contract: <https://docs.davepi.dev/features/idempotency/>
 - MCP server reference: <https://docs.davepi.dev/surfaces/mcp/>
 - TypeScript client: <https://docs.davepi.dev/surfaces/client/>
+- Frontend / admin UI (davepi-ui): <https://github.com/projik/davepi-ui>
