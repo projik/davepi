@@ -61,7 +61,7 @@ function normalizeRelations(schema) {
           // Convention: localKey defaults to `${name}Id` so a relation
           // called `owner` joins via the parent's `ownerId` column
           // unless the schema spells it out.
-          localKey: def.localKey || `${name}Id`,
+          localKey: def.localKey || def.fk || `${name}Id`,
           where: null,
         };
       } else {
@@ -72,7 +72,7 @@ function normalizeRelations(schema) {
           // no safe default for "what column on the child points back
           // here". Skip the relation if it's missing rather than
           // building a query that matches the wrong column.
-          foreignKey: def.foreignKey || null,
+          foreignKey: def.foreignKey || def.fk || null,
           where: def.where && typeof def.where === 'object' ? def.where : null,
         };
       }

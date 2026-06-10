@@ -379,6 +379,112 @@ describe('describeManifest: pure helpers', () => {
       expect(dealRels[0].inverse).toBeUndefined();
     });
 
+    test('fk shorthand is resolved as foreignKey in hasMany relations', () => {
+      const loader = stubLoader({
+        'v1/employee': {
+          schema: {
+            path: 'employee',
+            collection: 'employee',
+            version: 'v1',
+            fields: [{ name: 'userId', type: String, required: true }],
+            relations: {
+              expenseClaims: { hasMany: 'expenseClaim', fk: 'employeeId' },
+            },
+          },
+        },
+        'v1/expenseClaim': {
+          schema: {
+            path: 'expenseClaim',
+            collection: 'expenseClaim',
+            version: 'v1',
+            fields: [
+              { name: 'userId', type: String, required: true },
+              { name: 'employeeId', type: String, required: true },
+            ],
+            relations: {
+              // Relation name 'claimant' — default localKey would be 'claimantId',
+              // so fk: 'employeeId' must override.
+              claimant: { belongsTo: 'employee', fk: 'employeeId' },
+            },
+          },
+        },
+      });
+      const m = buildManifest({ schemaLoader: loader });
+      const employee = m.schemas['v1/employee'];
+      // The fk shorthand should resolve correctly in describe output.
+      expect(employee.relations.expenseClaims).toMatchObject({
+        kind: 'hasMany',
+        target: 'expenseClaim',
+        foreignKey: 'employeeId',
+      });
+      // belongsTo fk shorthand should resolve to localKey (not the default 'claimantId').
+      const claim = m.schemas['v1/expenseClaim'];
+      expect(claim.relations.claimant).toMatchObject({
+        kind: 'belongsTo',
+        target: 'employee',
+        localKey: 'employeeId',
+      });
+    });
+
+    test('inverse population does not duplicate when parent uses fk shorthand', () => {
+      const loader = stubLoader({
+        'v1/employee': {
+          schema: {
+            path: 'employee',
+            collection: 'employee',
+            version: 'v1',
+            fields: [{ name: 'userId', type: String, required: true }],
+            relations: {
+              expenseClaims: { hasMany: 'expenseClaim', fk: 'employeeId' },
+              leaveRequests: { hasMany: 'leaveRequest', fk: 'employeeId' },
+            },
+          },
+        },
+        'v1/expenseClaim': {
+          schema: {
+            path: 'expenseClaim',
+            collection: 'expenseClaim',
+            version: 'v1',
+            fields: [
+              { name: 'userId', type: String, required: true },
+              { name: 'employeeId', type: String, required: true },
+            ],
+            relations: {
+              employee: { belongsTo: 'employee', localKey: 'employeeId' },
+            },
+          },
+        },
+        'v1/leaveRequest': {
+          schema: {
+            path: 'leaveRequest',
+            collection: 'leaveRequest',
+            version: 'v1',
+            fields: [
+              { name: 'userId', type: String, required: true },
+              { name: 'employeeId', type: String, required: true },
+            ],
+            relations: {
+              employee: { belongsTo: 'employee', localKey: 'employeeId' },
+            },
+          },
+        },
+      });
+      const m = buildManifest({ schemaLoader: loader });
+      const employee = m.schemas['v1/employee'];
+      // Should not produce expenseClaims2 or leaveRequests2 — the explicit
+      // hasMany declarations already cover the inverse.
+      const expenseRels = Object.values(employee.relations).filter(
+        (r) => r.target === 'expenseClaim' && r.foreignKey === 'employeeId'
+      );
+      expect(expenseRels).toHaveLength(1);
+      expect(expenseRels[0].inverse).toBeUndefined();
+      const leaveRels = Object.values(employee.relations).filter(
+        (r) => r.target === 'leaveRequest' && r.foreignKey === 'employeeId'
+      );
+      expect(leaveRels).toHaveLength(1);
+      expect(leaveRels[0].inverse).toBeUndefined();
+    });
+
     test('inverse population prefers same-version parent when multiple versions exist', () => {
       const loader = stubLoader({
         'v1/account': {

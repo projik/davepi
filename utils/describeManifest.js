@@ -147,13 +147,13 @@ function describeRelations(schema) {
       out[name] = {
         kind: 'belongsTo',
         target: def.belongsTo,
-        localKey: def.localKey || `${name}Id`,
+        localKey: def.localKey || def.fk || `${name}Id`,
       };
     } else if (def.hasMany) {
-      out[name] = { kind: 'hasMany', target: def.hasMany, foreignKey: def.foreignKey };
+      out[name] = { kind: 'hasMany', target: def.hasMany, foreignKey: def.foreignKey || def.fk };
       if (def.where) out[name].where = def.where;
     } else if (def.hasOne) {
-      out[name] = { kind: 'hasOne', target: def.hasOne, foreignKey: def.foreignKey };
+      out[name] = { kind: 'hasOne', target: def.hasOne, foreignKey: def.foreignKey || def.fk };
       if (def.where) out[name].where = def.where;
     }
   }
