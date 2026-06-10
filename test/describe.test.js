@@ -402,7 +402,9 @@ describe('describeManifest: pure helpers', () => {
               { name: 'employeeId', type: String, required: true },
             ],
             relations: {
-              employee: { belongsTo: 'employee', fk: 'employeeId' },
+              // Relation name 'claimant' — default localKey would be 'claimantId',
+              // so fk: 'employeeId' must override.
+              claimant: { belongsTo: 'employee', fk: 'employeeId' },
             },
           },
         },
@@ -415,9 +417,9 @@ describe('describeManifest: pure helpers', () => {
         target: 'expenseClaim',
         foreignKey: 'employeeId',
       });
-      // belongsTo fk shorthand should resolve to localKey.
+      // belongsTo fk shorthand should resolve to localKey (not the default 'claimantId').
       const claim = m.schemas['v1/expenseClaim'];
-      expect(claim.relations.employee).toMatchObject({
+      expect(claim.relations.claimant).toMatchObject({
         kind: 'belongsTo',
         target: 'employee',
         localKey: 'employeeId',

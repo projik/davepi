@@ -49,9 +49,10 @@ describe('relations: pure helpers', () => {
 
     test('fk shorthand resolves as localKey for belongsTo', () => {
       const out = normalizeRelations({
-        relations: { owner: { belongsTo: 'user', fk: 'ownerId' } },
+        relations: { parent: { belongsTo: 'project', fk: 'projectId' } },
       });
-      expect(out.owner.localKey).toBe('ownerId');
+      // Default would be 'parentId' — fk override must win.
+      expect(out.parent.localKey).toBe('projectId');
     });
 
     test('belongsTo localKey defaults to `${name}Id`', () => {
