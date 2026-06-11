@@ -395,6 +395,7 @@ in the repo for a complete example.
 | Package | What it does |
 |---------|--------------|
 | [`davepi-plugin-slack`](https://github.com/projik/davepi/tree/main/packages/davepi-plugin-slack) | Subscribes to the record event bus and posts a formatted message to a Slack incoming webhook for every CRUD event whose type matches a configured pattern. Also exposes `postMessage(text)` for ad-hoc use from `after*` hooks. |
+| [`davepi-plugin-magic-link`](https://github.com/projik/davepi/tree/main/packages/davepi-plugin-magic-link) | Passwordless email magic-link login. Mounts `/auth/magic-link/{request,verify,invite}`; stores only SHA-256 token hashes in a TTL-indexed collection, keeps the request route enumeration-safe (always `204`), sends links via the framework mailer, and issues the standard JWT pair on verify. The generic invite flow carries app-defined `meta` through the link, guarded by a host-registered authoriser. |
 
 These ship as their own npm packages (not bundled into the
 framework) so versions move independently and you only install what
