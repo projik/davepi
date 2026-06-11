@@ -136,6 +136,31 @@ test('request: E11000 create race re-queries instead of failing', async () => {
   assert.equal(h.MagicLinkToken.rows[0].userId, 'u99');
 });
 
+test('request: internal DB error is swallowed and still returns 204 (enumeration-safe)', async () => {
+  const h = await buildMountedHarness();
+  await h.User.create({ email: EMAIL, first_name: 'Alice' });
+  h.MagicLinkToken.failNextCreateWith = new Error('DB unavailable');
+
+  const { res, captured } = await h.dispatch('/auth/magic-link/request', {
+    body: { email: EMAIL },
+  });
+  assert.equal(captured.err, null);
+  assert.equal(res.statusCode, 204);
+  assert.equal(h.mails.length, 0);
+});
+
+test('request: mail delivery error is swallowed and still returns 204 (enumeration-safe)', async () => {
+  const h = await buildMountedHarness();
+  await h.User.create({ email: EMAIL, first_name: 'Alice' });
+  h.failNextSendMailWith = new Error('SMTP unavailable');
+
+  const { res, captured } = await h.dispatch('/auth/magic-link/request', {
+    body: { email: EMAIL },
+  });
+  assert.equal(captured.err, null);
+  assert.equal(res.statusCode, 204);
+});
+
 // ---- verify ----
 
 test('verify: missing token yields ValidationError', async () => {
@@ -199,6 +224,25 @@ test('verify: deleted account is rejected', async () => {
 });
 
 // ---- invite ----
+
+test('verify: falsy meta values (false, 0, "") are preserved and not coerced to null', async () => {
+  const h = await buildMountedHarness({
+    authoriseInvite: async (req, { email, meta }) => ({ userId: req.user.user_id }),
+  });
+  const inviter = await h.User.create({ email: 'bob@example.com' });
+
+  for (const falsyMeta of [false, 0, '']) {
+    h.mails.length = 0;
+    h.MagicLinkToken.rows.length = 0;
+    await h.dispatch('/auth/magic-link/invite', {
+      body: { email: EMAIL, meta: falsyMeta },
+      user: { user_id: inviter._id },
+    });
+    const raw = tokenFromMail(h.mails[0]);
+    const { res } = await h.dispatch('/auth/magic-link/verify', { body: { token: raw } });
+    assert.strictEqual(res.body.meta, falsyMeta, `meta ${JSON.stringify(falsyMeta)} should round-trip unchanged`);
+  }
+});
 
 test('invite: meta without a registered authoriser is refused', async () => {
   const h = await buildMountedHarness();

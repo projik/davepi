@@ -93,7 +93,7 @@ function buildMagicLinkHandlers({ config, state }) {
       tokenHash: sha256(raw),
       purpose: purpose || 'login',
       userId: userId != null ? String(userId) : undefined,
-      meta: meta || null,
+      meta: meta ?? null,
       expiresAt: new Date(Date.now() + config.ttlMinutes * 60_000),
     });
     return raw;
@@ -107,11 +107,11 @@ function buildMagicLinkHandlers({ config, state }) {
    * reveals that signup was refused either.
    */
   async function request(req, res, next) {
+    const { email, name } = req.body || {};
+    if (!looksLikeEmail(email)) {
+      return next(new state.errors.ValidationError('a valid email is required'));
+    }
     try {
-      const { email, name } = req.body || {};
-      if (!looksLikeEmail(email)) {
-        throw new state.errors.ValidationError('a valid email is required');
-      }
       const user = await findOrCreateUser(email, name);
       if (user) {
         const raw = await issueMagicLink({
@@ -128,10 +128,10 @@ function buildMagicLinkHandlers({ config, state }) {
             `If you didn't request this, you can ignore this email.`,
         });
       }
-      res.status(204).end();
     } catch (err) {
-      next(err);
+      state.log.error({ err, plugin: 'magic-link' }, 'request: internal error swallowed to preserve 204 contract');
     }
+    res.status(204).end();
   }
 
   /**
@@ -179,7 +179,7 @@ function buildMagicLinkHandlers({ config, state }) {
         email,
         userId: boundUserId,
         purpose: 'invite',
-        meta: meta || null,
+        meta: meta ?? null,
       });
       // The framework JWT carries only { user_id, email, roles }, so
       // name attribution is best-effort: names when a richer req.user
@@ -241,7 +241,7 @@ function buildMagicLinkHandlers({ config, state }) {
         ...tokens,
         user: serialiseUser(user),
         purpose: record.purpose,
-        meta: record.meta || null,
+        meta: record.meta ?? null,
       });
     } catch (err) {
       next(err);

@@ -66,7 +66,13 @@ function memTokenModel() {
   const rows = [];
   return {
     rows,
+    failNextCreateWith: null,
     async create(doc) {
+      if (this.failNextCreateWith) {
+        const err = this.failNextCreateWith;
+        this.failNextCreateWith = null;
+        throw err;
+      }
       const row = { _id: 't' + (rows.length + 1), usedAt: null, ...doc };
       rows.push(row);
       return row;
@@ -108,6 +114,7 @@ function buildHarness({ env, authoriseInvite } = {}) {
   const User = memUserModel();
   const MagicLinkToken = memTokenModel();
   const mails = [];
+  const harness = { failNextSendMailWith: null };
   const plugin = createPlugin({
     env: {
       MAGIC_LINK_URL: 'https://app.example.com/auth/verify',
@@ -121,14 +128,22 @@ function buildHarness({ env, authoriseInvite } = {}) {
       accessToken: 'AT.' + user._id,
       refreshToken: 'RT.' + user._id,
     }),
-    sendMail: async (mail) => { mails.push(mail); },
+    sendMail: async (mail) => {
+      if (harness.failNextSendMailWith) {
+        const err = harness.failNextSendMailWith;
+        harness.failNextSendMailWith = null;
+        throw err;
+      }
+      mails.push(mail);
+    },
     bcrypt: { hash: async () => 'hashed-password' },
     verifyAuth: () => (req, res, next) => next(),
     authLimiter: (req, res, next) => next(),
     authoriseInvite,
     log: silentLog(),
   });
-  return { plugin, User, MagicLinkToken, mails };
+  Object.assign(harness, { plugin, User, MagicLinkToken, mails });
+  return harness;
 }
 
 // Routes-mounted harness: runs setup() against a fake Express app and
@@ -160,7 +175,8 @@ async function buildMountedHarness(opts = {}) {
     }
     return { res, captured };
   }
-  return { ...h, app, routes, dispatch };
+  Object.assign(h, { app, routes, dispatch });
+  return h;
 }
 
 module.exports = {
