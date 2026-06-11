@@ -1,0 +1,42 @@
+{
+  "name": "davepi-plugin-magic-link",
+  "version": "0.1.0",
+  "description": "Passwordless email magic-link login for dAvePi. Mounts /auth/magic-link/{request,verify,invite} routes, stores only SHA-256 token hashes in a TTL-indexed collection, sends links via the framework mailer, and issues the framework's standard JWT on verify. Generic invite flow carries app-defined metadata guarded by a host-registered authoriser.",
+  "license": "ISC",
+  "homepage": "https://docs.davepi.dev/features/plugins/",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/projik/davepi.git",
+    "directory": "packages/davepi-plugin-magic-link"
+  },
+  "keywords": [
+    "davepi",
+    "davepi-plugin",
+    "auth",
+    "magic-link",
+    "passwordless",
+    "email",
+    "login",
+    "invite"
+  ],
+  "main": "index.js",
+  "files": [
+    "index.js",
+    "lib",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "peerDependencies": {
+    "davepi": ">=1.0.4"
+  },
+  "peerDependenciesMeta": {
+    "davepi": {
+      "optional": false
+    }
+  },
+  "scripts": {
+    "test": "node --test test/*.test.js"
+  }
+}
