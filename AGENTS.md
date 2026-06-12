@@ -123,6 +123,8 @@ All auto-generated endpoints enforce user isolation:
 - `POST` requests: Automatically set `userId` and `accountId` to `req.user.user_id`
 - `GET/PUT/DELETE` requests: Filter by `userId` to ensure users only access their own data
 
+> **You must declare `userId` as a field.** The framework stamps the *value* from the JWT, but it builds the Mongoose model only from the fields you declare — it never auto-adds a `userId` path. If a schema's `fields` omits `{ name: 'userId', type: String, required: true }`, Mongoose's `strict` mode silently drops the stamped value on `create`, minting an ownerless record that defeats tenant isolation. To make that impossible, the schema loader **refuses to load any schema whose `fields` lack a persisted `userId`** — it throws a typed `ValidationError` at boot (or on hot reload), so the mistake fails loud instead of leaking across tenants. A `userId` declared as a `computed` field does not count, because computed fields are never persisted.
+
 A schema can opt specific roles out of the owner filter with document-level ACL slots: `schema.acl.list` (read across tenants), `schema.acl.write` (update records owned by another user — e.g. an admin editing a customer record; ownership is preserved because tenant fields are stripped from the update), and `schema.acl.delete` (delete across tenants). There is no `create` bypass, and the bulk `PUT /<path>` upsert stays owner-only. See [ACL](https://docs.davepi.dev/features/acl/).
 
 ### Public read access via `X-Client-Id`

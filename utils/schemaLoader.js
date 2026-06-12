@@ -2057,6 +2057,31 @@ function createSchemaLoader({ app, apiSpec, setApolloRouter, buildGraphqlContext
           (s && s.path ? ` (path="${s.path}")` : '')
       );
     }
+    // Tenant isolation is the framework's hard invariant. The create
+    // handlers stamp `userId` (and `accountId`) from the JWT, but the
+    // Mongoose model is built from the declared `fields` only — there is
+    // no auto-added tenant path (see buildSchemaArtifacts). A schema that
+    // omits `userId` therefore loses the stamp to Mongoose's `strict: true`
+    // drop at `model.create()`, minting an ownerless, cross-tenant-visible
+    // record with no error raised. Refuse to load such a schema so the
+    // failure is loud at boot rather than a silent isolation hole — this
+    // promotes the scaffold's smoke-test rule (templates/_shared/tests/
+    // smoke.test.js) into the framework itself, where it can't be skipped.
+    // Computed/virtual `userId` declarations don't count: they're never
+    // persisted (buildSchemaArtifacts skips them), so the stamp would
+    // still be dropped. See issue #177.
+    const hasUserId = s.fields.some(
+      (f) => f && f.name === 'userId' && !isComputedField(f)
+    );
+    if (!hasUserId) {
+      throw new ValidationError(
+        `invalid schema (path="${s.path}"): every schema must declare a persisted ` +
+          '`userId` field (e.g. `{ name: \'userId\', type: String, required: true }`). ' +
+          'The framework stamps `userId` from the JWT as the tenant column, but Mongoose ' +
+          'strict mode silently drops the stamp when the field is undeclared, producing ' +
+          'ownerless records that defeat tenant isolation.'
+      );
+    }
     const key = `${s.version}/${s.path}`;
     if (registry.has(key)) {
       // Already loaded — caller probably meant reload.

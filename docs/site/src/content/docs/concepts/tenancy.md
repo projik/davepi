@@ -16,6 +16,14 @@ supply it. When a user reads a record, the framework filters by
 `userId`. When a relation traverses to a child, the child query
 *also* filters by `userId`.
 
+That field is **mandatory and enforced**. The framework stamps the
+value, but the Mongoose model only carries the paths you declare — so
+a schema that omits `userId` would have its stamp silently dropped by
+Mongoose's strict mode at `create()`, producing an ownerless record.
+To keep the invariant unbreakable, the schema loader refuses to load
+any schema whose `fields` don't declare a persisted `userId`, failing
+loud at boot rather than leaking across tenants.
+
 ```
 JWT issued at /login
     ↓
