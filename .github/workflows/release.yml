@@ -1,10 +1,10 @@
 name: 'Release'
 
-# One-click release for any of the three published packages in this repo:
-#
-#   - davepi               (root)
-#   - create-davepi-app    (create-davepi-app/)
-#   - davepi-plugin-slack  (packages/davepi-plugin-slack/)
+# One-click release for any of the packages this repo publishes. The
+# selectable set is the `workflow_dispatch.inputs.package` dropdown below
+# (each option maps to a directory in the "Resolve package directory"
+# step) — that list is the source of truth; keep the two in sync when
+# adding a package.
 #
 # What it does:
 #   1. Bumps the selected package's `package.json` (and `package-lock.json`
