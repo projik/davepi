@@ -1,5 +1,5 @@
 {
-  "runAt": "2026-06-11T07:33:47.408Z",
+  "runAt": "2026-06-12T07:31:37.867Z",
   "agentMode": "real",
   "model": "claude-sonnet-4-6",
   "total": 10,
@@ -15,7 +15,7 @@
       "name": "02-status-state-machine",
       "passed": false,
       "message": "ANTHROPIC_API_KEY is required for real-agent mode (set EVAL_AGENT=stub to skip).",
-      "durationMs": 1
+      "durationMs": 2
     },
     {
       "name": "03-parent-relation",
@@ -39,19 +39,19 @@
       "name": "06-acl-admin-delete",
       "passed": false,
       "message": "ANTHROPIC_API_KEY is required for real-agent mode (set EVAL_AGENT=stub to skip).",
-      "durationMs": 1
+      "durationMs": 2
     },
     {
       "name": "07-file-attachment",
       "passed": false,
       "message": "ANTHROPIC_API_KEY is required for real-agent mode (set EVAL_AGENT=stub to skip).",
-      "durationMs": 1
+      "durationMs": 2
     },
     {
       "name": "08-searchable-fields",
       "passed": false,
       "message": "ANTHROPIC_API_KEY is required for real-agent mode (set EVAL_AGENT=stub to skip).",
-      "durationMs": 1
+      "durationMs": 2
     },
     {
       "name": "09-field-level-acl",
