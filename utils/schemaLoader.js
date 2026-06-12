@@ -2070,16 +2070,25 @@ function createSchemaLoader({ app, apiSpec, setApolloRouter, buildGraphqlContext
     // Computed/virtual `userId` declarations don't count: they're never
     // persisted (buildSchemaArtifacts skips them), so the stamp would
     // still be dropped. See issue #177.
+    //
+    // A schema can deliberately opt out with `tenantScoped: false` for a
+    // global / system-internal collection that isn't user-owned data —
+    // e.g. a webhook-dedupe ledger or an operator diagnostics table. Such
+    // a schema owns its own visibility (typically a `schema.acl.list`
+    // bypass, since the read scope would otherwise hide its ownerless
+    // rows). The opt-out is explicit by design: the default — and the
+    // mistake behind #177 — is that omitting `userId` is unintended.
     const hasUserId = s.fields.some(
       (f) => f && f.name === 'userId' && !isComputedField(f)
     );
-    if (!hasUserId) {
+    if (s.tenantScoped !== false && !hasUserId) {
       throw new ValidationError(
         `invalid schema (path="${s.path}"): every schema must declare a persisted ` +
           '`userId` field (e.g. `{ name: \'userId\', type: String, required: true }`). ' +
           'The framework stamps `userId` from the JWT as the tenant column, but Mongoose ' +
           'strict mode silently drops the stamp when the field is undeclared, producing ' +
-          'ownerless records that defeat tenant isolation.'
+          'ownerless records that defeat tenant isolation. If this collection is ' +
+          'intentionally global / not user-owned, set `tenantScoped: false` on the schema.'
       );
     }
     const key = `${s.version}/${s.path}`;

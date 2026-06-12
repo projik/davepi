@@ -443,6 +443,25 @@ describe('Schema watcher (gated by HOT_RELOAD_SCHEMAS)', () => {
     ).rejects.toThrow(/userId/);
     expect(loader.listSchemas()).not.toContain('v1/computeduserid');
   });
+
+  // A schema can opt out of the userId requirement with
+  // `tenantScoped: false` for a global / system-internal collection
+  // (e.g. a webhook-dedupe ledger), the same posture davepi-plugin-stripe
+  // uses for `stripe_event_seen`. Such a schema loads cleanly without a
+  // userId field.
+  test('loadSchema accepts a userId-less schema that sets tenantScoped: false', async () => {
+    const loader = ctx.app.locals.schemaLoader;
+    await loader.loadSchema({
+      path: 'systemledger',
+      collection: 'systemledger',
+      version: 'v1',
+      tenantScoped: false,
+      acl: { list: ['admin'], delete: ['admin'] },
+      fields: [{ name: 'eventId', type: String, required: true, unique: true }],
+    });
+    expect(loader.listSchemas()).toContain('v1/systemledger');
+    await loader.unloadSchema('v1/systemledger');
+  });
 });
 
 describe('GraphQL rebuild with an empty registry', () => {

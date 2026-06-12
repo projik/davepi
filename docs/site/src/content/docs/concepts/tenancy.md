@@ -24,6 +24,15 @@ To keep the invariant unbreakable, the schema loader refuses to load
 any schema whose `fields` don't declare a persisted `userId`, failing
 loud at boot rather than leaking across tenants.
 
+A genuinely **non-tenant** collection — a global system table such as a
+webhook-dedupe ledger or an operator diagnostics log, not user-owned
+data — can opt out of that requirement with `tenantScoped: false` on the
+schema. It then carries no tenant column, so the framework's read scope
+would hide its ownerless rows; pair it with a `schema.acl.list` bypass
+(see below) to make them visible to the roles that should see them. The
+opt-out is deliberately explicit: the default is that a missing `userId`
+is a mistake.
+
 ```
 JWT issued at /login
     ↓

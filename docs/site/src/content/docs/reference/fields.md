@@ -195,8 +195,10 @@ stamp on create and you get an ownerless, cross-tenant-visible
 record with no error. The schema loader guards against this: any
 schema whose `fields` lack a persisted `userId` is rejected at load
 with a typed `ValidationError` (a `computed` `userId` doesn't
-count — computed fields are never persisted). **Never use `userId`
-for anything other than the tenant identity.**
+count — computed fields are never persisted). A genuinely global /
+system-internal collection can opt out with the schema-level
+[`tenantScoped: false`](/reference/schema/) flag. **Never use
+`userId` for anything other than the tenant identity.**
 
 ### `accountId`
 
