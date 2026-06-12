@@ -996,17 +996,23 @@ function createSchemaLoader({ app, apiSpec, setApolloRouter, buildGraphqlContext
         // tenant fields so tenant isolation is non-bypassable.
         const rawQuery = qs.parse(req.query);
         const filteredQuery = filterWritable(rawQuery, s, req.user, 'create');
-        // Only stamp `accountId` when the schema declares it as a
-        // field — Mongoose's strict mode throws on upsert when the
-        // filter references a path the schema doesn't know about
-        // ("Path 'accountId' is not in schema, strict mode is true,
-        // and upsert is true"). `userId` is universal in dAvePi
-        // schemas by convention, so it's always stamped.
+        // Only stamp a tenant field the schema actually declares —
+        // Mongoose's strict mode throws on upsert when the filter
+        // references a path the schema doesn't know about ("Path
+        // 'userId' is not in schema, strict mode is true, and upsert is
+        // true"). Tenant-scoped schemas always declare `userId` (the
+        // load-time guardrail enforces it), so for them this stays the
+        // owner scope exactly as before. A `tenantScoped: false` system
+        // collection has no tenant column, so the stamp is skipped and
+        // the upsert seeds only the caller-supplied keys — it carries no
+        // owner scope, which is the point of a global collection.
+        const schemaHasUserId = Array.isArray(s.fields)
+          && s.fields.some((f) => f.name === 'userId');
         const schemaHasAccountId = Array.isArray(s.fields)
           && s.fields.some((f) => f.name === 'accountId');
         const safeQuery = {
           ...filteredQuery,
-          userId: req.user.user_id,
+          ...(schemaHasUserId ? { userId: req.user.user_id } : {}),
           ...(schemaHasAccountId ? { accountId: req.user.user_id } : {}),
           // Bulk PUT must NOT touch tombstones — soft-deleted records
           // are read-only at the API layer until restored. Without
