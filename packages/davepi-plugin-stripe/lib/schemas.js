@@ -28,18 +28,25 @@
  *     during a deploy), refetch via `stripe.client.subscriptions.list`
  *     and replay.
  *
- * Both schemas declare `userId` so the framework's tenant-isolation
- * machinery (the auto-generated route handlers + GraphQL resolvers
- * wrapped via `utils/scopeResolver`) scopes reads to the calling
- * user automatically. The plugin's webhook handler stamps `userId`
- * during write — looked up via the `stripeCustomerId` field on the
- * User model.
+ * `stripe_subscription` declares `userId`, so the framework's
+ * tenant-isolation machinery (the auto-generated route handlers +
+ * GraphQL resolvers wrapped via `utils/scopeResolver`) scopes reads
+ * to the calling user automatically; the plugin's webhook handler
+ * stamps `userId` during write — looked up via the `stripeCustomerId`
+ * field on the User model. `stripe_event_seen` is intentionally NOT
+ * tenant-scoped — it's a global webhook-dedupe ledger keyed by Stripe
+ * event id, not user-owned data — so it sets `tenantScoped: false` to
+ * opt out of the framework's require-`userId` guardrail and relies on
+ * a `schema.acl.list` admin bypass for operator visibility (see below).
  */
 
 const stripeEventSeenSchema = {
   path: 'stripe_event_seen',
   collection: 'stripe_event_seen',
   version: 'v1',
+  // Not user-owned data, so this schema has no `userId` field and opts
+  // out of the framework's require-`userId` tenant-isolation guardrail.
+  tenantScoped: false,
   // Dedupe rows aren't tenant-scoped data — they're operator
   // diagnostics ("did Stripe deliver this event yet?"). The
   // framework's scoped resolvers $and a `{ userId: caller }` filter

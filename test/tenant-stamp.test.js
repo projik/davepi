@@ -202,6 +202,33 @@ describe('Tenant ownership stamping — REST', () => {
       .set('Authorization', `Bearer ${attacker.token}`);
     expect(attackerList.body.totalResults).toBe(0);
   });
+
+  test('bulk PUT: a tenantScoped:false schema upserts without a userId (no strict-mode 500)', async () => {
+    const user = await registerUser(ctx.request, ctx.app);
+    await ctx.app.locals.schemaLoader.loadSchema({
+      path: 'stamp_global',
+      collection: 'stamp_global',
+      version: 'v1',
+      tenantScoped: false,
+      fields: [
+        { name: 'eventId', type: String, required: true, unique: true },
+        { name: 'note', type: String },
+      ],
+    });
+
+    // The handler injects `userId` into the upsert filter only when the
+    // schema declares it. Without that guard this 500'd: the schema has
+    // no `userId` path, so Mongoose strict mode throws on upsert. Now the
+    // upsert seeds only the caller-supplied keys and succeeds.
+    const bulk = await ctx
+      .request(ctx.app)
+      .put('/api/v1/stamp_global?eventId=evt_1')
+      .set('Authorization', `Bearer ${user.token}`)
+      .send({ note: 'seeded' });
+
+    expect(bulk.status).toBe(200);
+    expect(bulk.body.upsertedCount).toBe(1);
+  });
 });
 
 describe('Tenant ownership stamping — GraphQL', () => {

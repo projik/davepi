@@ -182,11 +182,23 @@ declare them; the loader recognises them by name.
 
 ### `userId`
 
-The tenant column. Every framework query injects
-`userId: req.user.user_id` from the JWT. The REST POST handler
-stamps it server-side; the GraphQL input types strip it from the
-wire. **Never use `userId` for anything other than the tenant
-identity.**
+The tenant column — and the one field **every** schema must
+declare (`{ name: 'userId', type: String, required: true }`). Every
+framework query injects `userId: req.user.user_id` from the JWT.
+The REST POST handler stamps it server-side; the GraphQL input
+types strip it from the wire.
+
+The framework stamps the *value*, but it does **not** add the path
+to your Mongoose model — that comes from your declared `fields`. If
+you omit `userId`, Mongoose's `strict` mode silently drops the
+stamp on create and you get an ownerless, cross-tenant-visible
+record with no error. The schema loader guards against this: any
+schema whose `fields` lack a persisted `userId` is rejected at load
+with a typed `ValidationError` (a `computed` `userId` doesn't
+count — computed fields are never persisted). A genuinely global /
+system-internal collection can opt out with the schema-level
+[`tenantScoped: false`](/reference/schema/) flag. **Never use
+`userId` for anything other than the tenant identity.**
 
 ### `accountId`
 

@@ -407,6 +407,61 @@ describe('Schema watcher (gated by HOT_RELOAD_SCHEMAS)', () => {
     expect(caught.message).not.toMatch(/Cannot read properties/);
     expect(loader.listSchemas()).not.toContain('v1/nofields');
   });
+
+  // Tenant isolation guardrail (#177): a schema that declares fields but
+  // omits the `userId` tenant column is refused at load. Without the
+  // field, the create handler's stamp is silently dropped by Mongoose
+  // strict mode, minting ownerless records — so we fail loud at load
+  // rather than leaving a silent cross-tenant hole.
+  test('loadSchema rejects a schema that omits the userId tenant column', async () => {
+    const loader = ctx.app.locals.schemaLoader;
+    await expect(
+      loader.loadSchema({
+        path: 'nouserid',
+        collection: 'nouserid',
+        version: 'v1',
+        fields: [{ name: 'name', type: String, required: true }],
+      })
+    ).rejects.toThrow(/userId/);
+    expect(loader.listSchemas()).not.toContain('v1/nouserid');
+  });
+
+  // A computed/virtual `userId` does not satisfy the guardrail — it is
+  // never persisted, so the stamp would still be dropped.
+  test('loadSchema rejects a schema whose only userId field is computed', async () => {
+    const loader = ctx.app.locals.schemaLoader;
+    await expect(
+      loader.loadSchema({
+        path: 'computeduserid',
+        collection: 'computeduserid',
+        version: 'v1',
+        fields: [
+          { name: 'name', type: String, required: true },
+          { name: 'userId', type: String, computed: () => 'x' },
+        ],
+      })
+    ).rejects.toThrow(/userId/);
+    expect(loader.listSchemas()).not.toContain('v1/computeduserid');
+  });
+
+  // A schema can opt out of the userId requirement with
+  // `tenantScoped: false` for a global / system-internal collection
+  // (e.g. a webhook-dedupe ledger), the same posture davepi-plugin-stripe
+  // uses for `stripe_event_seen`. Such a schema loads cleanly without a
+  // userId field.
+  test('loadSchema accepts a userId-less schema that sets tenantScoped: false', async () => {
+    const loader = ctx.app.locals.schemaLoader;
+    await loader.loadSchema({
+      path: 'systemledger',
+      collection: 'systemledger',
+      version: 'v1',
+      tenantScoped: false,
+      acl: { list: ['admin'], delete: ['admin'] },
+      fields: [{ name: 'eventId', type: String, required: true, unique: true }],
+    });
+    expect(loader.listSchemas()).toContain('v1/systemledger');
+    await loader.unloadSchema('v1/systemledger');
+  });
 });
 
 describe('GraphQL rebuild with an empty registry', () => {

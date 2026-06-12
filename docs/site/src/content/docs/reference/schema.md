@@ -38,6 +38,7 @@ Swagger fragments for `account`.
 | `compositeIndex` | array | no | Array of Mongo index specs. Plain key objects are unique (per-tenant uniqueness, e.g. `{ userId: 1, slug: 1 }`); use `{ fields: {...}, unique: false }` for a plain query index. |
 | `softDelete` | boolean | no | Defaults to `true`. Set `false` to opt out of tombstones — DELETEs become hard-deletes. See [Soft delete](/features/soft-delete/). |
 | `audit` | boolean | no | Defaults to `true`. Set `false` to skip audit log writes for this schema. See [Audit log](/features/audit/). |
+| `tenantScoped` | boolean | no | Defaults to `true`. Set `false` to opt a **global / system-internal** collection (e.g. a webhook-dedupe ledger) out of the require-`userId` guardrail. Such a schema has no tenant column, so pair it with a `schema.acl.list` bypass for operator visibility. See [Tenant isolation](/concepts/tenancy/). |
 | `acl` | object | no | Document-level role bypass slots (`list`, `delete`). See [ACL](/features/acl/). |
 | `webhooks` | object | no | Outbound webhook subscriptions for create / update / delete events on this schema. See [Webhooks](/features/webhooks/). |
 | `hooks` | object | no | Per-resource lifecycle hooks — `beforeCreate`, `afterCreate`, `beforeUpdate`, `afterUpdate`, `beforeDelete`, `afterDelete`. See [Lifecycle hooks](/features/hooks/). |

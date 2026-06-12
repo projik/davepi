@@ -996,17 +996,23 @@ function createSchemaLoader({ app, apiSpec, setApolloRouter, buildGraphqlContext
         // tenant fields so tenant isolation is non-bypassable.
         const rawQuery = qs.parse(req.query);
         const filteredQuery = filterWritable(rawQuery, s, req.user, 'create');
-        // Only stamp `accountId` when the schema declares it as a
-        // field — Mongoose's strict mode throws on upsert when the
-        // filter references a path the schema doesn't know about
-        // ("Path 'accountId' is not in schema, strict mode is true,
-        // and upsert is true"). `userId` is universal in dAvePi
-        // schemas by convention, so it's always stamped.
+        // Only stamp a tenant field the schema actually declares —
+        // Mongoose's strict mode throws on upsert when the filter
+        // references a path the schema doesn't know about ("Path
+        // 'userId' is not in schema, strict mode is true, and upsert is
+        // true"). Tenant-scoped schemas always declare `userId` (the
+        // load-time guardrail enforces it), so for them this stays the
+        // owner scope exactly as before. A `tenantScoped: false` system
+        // collection has no tenant column, so the stamp is skipped and
+        // the upsert seeds only the caller-supplied keys — it carries no
+        // owner scope, which is the point of a global collection.
+        const schemaHasUserId = Array.isArray(s.fields)
+          && s.fields.some((f) => f.name === 'userId');
         const schemaHasAccountId = Array.isArray(s.fields)
           && s.fields.some((f) => f.name === 'accountId');
         const safeQuery = {
           ...filteredQuery,
-          userId: req.user.user_id,
+          ...(schemaHasUserId ? { userId: req.user.user_id } : {}),
           ...(schemaHasAccountId ? { accountId: req.user.user_id } : {}),
           // Bulk PUT must NOT touch tombstones — soft-deleted records
           // are read-only at the API layer until restored. Without
@@ -2055,6 +2061,40 @@ function createSchemaLoader({ app, apiSpec, setApolloRouter, buildGraphqlContext
       throw new ValidationError(
         'invalid schema: expected a module exporting an object with a string `path` and a `fields` array' +
           (s && s.path ? ` (path="${s.path}")` : '')
+      );
+    }
+    // Tenant isolation is the framework's hard invariant. The create
+    // handlers stamp `userId` (and `accountId`) from the JWT, but the
+    // Mongoose model is built from the declared `fields` only — there is
+    // no auto-added tenant path (see buildSchemaArtifacts). A schema that
+    // omits `userId` therefore loses the stamp to Mongoose's `strict: true`
+    // drop at `model.create()`, minting an ownerless, cross-tenant-visible
+    // record with no error raised. Refuse to load such a schema so the
+    // failure is loud at boot rather than a silent isolation hole — this
+    // promotes the scaffold's smoke-test rule (templates/_shared/tests/
+    // smoke.test.js) into the framework itself, where it can't be skipped.
+    // Computed/virtual `userId` declarations don't count: they're never
+    // persisted (buildSchemaArtifacts skips them), so the stamp would
+    // still be dropped. See issue #177.
+    //
+    // A schema can deliberately opt out with `tenantScoped: false` for a
+    // global / system-internal collection that isn't user-owned data —
+    // e.g. a webhook-dedupe ledger or an operator diagnostics table. Such
+    // a schema owns its own visibility (typically a `schema.acl.list`
+    // bypass, since the read scope would otherwise hide its ownerless
+    // rows). The opt-out is explicit by design: the default — and the
+    // mistake behind #177 — is that omitting `userId` is unintended.
+    const hasUserId = s.fields.some(
+      (f) => f && f.name === 'userId' && !isComputedField(f)
+    );
+    if (s.tenantScoped !== false && !hasUserId) {
+      throw new ValidationError(
+        `invalid schema (path="${s.path}"): every schema must declare a persisted ` +
+          '`userId` field (e.g. `{ name: \'userId\', type: String, required: true }`). ' +
+          'The framework stamps `userId` from the JWT as the tenant column, but Mongoose ' +
+          'strict mode silently drops the stamp when the field is undeclared, producing ' +
+          'ownerless records that defeat tenant isolation. If this collection is ' +
+          'intentionally global / not user-owned, set `tenantScoped: false` on the schema.'
       );
     }
     const key = `${s.version}/${s.path}`;
