@@ -1,5 +1,5 @@
 {
-  "runAt": "2026-06-12T07:31:37.867Z",
+  "runAt": "2026-06-13T07:13:47.690Z",
   "agentMode": "real",
   "model": "claude-sonnet-4-6",
   "total": 10,
@@ -57,13 +57,13 @@
       "name": "09-field-level-acl",
       "passed": false,
       "message": "ANTHROPIC_API_KEY is required for real-agent mode (set EVAL_AGENT=stub to skip).",
-      "durationMs": 2
+      "durationMs": 4
     },
     {
       "name": "10-aggregation-tasks-per-project",
       "passed": false,
       "message": "ANTHROPIC_API_KEY is required for real-agent mode (set EVAL_AGENT=stub to skip).",
-      "durationMs": 2
+      "durationMs": 3
     }
   ]
 }
