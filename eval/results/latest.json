@@ -1,5 +1,5 @@
 {
-  "runAt": "2026-06-13T07:13:47.690Z",
+  "runAt": "2026-06-14T07:30:43.129Z",
   "agentMode": "real",
   "model": "claude-sonnet-4-6",
   "total": 10,
@@ -33,7 +33,7 @@
       "name": "05-aggregation-countByStatus",
       "passed": false,
       "message": "ANTHROPIC_API_KEY is required for real-agent mode (set EVAL_AGENT=stub to skip).",
-      "durationMs": 2
+      "durationMs": 3
     },
     {
       "name": "06-acl-admin-delete",
@@ -51,13 +51,13 @@
       "name": "08-searchable-fields",
       "passed": false,
       "message": "ANTHROPIC_API_KEY is required for real-agent mode (set EVAL_AGENT=stub to skip).",
-      "durationMs": 2
+      "durationMs": 3
     },
     {
       "name": "09-field-level-acl",
       "passed": false,
       "message": "ANTHROPIC_API_KEY is required for real-agent mode (set EVAL_AGENT=stub to skip).",
-      "durationMs": 4
+      "durationMs": 5
     },
     {
       "name": "10-aggregation-tasks-per-project",
